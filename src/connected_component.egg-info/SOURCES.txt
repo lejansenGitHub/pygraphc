@@ -1,0 +1,14 @@
+LICENSE
+README.md
+pyproject.toml
+setup.py
+src/connected_component/__init__.py
+src/connected_component/_core.c
+src/connected_component.egg-info/PKG-INFO
+src/connected_component.egg-info/SOURCES.txt
+src/connected_component.egg-info/dependency_links.txt
+src/connected_component.egg-info/requires.txt
+src/connected_component.egg-info/top_level.txt
+src/connected_component/tests/__init__.py
+src/connected_component/tests/test_correctness.py
+src/connected_component/tests/test_performance.py

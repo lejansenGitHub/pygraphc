@@ -1,0 +1,23 @@
+Metadata-Version: 2.4
+Name: connected-component
+Version: 0.1.0
+Author-email: Lennart Jansen <lejansen.home@gmail.com>
+License-Expression: MIT
+Project-URL: Homepage, https://github.com/lejansenGitHub/ConnectedComponent
+Project-URL: Repository, https://github.com/lejansenGitHub/ConnectedComponent
+Project-URL: Issues, https://github.com/lejansenGitHub/ConnectedComponent/issues
+Requires-Python: >=3.13
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: ruff>=0.9; extra == "dev"
+Requires-Dist: mypy>=1.14; extra == "dev"
+Requires-Dist: pre-commit>=4.0; extra == "dev"
+Provides-Extra: benchmark
+Requires-Dist: pytest>=8.0; extra == "benchmark"
+Requires-Dist: scipy>=1.14; extra == "benchmark"
+Requires-Dist: numpy>=2.0; extra == "benchmark"
+Dynamic: license-file
+
+# ConnectedComponent
