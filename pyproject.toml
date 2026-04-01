@@ -4,7 +4,7 @@ version = "0.1.0"
 description = ""
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 authors = [
     { name = "Lennart Jansen", email = "lejansen.home@gmail.com" },
 ]

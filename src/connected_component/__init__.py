@@ -10,8 +10,8 @@ from connected_component._core import (
     labels as _labels,
 )
 
-type NodeId = int
-type BranchId = int
+NodeId = int
+BranchId = int
 
 
 def igp_connected_components(
