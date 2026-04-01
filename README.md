@@ -8,6 +8,12 @@ Fast connected-components library using a C union-find with path compression and
 pip install -e .
 ```
 
+Or from GitHub:
+
+```bash
+pip install git+https://github.com/lejansenGitHub/ConnectedComponent.git
+```
+
 Requires a C compiler (the extension is compiled at install time with `-O3`).
 
 ## Usage
@@ -18,7 +24,6 @@ from connected_component import (
     igp_connected_components_remapped,
     igp_connected_components_with_branch_ids,
     igp_connected_components_with_branch_ids_remapped,
-    igp_connected_component_labels,
 )
 
 # Basic: get each component as a set of node indices
@@ -37,10 +42,6 @@ for nodes, branches in igp_connected_components_with_branch_ids(num_nodes, edges
 # With branch IDs + node ID remapping:
 for nodes, branches in igp_connected_components_with_branch_ids_remapped(node_ids, edges, branch_ids):
     print(nodes, branches)
-
-# Raw labels (fastest — no set construction):
-labels = igp_connected_component_labels(num_nodes, edges)
-# labels[i] = component ID for node i
 ```
 
 All functions accept edges as either a `list[tuple[int, int]]` or a numpy `int32` array of shape `(m, 2)`.
@@ -51,13 +52,13 @@ Sparse random graphs with ~3 edges per node (typical grid topology). Compared ag
 
 ### vs scipy (end-to-end)
 
-| Nodes | C tuples->sets | C numpy->labels | scipy | Speedup (sets) | Speedup (labels) |
-|------:|---------------:|----------------:|------:|---------------:|-----------------:|
-| 1K | 0.00005s | 0.00001s | 0.0004s | ~8x | ~33x |
-| 10K | 0.0006s | 0.0001s | 0.003s | ~5x | ~28x |
-| 100K | 0.006s | 0.002s | 0.032s | ~5x | ~20x |
-| 1M | 0.070s | 0.020s | 0.43s | ~6x | ~21x |
-| 10M | 1.35s | 0.53s | 5.98s | ~4x | ~11x |
+| Nodes | C tuples->sets | C numpy->sets | scipy | Speedup (tuples) | Speedup (numpy) |
+|------:|---------------:|--------------:|------:|-----------------:|----------------:|
+| 1K | 0.00005s | 0.00003s | 0.0004s | ~8x | ~13x |
+| 10K | 0.0006s | 0.0003s | 0.003s | ~5x | ~10x |
+| 100K | 0.006s | 0.004s | 0.032s | ~5x | ~8x |
+| 1M | 0.070s | 0.049s | 0.43s | ~6x | ~9x |
+| 10M | 1.35s | 1.17s | 5.98s | ~4x | ~5x |
 
 ### Remapped variants (real-world pattern)
 

@@ -202,34 +202,6 @@ static int compute_components(int n, EdgeList *el, ComponentResult *cr) {
     return 0;
 }
 
-/* ── labels(n, edges) -> list[int] ──
- * Returns raw component labels. Fastest possible output — no set construction.
- */
-static PyObject *py_labels(PyObject *self, PyObject *args) {
-    int n;
-    PyObject *edges_obj;
-    if (!PyArg_ParseTuple(args, "iO", &n, &edges_obj)) return NULL;
-
-    EdgeList el;
-    if (parse_edges(edges_obj, &el) < 0) return NULL;
-
-    ComponentResult cr;
-    if (compute_components(n, &el, &cr) < 0) {
-        free_edges(&el);
-        return NULL;
-    }
-    free_edges(&el);
-
-    /* Build Python list of ints */
-    PyObject *result = PyList_New(n);
-    if (!result) { free(cr.labels); return NULL; }
-    for (int i = 0; i < n; i++)
-        PyList_SET_ITEM(result, i, PyLong_FromLong(cr.labels[i]));
-
-    free(cr.labels);
-    return result;
-}
-
 /* ── connected_components(n, edges) -> list[set[int]] ── */
 
 static PyObject *py_connected_components(PyObject *self, PyObject *args) {
@@ -514,10 +486,6 @@ static PyMethodDef methods[] = {
     {"connected_components_with_branches", py_connected_components_with_branches, METH_VARARGS,
      "connected_components_with_branches(n, edges, branch_ids) -> list[tuple[set[int], set[int]]]\n\n"
      "Find connected components with associated branch IDs.\n"
-     "edges can be a list of 2-tuples or a numpy int32 array of shape (m, 2)."},
-    {"labels", py_labels, METH_VARARGS,
-     "labels(n, edges) -> list[int]\n\n"
-     "Return component label for each node (fastest — no set construction).\n"
      "edges can be a list of 2-tuples or a numpy int32 array of shape (m, 2)."},
     {"connected_components_remapped", py_connected_components_remapped, METH_VARARGS,
      "connected_components_remapped(node_ids, edges) -> list[set[NodeId]]\n\n"

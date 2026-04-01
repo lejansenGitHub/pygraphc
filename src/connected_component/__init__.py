@@ -7,7 +7,6 @@ from connected_component._core import (
     connected_components_remapped as _cc_remapped,
     connected_components_with_branches as _cc_branches,
     connected_components_with_branches_remapped as _cc_branches_remapped,
-    labels as _labels,
 )
 
 NodeId = int
@@ -29,14 +28,6 @@ def igp_connected_components_with_branch_ids(
 ) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
     """Yield (node_index_set, branch_id_set) for each connected component."""
     yield from _cc_branches(number_of_nodes, edges, branch_ids)
-
-
-def igp_connected_component_labels(
-    number_of_nodes: int,
-    edges: list[tuple[int, int]],
-) -> list[int]:
-    """Return component label for each node. Fastest output — no set construction."""
-    return _labels(number_of_nodes, edges)
 
 
 def igp_connected_components_remapped(

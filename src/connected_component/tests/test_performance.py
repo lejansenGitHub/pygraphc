@@ -10,7 +10,7 @@ import time
 import numpy as np
 import pytest
 
-from connected_component import igp_connected_component_labels, igp_connected_components
+from connected_component import igp_connected_components
 
 
 def generate_sparse_grid_graph(
@@ -108,25 +108,17 @@ def test_speedup_vs_scipy(exponent: int) -> None:
     c_np_result = list(igp_connected_components(number_of_nodes, edges_np))
     c_np_time = time.perf_counter() - start
 
-    # C: numpy -> labels (fastest)
-    start = time.perf_counter()
-    c_labels = igp_connected_component_labels(number_of_nodes, edges_np)
-    c_labels_time = time.perf_counter() - start
-
     # Verify
     assert sum(len(c) for c in c_list_result) == number_of_nodes
     assert sum(len(c) for c in c_np_result) == number_of_nodes
-    assert len(c_labels) == number_of_nodes
     assert len(c_list_result) == len(scipy_result)
     assert len(c_np_result) == len(scipy_result)
 
     s1 = scipy_time / c_list_time if c_list_time > 0 else float("inf")
     s2 = scipy_time / c_np_time if c_np_time > 0 else float("inf")
-    s3 = scipy_time / c_labels_time if c_labels_time > 0 else float("inf")
 
     print(  # noqa: T201
         f"\n  10^{exponent}:  scipy={scipy_time:.4f}s"
         f"  | tuples->sets={c_list_time:.4f}s ({s1:.1f}x)"
         f"  | numpy->sets={c_np_time:.4f}s ({s2:.1f}x)"
-        f"  | numpy->labels={c_labels_time:.4f}s ({s3:.1f}x)"
     )
