@@ -7,9 +7,10 @@ Tests graph sizes from 10^3 to 10^7 nodes with ~3 edges per node on average.
 import random
 import time
 
+import numpy as np
 import pytest
 
-from connected_component import igp_connected_components
+from connected_component import igp_connected_component_labels, igp_connected_components
 
 
 def generate_sparse_grid_graph(
@@ -30,7 +31,8 @@ def generate_sparse_grid_graph(
 
 def _run_scipy(number_of_nodes, edges):
     """Run the original scipy implementation for comparison."""
-    import numpy as np
+    from collections import defaultdict
+
     from scipy.sparse import csr_matrix
     from scipy.sparse.csgraph import connected_components
 
@@ -40,8 +42,6 @@ def _run_scipy(number_of_nodes, edges):
     data = np.ones(len(row), dtype=np.int8)
     graph = csr_matrix((data, (row, col)), shape=(number_of_nodes, number_of_nodes))
     _n, labels = connected_components(graph, directed=False)
-    # Group into sets like the real function does
-    from collections import defaultdict
     comps = defaultdict(set)
     for node_id, comp_id in enumerate(labels):
         comps[comp_id].add(node_id)
@@ -83,29 +83,50 @@ def test_connected_components_performance(
     ids=["1K", "10K", "100K", "1M", "10M"],
 )
 def test_speedup_vs_scipy(exponent: int) -> None:
-    """Measure and print speedup vs scipy. Not a hard assertion — informational."""
-    scipy = pytest.importorskip("scipy")  # noqa: F841
+    """Measure and print speedup vs scipy for all input/output modes."""
+    pytest.importorskip("scipy")
     number_of_nodes = 10**exponent
-    edges = generate_sparse_grid_graph(number_of_nodes)
+    edges_list = generate_sparse_grid_graph(number_of_nodes)
+    edges_np = np.array(edges_list, dtype=np.int32)
 
     # Warm up
-    list(igp_connected_components(number_of_nodes, edges))
-    _run_scipy(number_of_nodes, edges)
+    list(igp_connected_components(number_of_nodes, edges_list))
+    _run_scipy(number_of_nodes, edges_list)
 
-    # Benchmark C union-find
+    # scipy
     start = time.perf_counter()
-    c_result = list(igp_connected_components(number_of_nodes, edges))
-    c_time = time.perf_counter() - start
-
-    # Benchmark scipy
-    start = time.perf_counter()
-    scipy_result = _run_scipy(number_of_nodes, edges)
+    scipy_result = _run_scipy(number_of_nodes, edges_list)
     scipy_time = time.perf_counter() - start
 
-    # Verify same results
-    assert sum(len(c) for c in c_result) == number_of_nodes
-    assert sum(len(c) for c in scipy_result) == number_of_nodes
-    assert len(c_result) == len(scipy_result)
+    # C: list-of-tuples -> sets
+    start = time.perf_counter()
+    c_list_result = list(igp_connected_components(number_of_nodes, edges_list))
+    c_list_time = time.perf_counter() - start
 
-    speedup = scipy_time / c_time if c_time > 0 else float("inf")
-    print(f"\n  10^{exponent}: C={c_time:.4f}s  scipy={scipy_time:.4f}s  speedup={speedup:.1f}x")  # noqa: T201
+    # C: numpy -> sets
+    start = time.perf_counter()
+    c_np_result = list(igp_connected_components(number_of_nodes, edges_np))
+    c_np_time = time.perf_counter() - start
+
+    # C: numpy -> labels (fastest)
+    start = time.perf_counter()
+    c_labels = igp_connected_component_labels(number_of_nodes, edges_np)
+    c_labels_time = time.perf_counter() - start
+
+    # Verify
+    assert sum(len(c) for c in c_list_result) == number_of_nodes
+    assert sum(len(c) for c in c_np_result) == number_of_nodes
+    assert len(c_labels) == number_of_nodes
+    assert len(c_list_result) == len(scipy_result)
+    assert len(c_np_result) == len(scipy_result)
+
+    s1 = scipy_time / c_list_time if c_list_time > 0 else float("inf")
+    s2 = scipy_time / c_np_time if c_np_time > 0 else float("inf")
+    s3 = scipy_time / c_labels_time if c_labels_time > 0 else float("inf")
+
+    print(  # noqa: T201
+        f"\n  10^{exponent}:  scipy={scipy_time:.4f}s"
+        f"  | tuples->sets={c_list_time:.4f}s ({s1:.1f}x)"
+        f"  | numpy->sets={c_np_time:.4f}s ({s2:.1f}x)"
+        f"  | numpy->labels={c_labels_time:.4f}s ({s3:.1f}x)"
+    )

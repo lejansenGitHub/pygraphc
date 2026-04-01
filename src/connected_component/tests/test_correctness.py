@@ -4,7 +4,9 @@ import pytest
 
 from connected_component import (
     igp_connected_components,
+    igp_connected_components_remapped,
     igp_connected_components_with_branch_ids,
+    igp_connected_components_with_branch_ids_remapped,
 )
 
 
@@ -140,3 +142,71 @@ def test_node_coverage():
         assert not all_nodes & c, "overlap"
         all_nodes |= c
     assert all_nodes == set(range(n))
+
+
+# ── Remapped variants (node_ids maps index -> original ID) ──
+
+
+def test_remapped_basic():
+    """Simulates the real use case: non-contiguous node IDs mapped to indices."""
+    # Original node IDs: 100, 200, 300, 400
+    node_ids = [100, 200, 300, 400]
+    # Edges use indices: 0-1 connected, 2-3 connected
+    edges = [(0, 1), (2, 3)]
+    result = list(igp_connected_components_remapped(node_ids, edges))
+    assert len(result) == 2
+    assert {100, 200} in result
+    assert {300, 400} in result
+
+
+def test_remapped_no_edges():
+    node_ids = [10, 20, 30]
+    result = list(igp_connected_components_remapped(node_ids, []))
+    assert len(result) == 3
+    assert {10} in result
+    assert {20} in result
+    assert {30} in result
+
+
+def test_remapped_single_component():
+    node_ids = [5, 10, 15]
+    edges = [(0, 1), (1, 2)]
+    result = list(igp_connected_components_remapped(node_ids, edges))
+    assert len(result) == 1
+    assert result[0] == {5, 10, 15}
+
+
+def test_remapped_empty():
+    result = list(igp_connected_components_remapped([], []))
+    assert result == []
+
+
+def test_remapped_with_branches_basic():
+    node_ids = [100, 200, 300, 400]
+    edges = [(0, 1), (2, 3)]
+    branch_ids = [901, 902]
+    result = list(igp_connected_components_with_branch_ids_remapped(node_ids, edges, branch_ids))
+    assert len(result) == 2
+    result_map = {frozenset(nodes): branches for nodes, branches in result}
+    assert result_map[frozenset({100, 200})] == {901}
+    assert result_map[frozenset({300, 400})] == {902}
+
+
+def test_remapped_with_branches_merged():
+    node_ids = [10, 20, 30]
+    edges = [(0, 1), (1, 2)]
+    branch_ids = [500, 600]
+    result = list(igp_connected_components_with_branch_ids_remapped(node_ids, edges, branch_ids))
+    assert len(result) == 1
+    nodes, branches = result[0]
+    assert nodes == {10, 20, 30}
+    assert branches == {500, 600}
+
+
+def test_remapped_with_branches_isolated():
+    node_ids = [7, 8, 9]
+    result = list(igp_connected_components_with_branch_ids_remapped(node_ids, [], []))
+    assert len(result) == 3
+    for nodes, branches in result:
+        assert len(nodes) == 1
+        assert branches == set()
