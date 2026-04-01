@@ -34,6 +34,7 @@ Sparse random graphs with ~3 edges per node (typical grid topology). Compared ag
 | 10K | 0.0004s | 0.003s | ~8x |
 | 100K | 0.006s | 0.031s | ~5x |
 | 1M | 0.063s | 0.449s | ~7x |
+| 10M | 1.1s | 8.4s | ~8x |
 
 Run the benchmarks yourself:
 

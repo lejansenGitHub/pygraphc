@@ -1,7 +1,7 @@
 """
 Performance tests comparing C union-find vs scipy connected_components.
 
-Tests graph sizes from 10^3 to 10^6 nodes with ~3 edges per node on average.
+Tests graph sizes from 10^3 to 10^7 nodes with ~3 edges per node on average.
 """
 
 import random
@@ -55,8 +55,9 @@ def _run_scipy(number_of_nodes, edges):
         (4, 0.01),
         (5, 0.2),
         (6, 2),
+        (7, 25),
     ],
-    ids=["1K", "10K", "100K", "1M"],
+    ids=["1K", "10K", "100K", "1M", "10M"],
 )
 def test_connected_components_performance(
     exponent: int,
@@ -78,8 +79,8 @@ def test_connected_components_performance(
 
 @pytest.mark.parametrize(
     "exponent",
-    [3, 4, 5, 6],
-    ids=["1K", "10K", "100K", "1M"],
+    [3, 4, 5, 6, 7],
+    ids=["1K", "10K", "100K", "1M", "10M"],
 )
 def test_speedup_vs_scipy(exponent: int) -> None:
     """Measure and print speedup vs scipy. Not a hard assertion — informational."""
