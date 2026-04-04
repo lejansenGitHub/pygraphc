@@ -2,6 +2,8 @@
 
 Fast, general-purpose graph algorithm library implemented in C, callable from Python. Zero runtime dependencies.
 
+Edges use **original node IDs** — no manual index mapping needed. A C-side hash map translates IDs to internal indices automatically.
+
 ## Installation
 
 ```bash
@@ -23,7 +25,6 @@ Requires a C compiler (the extension is compiled at install time with `-O3`).
 ```python
 from cgraph import (
     connected_components,
-    connected_components_with_branch_ids,
     bridges,
     articulation_points,
     biconnected_components,
@@ -33,7 +34,7 @@ from cgraph import (
 )
 
 node_ids = [100, 200, 300, 400]
-edges = [(0, 1), (2, 3)]  # indices into node_ids
+edges = [(100, 200), (300, 400)]  # pairs of original node IDs
 
 # Connected components
 for component in connected_components(node_ids, edges):
@@ -86,65 +87,56 @@ multi_source_shortest_path_lengths(node_ids, edges, weights, sources=[0, 3])
 eccentricity(node_ids, edges, weights, source=0)  # 6.0
 ```
 
-All functions accept edges as either `list[tuple[int, int]]` or a numpy `int32` array of shape `(m, 2)`. Weights accept `list[float]` or numpy `float64` arrays.
+Parallel edges are supported — each edge is tracked by ID, so two edges between the same pair of nodes are handled correctly (e.g. for bridges, Dijkstra weight selection).
 
 ## Benchmarks vs networkx
 
-Sparse random graphs with ~3 edges per node. All comparisons against networkx on the same machine.
+Realistic end-to-end comparison: both sides start from the same data (edge tuples), then build their data structures and run the algorithm. networkx uses `add_edges_from` (bulk insert). Sparse random graphs with ~3 edges per node.
 
 ### Connected components
 
 | Nodes | cgraph | networkx | Speedup |
 |------:|-------:|---------:|--------:|
-| 1K | 0.00005s | 0.0002s | **6x** |
-| 10K | 0.0004s | 0.0023s | **6x** |
-| 100K | 0.007s | 0.110s | **16x** |
-| 1M | 0.076s | 1.61s | **21x** |
-| 10M | 1.46s | 26.99s | **19x** |
+| 1K | 0.0001s | 0.0009s | **17x** |
+| 10K | 0.0005s | 0.013s | **23x** |
+| 100K | 0.008s | 0.414s | **51x** |
+| 1M | 0.123s | 8.06s | **66x** |
 
 ### Bridges
 
 | Nodes | cgraph | networkx | Speedup |
 |------:|-------:|---------:|--------:|
-| 1K | 0.0001s | 0.004s | **36x** |
-| 10K | 0.0008s | 0.046s | **55x** |
-| 100K | 0.012s | 0.889s | **73x** |
-| 1M | 0.359s | 15.28s | **43x** |
+| 1K | 0.0001s | 0.005s | **99x** |
+| 10K | 0.0007s | 0.058s | **84x** |
+| 100K | 0.012s | 1.38s | **113x** |
+| 1M | 0.336s | 22.37s | **67x** |
 
 ### Articulation points
 
 | Nodes | cgraph | networkx | Speedup |
 |------:|-------:|---------:|--------:|
-| 1K | 0.00005s | 0.0008s | **16x** |
-| 10K | 0.0007s | 0.008s | **12x** |
-| 100K | 0.009s | 0.223s | **25x** |
-| 1M | 0.264s | 5.06s | **19x** |
-
-### Biconnected components
-
-| Nodes | cgraph | networkx | Speedup |
-|------:|-------:|---------:|--------:|
-| 1K | 0.0002s | 0.001s | **7x** |
-| 10K | 0.002s | 0.013s | **6x** |
-| 100K | 0.028s | 0.327s | **12x** |
-| 1M | 1.80s | 7.29s | **4x** |
+| 1K | 0.00005s | 0.002s | **35x** |
+| 10K | 0.0007s | 0.018s | **25x** |
+| 100K | 0.010s | 0.505s | **50x** |
+| 1M | 0.328s | 10.09s | **31x** |
 
 ### BFS
 
 | Nodes | cgraph | networkx | Speedup |
 |------:|-------:|---------:|--------:|
-| 1K | 0.0001s | 0.001s | **10x** |
-| 10K | 0.001s | 0.014s | **14x** |
-| 100K | 0.011s | 0.408s | **37x** |
-| 1M | 0.215s | 11.72s | **55x** |
+| 1K | 0.00005s | 0.002s | **43x** |
+| 10K | 0.0005s | 0.022s | **41x** |
+| 100K | 0.007s | 0.686s | **100x** |
+| 1M | 0.143s | 14.14s | **99x** |
 
 ### Dijkstra (SSSP)
 
 | Nodes | cgraph | networkx | Speedup |
 |------:|-------:|---------:|--------:|
-| 10K | 0.002s | 0.010s | **5x** |
-| 100K | 0.029s | 0.313s | **11x** |
-| 1M | 0.659s | 6.11s | **9x** |
+| 1K | 0.00005s | 0.001s | **22x** |
+| 10K | 0.001s | 0.020s | **14x** |
+| 100K | 0.027s | 0.676s | **26x** |
+| 1M | 0.599s | 11.65s | **20x** |
 
 ### Run benchmarks
 
