@@ -2,10 +2,18 @@
 
 ## Vision
 
-cgraph is a two-tier graph algorithm library:
+cgraph is a two-tier graph algorithm library optimized for **performance and low memory consumption**. Every public API function must beat or match the best available Python alternative (networkx, scipy) while using less memory.
 
-- **C tier**: Primitive graph algorithms implemented in C for speed. These are the hot inner loops — union-find, BFS, biconnected components, etc. Exposed as private `_core` functions.
+- **C tier**: Primitive graph algorithms implemented in C for speed. These are the hot inner loops — union-find, BFS, biconnected components, etc. Exposed as private `_core` functions. Memory is allocated once per call, freed on return — no long-lived allocations.
 - **Python tier**: Meta/composite algorithms that orchestrate multiple C primitives. Written in Python, calling into C kernels. Part of the public API but not performance-critical themselves.
+
+## Performance Requirements
+
+- **Every public API function gets a benchmark test** in `tests/performance_tests/` — no exceptions.
+- Benchmarks compare against the reference implementation (scipy or networkx) across scaling curves (10^3 to 10^7 nodes).
+- Benchmarks measure both **runtime** and **peak memory** (via `tracemalloc` or `/proc/self/status`).
+- C tier functions must not allocate more than O(V + E) memory.
+- No Python object creation in hot loops — build result sets in C, return them to Python in one shot.
 
 ## API Design Principle: Mapped IDs Only
 
@@ -47,25 +55,50 @@ This was a deliberate decision: the old igp-mono code required callers to build 
 ### Phase 1: SSO Migration (C tier additions)
 Priority: the algorithms SSO currently gets from networkx.
 
-| Algorithm | C tier | Python tier | Notes |
-|-----------|--------|-------------|-------|
-| BFS (unweighted) | `_bfs(num_nodes, edges, source)` | `bfs(node_ids, edges, source)` | Foundation for shortest path |
-| Shortest path (weighted) | `_dijkstra(num_nodes, edges, weights, source, target)` | `shortest_path(node_ids, edges, weights, source, target)` | Replaces `nx.shortest_path` |
-| Single-source shortest path lengths | `_sssp_lengths(num_nodes, edges, weights, source, cutoff)` | `shortest_path_lengths(node_ids, edges, weights, source, cutoff)` | Replaces `nx.single_source_shortest_path_length` |
-| Eccentricity | — | `eccentricity(node_ids, edges, weights, source)` | Python tier: max of single-source distances |
+| Algorithm | C tier | Python tier | Benchmark vs | Notes |
+|-----------|--------|-------------|-------------|-------|
+| BFS (unweighted) | `_bfs(num_nodes, edges, source)` | `bfs(node_ids, edges, source)` | `nx.bfs_tree` | Foundation for shortest path |
+| Shortest path (weighted) | `_dijkstra(num_nodes, edges, weights, source, target)` | `shortest_path(node_ids, edges, weights, source, target)` | `nx.shortest_path` | Binary heap in C |
+| Single-source shortest path lengths | `_sssp_lengths(num_nodes, edges, weights, source, cutoff)` | `shortest_path_lengths(node_ids, edges, weights, source, cutoff)` | `nx.single_source_shortest_path_length` | With cutoff support |
+| Eccentricity | — | `eccentricity(node_ids, edges, weights, source)` | `nx.eccentricity` | Python tier: max of single-source distances |
 
 ### Phase 2: Topology Primitives (C tier)
-| Algorithm | C tier | Python tier | Notes |
-|-----------|--------|-------------|-------|
-| Biconnected components | `_biconnected_components(num_nodes, edges)` | `biconnected_components(node_ids, edges)` | Tarjan's algorithm in C |
-| Articulation points | `_articulation_points(num_nodes, edges)` | `articulation_points(node_ids, edges)` | Falls out of biconnected components |
-| Bridge edges | `_bridges(num_nodes, edges)` | `bridges(node_ids, edges)` | Falls out of biconnected components |
+| Algorithm | C tier | Python tier | Benchmark vs | Notes |
+|-----------|--------|-------------|-------------|-------|
+| Biconnected components | `_biconnected_components(num_nodes, edges)` | `biconnected_components(node_ids, edges)` | `nx.biconnected_components` | Tarjan's algorithm in C |
+| Articulation points | `_articulation_points(num_nodes, edges)` | `articulation_points(node_ids, edges)` | `nx.articulation_points` | Falls out of biconnected components |
+| Bridge edges | `_bridges(num_nodes, edges)` | `bridges(node_ids, edges)` | `nx.bridges` | Falls out of biconnected components |
 
 ### Phase 3: Composite Algorithms (Python tier only)
-| Algorithm | Python tier | Notes |
-|-----------|-------------|-------|
-| `nodes_on_any_simple_paths(node_ids, edges, source, targets)` | Orchestrates BFS + connected components | Replaces custom `graph_traversal` library |
-| Protection zone detection | Combines articulation points + connected components | Future |
+| Algorithm | Python tier | Benchmark vs | Notes |
+|-----------|-------------|-------------|-------|
+| `nodes_on_any_simple_paths(node_ids, edges, source, targets)` | Orchestrates BFS + connected components | `libraries.graph_functions.graph_traversal` | Replaces custom igp-mono function |
+| Protection zone detection | Combines articulation points + connected components | — | Future |
+
+## Benchmark Test Pattern
+
+Every public API function gets two benchmark tests:
+
+1. **Absolute performance** — must complete within a time limit per graph size (10^3 to 10^7 nodes). Catches regressions.
+2. **Speedup vs reference** — measures and prints speedup vs networkx/scipy. Not a pass/fail gate (CI environments vary), but tracked for visibility.
+
+Both tests use sparse random graphs with ~3 edges per node (typical grid topology).
+
+Memory benchmarks use `tracemalloc` to measure peak allocation during the call. The C tier must stay within O(V + E) — no hidden quadratic blowups.
+
+```python
+# Pattern for new algorithm benchmarks:
+# tests/performance_tests/test_<algorithm>.py
+
+def test_<algorithm>_performance(exponent, time_limit_seconds):
+    """Absolute time limit per graph size."""
+
+def test_<algorithm>_speedup_vs_<reference>(exponent):
+    """Print speedup vs networkx/scipy."""
+
+def test_<algorithm>_memory(exponent):
+    """Peak memory must be O(V + E)."""
+```
 
 ## File Structure (target)
 
