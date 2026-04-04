@@ -39,8 +39,9 @@ This was a deliberate decision: the old igp-mono code required callers to build 
 
 ## Algorithms Needed (from igp-mono audit)
 
-### From `backend/topology/` — connected components (scipy-based)
+### From `backend/topology/` — connected components + bridges
 - **Connected components** ✅ (done — drop-in replacement for scipy version in `connected_components.py`)
+- **Bridges** — `unversioned-models-no-dump-prep` branch has a Python Tarjan's implementation in `backend/topology/src/graphs/bridges.py` with `find_bridges()` + `find_two_edge_connected_components()`. This is the exact algorithm cgraph should provide in C. The Python version is the correctness reference and test suite to port.
 
 ### From `backend/topology/src/graphs/n_1/` — N-1 contingency analysis
 
