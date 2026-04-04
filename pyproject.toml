@@ -1,12 +1,24 @@
 [project]
 name = "cgraph"
 version = "0.1.0"
-description = ""
+description = "Fast graph algorithms with C kernels — connected components via union-find"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
     { name = "Lennart Jansen", email = "lejansen.home@gmail.com" },
+]
+keywords = ["graph", "connected-components", "union-find", "c-extension"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
 ]
 dependencies = []
 
@@ -14,6 +26,8 @@ dependencies = []
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.0",
+    "pytest-cov>=6.0",
+    "diff-cover>=9.0",
     "ruff>=0.9",
     "mypy>=1.14",
     "pre-commit>=4.0",
@@ -35,6 +49,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+cgraph = ["py.typed"]
 
 [tool.ruff]
 target-version = "py311"
@@ -83,7 +101,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["TRY"]
+"tests/**" = ["TRY"]
+"tests/performance_tests/**" = ["PLC0415"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "unittest.mock".msg = "Use pytest-mock instead."
@@ -97,9 +116,16 @@ module = ["pytest.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["cgraph.tests.*"]
+module = ["cgraph._core", "scipy.*", "numpy.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
 disallow_untyped_decorators = false
 disable_error_code = ["call-arg", "arg-type", "attr-defined", "misc", "unused-ignore"]
 
 [tool.pytest.ini_options]
-testpaths = ["src"]
+testpaths = ["tests"]
+markers = [
+    "performance: performance benchmarks (deselect with '-m not performance')",
+]

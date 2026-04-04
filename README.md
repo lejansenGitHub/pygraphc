@@ -63,12 +63,12 @@ When node IDs are non-contiguous (e.g. database IDs), the old pattern builds ind
 
 ```bash
 pip install -e ".[benchmark]"
-pytest src/cgraph/tests/test_performance.py -v -s -k speedup
+pytest tests/performance_tests/ -v -s -k speedup
 ```
 
 ## Tests
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest tests/unit_tests/ -v
 ```

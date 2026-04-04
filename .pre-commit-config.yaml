@@ -1,0 +1,62 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.8
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        pass_filenames: false
+        language: system
+        entry: .venv/bin/mypy src/
+        types: [python]
+
+      # --- pygrep rules ---
+
+      - id: no-bare-type-ignore
+        name: "type: ignore must have [code]"
+        language: pygrep
+        entry: '#\s*type:\s*ignore(?!\[)'
+        types: [python]
+
+      - id: type-ignore-needs-reason
+        name: "type: ignore[code] needs reason comment"
+        language: pygrep
+        entry: '#\s*type:\s*ignore\[[^\]]+\]\s*$'
+        types: [python]
+
+      - id: noqa-needs-code
+        name: "noqa must have error code"
+        language: pygrep
+        entry: '#\s*noqa\s*$'
+        types: [python]
+
+      - id: noqa-needs-reason
+        name: "noqa needs reason comment"
+        language: pygrep
+        entry: '#\s*noqa:\s*[A-Z]\w+\s*$'
+        types: [python]
+
+      # --- Unit tests on commit ---
+
+      - id: unit-tests
+        name: unit tests
+        entry: python -m pytest tests/unit_tests/ -x -q
+        language: system
+        pass_filenames: false
+        types: [python]
+        always_run: true
+
+      # --- Coverage (pre-push only) ---
+
+      - id: diff-cover
+        name: "diff-cover: new/changed lines must be covered"
+        entry: bash -c 'pytest tests/unit_tests/ --cov=src --cov-report=xml -q && diff-cover coverage.xml --compare-branch=main --fail-under=80'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        always_run: true

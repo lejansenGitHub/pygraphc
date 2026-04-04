@@ -12,6 +12,8 @@ import pytest
 
 from cgraph import connected_components
 
+pytestmark = pytest.mark.performance
+
 
 def generate_sparse_grid_graph(
     number_of_nodes: int,
@@ -82,9 +84,7 @@ def test_connected_components_performance(
     # --- Assert ---
     total_nodes = sum(len(component) for component in components)
     assert total_nodes == number_of_nodes
-    assert elapsed < time_limit_seconds, (
-        f"took {elapsed:.3f}s for 10^{exponent} nodes, limit is {time_limit_seconds}s"
-    )
+    assert elapsed < time_limit_seconds, f"took {elapsed:.3f}s for 10^{exponent} nodes, limit is {time_limit_seconds}s"
 
 
 @pytest.mark.parametrize(
@@ -133,7 +133,7 @@ def test_speedup_vs_scipy(exponent: int) -> None:
     speedup_tuples = scipy_time / c_list_time if c_list_time > 0 else float("inf")
     speedup_numpy = scipy_time / c_np_time if c_np_time > 0 else float("inf")
 
-    print(  # noqa: T201
+    print(  # noqa: T201 — benchmark output is intentional
         f"\n  10^{exponent}:  scipy={scipy_time:.4f}s"
         f"  | tuples->sets={c_list_time:.4f}s ({speedup_tuples:.1f}x)"
         f"  | numpy->sets={c_np_time:.4f}s ({speedup_numpy:.1f}x)"

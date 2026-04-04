@@ -2,10 +2,15 @@
 
 from collections.abc import Generator
 
-from cgraph._core import (
-    connected_components_remapped as _cc_remapped,
-    connected_components_with_branches_remapped as _cc_branches_remapped,
-)
+from cgraph._core import connected_components_remapped as _cc_remapped
+from cgraph._core import connected_components_with_branches_remapped as _cc_branches_remapped
+
+__all__ = [
+    "BranchId",
+    "NodeId",
+    "connected_components",
+    "connected_components_with_branch_ids",
+]
 
 NodeId = int
 BranchId = int

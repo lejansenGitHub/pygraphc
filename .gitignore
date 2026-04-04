@@ -7,3 +7,6 @@ dist/
 build/
 *.pid
 .claude/
+.venv/
+coverage.xml
+.coverage
