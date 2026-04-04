@@ -93,6 +93,9 @@ The N-1 analysis is the most performance-sensitive consumer. Bridges and connect
 | BFS (unweighted) | `_bfs(num_nodes, edges, source)` | `bfs(node_ids, edges, source)` | `nx.bfs_tree` | Used by protection zones + N-1 component splitting |
 
 ### Phase 2: SSO Migration (weighted graph algorithms)
+
+**Why Dijkstra, not A*:** A* only helps for single source → single target with an admissible heuristic (h(n) ≤ actual cost). Most igp-mono use cases are single-source-all-targets (SSSP with cutoff, eccentricity, multi-source Dijkstra) where A* doesn't apply. The one source→target case uses electrical distance (impedance-based), which doesn't correlate with geographic distance — no reliable heuristic. The real speedup is C binary heap vs Python heapq, not algorithmic.
+
 | Algorithm | C tier | Python tier | Benchmark vs | Notes |
 |-----------|--------|-------------|-------------|-------|
 | Shortest path (weighted) | `_dijkstra(num_nodes, edges, weights, source, target)` | `shortest_path(node_ids, edges, weights, source, target)` | `nx.shortest_path` | Binary heap in C |
