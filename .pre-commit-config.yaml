@@ -41,6 +41,22 @@ repos:
         entry: '#\s*noqa:\s*[A-Z]\w+\s*$'
         types: [python]
 
+      # --- Custom linters ---
+
+      - id: mock-requires-spec
+        name: "MagicMock must use spec="
+        entry: python -m linter_scripts.mock_requires_spec
+        language: system
+        types: [python]
+        files: tests/
+
+      - id: test-structure-convention
+        name: "test structure convention (docstring + sections)"
+        entry: python -m linter_scripts.test_structure_convention
+        language: system
+        types: [python]
+        files: tests/unit_tests/.*test_
+
       # --- Unit tests on commit ---
 
       - id: unit-tests

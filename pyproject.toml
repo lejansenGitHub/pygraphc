@@ -110,6 +110,11 @@ ignore = [
 [tool.mypy]
 python_version = "3.11"
 strict = true
+disallow_any_generics = true
+disallow_any_explicit = true
+disallow_any_unimported = true
+disallow_subclassing_any = true
+no_implicit_reexport = true
 
 [[tool.mypy.overrides]]
 module = ["pytest.*"]
