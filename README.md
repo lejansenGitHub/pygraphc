@@ -1,4 +1,4 @@
-# ConnectedComponent
+# cgraph
 
 Fast connected-components library using a C union-find with path compression and union by rank, callable from Python. Zero runtime dependencies.
 
@@ -11,7 +11,7 @@ pip install -e .
 Or from GitHub:
 
 ```bash
-pip install git+https://github.com/lejansenGitHub/ConnectedComponent.git
+pip install git+https://github.com/lejansenGitHub/cgraph.git
 ```
 
 Requires a C compiler (the extension is compiled at install time with `-O3`).
@@ -19,29 +19,19 @@ Requires a C compiler (the extension is compiled at install time with `-O3`).
 ## Usage
 
 ```python
-from connected_component import (
-    igp_connected_components,
-    igp_connected_components_remapped,
-    igp_connected_components_with_branch_ids,
-    igp_connected_components_with_branch_ids_remapped,
-)
+from cgraph import connected_components, connected_components_with_branch_ids
 
-# Basic: get each component as a set of node indices
-for component in igp_connected_components(num_nodes, edges):
-    print(component)  # {0, 1, 2}, {3, 4}, ...
+# Get each component as a set of original node IDs
+node_ids = [100, 200, 300, 400]
+edges = [(0, 1), (2, 3)]  # indices into node_ids
 
-# With node ID remapping (no Python loop needed):
-# node_ids maps index -> original NodeId
-for component in igp_connected_components_remapped(node_ids, edges):
-    print(component)  # {NodeId(100), NodeId(200), ...}
+for component in connected_components(node_ids, edges):
+    print(component)  # {100, 200}, {300, 400}
 
 # With branch IDs:
-for nodes, branches in igp_connected_components_with_branch_ids(num_nodes, edges, branch_ids):
-    print(nodes, branches)
-
-# With branch IDs + node ID remapping:
-for nodes, branches in igp_connected_components_with_branch_ids_remapped(node_ids, edges, branch_ids):
-    print(nodes, branches)
+branch_ids = [901, 902]
+for nodes, branches in connected_components_with_branch_ids(node_ids, edges, branch_ids):
+    print(nodes, branches)  # {100, 200} {901}, {300, 400} {902}
 ```
 
 All functions accept edges as either a `list[tuple[int, int]]` or a numpy `int32` array of shape `(m, 2)`.
@@ -73,7 +63,7 @@ When node IDs are non-contiguous (e.g. database IDs), the old pattern builds ind
 
 ```bash
 pip install -e ".[benchmark]"
-pytest src/connected_component/tests/test_performance.py -v -s -k speedup
+pytest src/cgraph/tests/test_performance.py -v -s -k speedup
 ```
 
 ## Tests

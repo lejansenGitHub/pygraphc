@@ -1,5 +1,5 @@
 [project]
-name = "connected-component"
+name = "cgraph"
 version = "0.1.0"
 description = ""
 readme = "README.md"
@@ -13,6 +13,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-mock>=3.0",
     "ruff>=0.9",
     "mypy>=1.14",
     "pre-commit>=4.0",
@@ -24,9 +25,9 @@ benchmark = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lejansenGitHub/ConnectedComponent"
-Repository = "https://github.com/lejansenGitHub/ConnectedComponent"
-Issues = "https://github.com/lejansenGitHub/ConnectedComponent/issues"
+Homepage = "https://github.com/lejansenGitHub/cgraph"
+Repository = "https://github.com/lejansenGitHub/cgraph"
+Issues = "https://github.com/lejansenGitHub/cgraph/issues"
 
 [build-system]
 requires = ["setuptools>=75.0"]
@@ -36,7 +37,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
@@ -60,38 +61,35 @@ select = [
     "PIE",      # flake8-pie
     "C4",       # flake8-comprehensions
     "RUF028",   # Ruff-specific rules: invalid formatter suppression
-    "RUF022",   # Ruff-speficic rules: sort __all__
+    "RUF022",   # Ruff-specific rules: sort __all__
     "RUF100",   # Ruff-specific rules: unused-noqa
     "UP",       # pyupgrade
     "PERF",     # perflint
     "T20",      # forbid prints
     "PT",       # flake8-pytest-style
+    "TRY",      # tryceratops
 ]
 ignore = [
     "PT011",    # pytest-raises-too-broad
-    "SIM105",   # Note that contextlib.suppress is slower than using try-except-pass directly. For performance-critical code, consider retaining the try-except-pass pattern.
+    "SIM105",   # contextlib.suppress is slower than try-except-pass
     "SIM116",   # bad for coverage of the conditions
     "SIM117",   # with statements can have very different context
-    "RET504",   # local assignment before return benefits labeling of the return values and debugging
-    "COM812",   # missing tailing comma
+    "RET504",   # local assignment before return benefits labeling and debugging
+    "COM812",   # missing trailing comma
     "UP008",    # super-call-with-parameters
     "UP015",    # redundant-open-modes -> writing it explicitly is more readable
-    "UP035",    # deprecated imports -> should be done project wide for consistecy
-    "UP044",    # breaks cython code
-    "PLW1641",  # Object does not implement `__hash__` method
     "PLR2004",  # magic values in comparisons — too noisy in tests
-
-    # introduced in 0.15.0, require iterative activation
     "PLW0108",  # unnecessary-lambda
-    "UP042",    # replace-str-enum
-    "FURB110",  # if-exp-instead-of-or-operator
-    "FURB171",  # single-item-membership-test
-    "PLC0415",  # import not at top-level — intentional for circular import avoidance and lazy loading
-    "UP046",    # Generic subclass vs type parameters — dataclass generics need Generic[] syntax
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["TRY"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"unittest.mock".msg = "Use pytest-mock instead."
+
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.11"
 strict = true
 
 [[tool.mypy.overrides]]
@@ -99,7 +97,7 @@ module = ["pytest.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["connected_component.tests.*"]
+module = ["cgraph.tests.*"]
 disallow_untyped_decorators = false
 disable_error_code = ["call-arg", "arg-type", "attr-defined", "misc", "unused-ignore"]
 

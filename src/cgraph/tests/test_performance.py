@@ -10,7 +10,7 @@ import time
 import numpy as np
 import pytest
 
-from connected_component import igp_connected_components
+from cgraph import connected_components
 
 
 def generate_sparse_grid_graph(
@@ -29,23 +29,23 @@ def generate_sparse_grid_graph(
     return edges
 
 
-def _run_scipy(number_of_nodes, edges):
+def _run_scipy(number_of_nodes: int, edges: list[tuple[int, int]]) -> list[set[int]]:
     """Run the original scipy implementation for comparison."""
     from collections import defaultdict
 
     from scipy.sparse import csr_matrix
-    from scipy.sparse.csgraph import connected_components
+    from scipy.sparse.csgraph import connected_components as scipy_cc
 
     edge_array = np.array(edges, dtype=np.int32)
     row = np.concatenate([edge_array[:, 0], edge_array[:, 1]])
     col = np.concatenate([edge_array[:, 1], edge_array[:, 0]])
     data = np.ones(len(row), dtype=np.int8)
     graph = csr_matrix((data, (row, col)), shape=(number_of_nodes, number_of_nodes))
-    _n, labels = connected_components(graph, directed=False)
-    comps = defaultdict(set)
-    for node_id, comp_id in enumerate(labels):
-        comps[comp_id].add(node_id)
-    return list(comps.values())
+    _n, labels = scipy_cc(graph, directed=False)
+    components: dict[int, set[int]] = defaultdict(set)
+    for node_id, component_id in enumerate(labels):
+        components[component_id].add(node_id)
+    return list(components.values())
 
 
 @pytest.mark.parametrize(
@@ -63,14 +63,24 @@ def test_connected_components_performance(
     exponent: int,
     time_limit_seconds: float,
 ) -> None:
+    """
+    The remapped API must stay within absolute time limits per graph size.
+
+    Uses identity node_ids (0..n-1) so the benchmark isolates C performance
+    without being affected by Python object construction overhead.
+    """
+    # --- Input ---
     number_of_nodes = 10**exponent
+    node_ids = list(range(number_of_nodes))
     edges = generate_sparse_grid_graph(number_of_nodes)
 
+    # --- Execute ---
     start = time.perf_counter()
-    components = list(igp_connected_components(number_of_nodes, edges))
+    components = list(connected_components(node_ids, edges))
     elapsed = time.perf_counter() - start
 
-    total_nodes = sum(len(c) for c in components)
+    # --- Assert ---
+    total_nodes = sum(len(component) for component in components)
     assert total_nodes == number_of_nodes
     assert elapsed < time_limit_seconds, (
         f"took {elapsed:.3f}s for 10^{exponent} nodes, limit is {time_limit_seconds}s"
@@ -83,42 +93,48 @@ def test_connected_components_performance(
     ids=["1K", "10K", "100K", "1M", "10M"],
 )
 def test_speedup_vs_scipy(exponent: int) -> None:
-    """Measure and print speedup vs scipy for all input/output modes."""
+    """
+    Measure and print speedup vs scipy for the remapped API.
+
+    Compares list-of-tuples and numpy edge inputs against scipy's CSR-based
+    connected_components to verify we maintain a consistent speedup.
+    """
     pytest.importorskip("scipy")
+
+    # --- Input ---
     number_of_nodes = 10**exponent
+    node_ids = list(range(number_of_nodes))
     edges_list = generate_sparse_grid_graph(number_of_nodes)
     edges_np = np.array(edges_list, dtype=np.int32)
 
     # Warm up
-    list(igp_connected_components(number_of_nodes, edges_list))
+    list(connected_components(node_ids, edges_list))
     _run_scipy(number_of_nodes, edges_list)
 
-    # scipy
+    # --- Execute ---
     start = time.perf_counter()
     scipy_result = _run_scipy(number_of_nodes, edges_list)
     scipy_time = time.perf_counter() - start
 
-    # C: list-of-tuples -> sets
     start = time.perf_counter()
-    c_list_result = list(igp_connected_components(number_of_nodes, edges_list))
+    c_list_result = list(connected_components(node_ids, edges_list))
     c_list_time = time.perf_counter() - start
 
-    # C: numpy -> sets
     start = time.perf_counter()
-    c_np_result = list(igp_connected_components(number_of_nodes, edges_np))
+    c_np_result = list(connected_components(node_ids, edges_np))
     c_np_time = time.perf_counter() - start
 
-    # Verify
-    assert sum(len(c) for c in c_list_result) == number_of_nodes
-    assert sum(len(c) for c in c_np_result) == number_of_nodes
+    # --- Assert ---
+    assert sum(len(component) for component in c_list_result) == number_of_nodes
+    assert sum(len(component) for component in c_np_result) == number_of_nodes
     assert len(c_list_result) == len(scipy_result)
     assert len(c_np_result) == len(scipy_result)
 
-    s1 = scipy_time / c_list_time if c_list_time > 0 else float("inf")
-    s2 = scipy_time / c_np_time if c_np_time > 0 else float("inf")
+    speedup_tuples = scipy_time / c_list_time if c_list_time > 0 else float("inf")
+    speedup_numpy = scipy_time / c_np_time if c_np_time > 0 else float("inf")
 
     print(  # noqa: T201
         f"\n  10^{exponent}:  scipy={scipy_time:.4f}s"
-        f"  | tuples->sets={c_list_time:.4f}s ({s1:.1f}x)"
-        f"  | numpy->sets={c_np_time:.4f}s ({s2:.1f}x)"
+        f"  | tuples->sets={c_list_time:.4f}s ({speedup_tuples:.1f}x)"
+        f"  | numpy->sets={c_np_time:.4f}s ({speedup_numpy:.1f}x)"
     )
