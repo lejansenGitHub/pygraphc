@@ -3,15 +3,15 @@
 from collections import deque
 from collections.abc import Generator
 
-from cgraph._core import articulation_points as _articulation_points
-from cgraph._core import bfs as _bfs
-from cgraph._core import biconnected_components as _biconnected_components
-from cgraph._core import bridges as _bridges
-from cgraph._core import connected_components_remapped as _cc_remapped
+from cgraph._core import ap_nid as _ap_nid
+from cgraph._core import bcc_nid as _bcc_nid
+from cgraph._core import bfs_nid as _bfs_nid
+from cgraph._core import bridges_nid as _bridges_nid
+from cgraph._core import cc_nid as _cc_nid
 from cgraph._core import connected_components_with_branches_remapped as _cc_branches_remapped
-from cgraph._core import dijkstra as _dijkstra
-from cgraph._core import multi_source_dijkstra as _multi_source_dijkstra
-from cgraph._core import sssp_lengths as _sssp_lengths
+from cgraph._core import dijkstra_nid as _dijkstra_nid
+from cgraph._core import msdijk_nid as _msdijk_nid
+from cgraph._core import sssp_nid as _sssp_nid
 
 __all__ = [
     "BranchId",
@@ -34,6 +34,9 @@ NodeId = int
 BranchId = int
 
 
+# ── Connected Components (legacy index-based API kept for branch_ids) ──
+
+
 def connected_components(
     node_ids: list[NodeId],
     edges: list[tuple[int, int]],
@@ -41,10 +44,9 @@ def connected_components(
     """
     Yield each connected component as a set of original node IDs.
 
-    node_ids maps internal index -> original NodeId. The remapping
-    happens entirely in C — no Python loop needed.
+    Edges are pairs of original node IDs (not indices).
     """
-    yield from _cc_remapped(node_ids, edges)
+    yield from _cc_nid(node_ids, edges)
 
 
 def connected_components_with_branch_ids(
@@ -55,10 +57,12 @@ def connected_components_with_branch_ids(
     """
     Yield (node_id_set, branch_id_set) with original node IDs.
 
-    node_ids maps internal index -> original NodeId. The remapping
-    happens entirely in C — no Python loop needed.
+    Edges are pairs of original node IDs (not indices).
     """
-    yield from _cc_branches_remapped(node_ids, edges, branch_ids)
+    # Branch variant still uses index-based edges internally
+    idx = {nid: i for i, nid in enumerate(node_ids)}
+    idx_edges = [(idx[u], idx[v]) for u, v in edges]
+    yield from _cc_branches_remapped(node_ids, idx_edges, branch_ids)
 
 
 # ── Phase 1: Structural graph primitives ──
@@ -66,41 +70,35 @@ def connected_components_with_branch_ids(
 
 def bridges(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
 ) -> list[tuple[NodeId, NodeId]]:
-    """Return bridge edges as (node_id, node_id) pairs using original IDs."""
-    result = _bridges(len(node_ids), edges)
-    return [(node_ids[u], node_ids[v]) for u, v in result]
+    """Return bridge edges as (node_id, node_id) pairs."""
+    return _bridges_nid(node_ids, edges)
 
 
 def articulation_points(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
 ) -> set[NodeId]:
-    """Return the set of articulation points using original node IDs."""
-    result = _articulation_points(len(node_ids), edges)
-    return {node_ids[i] for i in result}
+    """Return the set of articulation points."""
+    return _ap_nid(node_ids, edges)
 
 
 def biconnected_components(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
 ) -> Generator[set[NodeId], None, None]:
-    """Yield each biconnected component as a set of original node IDs."""
-    result = _biconnected_components(len(node_ids), edges)
-    for comp in result:
-        yield {node_ids[i] for i in comp}
+    """Yield each biconnected component as a set of node IDs."""
+    yield from _bcc_nid(node_ids, edges)
 
 
 def bfs(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
     source: NodeId,
 ) -> list[NodeId]:
-    """Return nodes visited in BFS order from source, using original IDs."""
-    idx = {nid: i for i, nid in enumerate(node_ids)}
-    result = _bfs(len(node_ids), edges, idx[source])
-    return [node_ids[i] for i in result]
+    """Return nodes visited in BFS order from source."""
+    return _bfs_nid(node_ids, edges, source)
 
 
 # ── Phase 2: Weighted graph algorithms ──
@@ -108,53 +106,43 @@ def bfs(
 
 def shortest_path(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
     weights: list[float],
     source: NodeId,
     target: NodeId,
 ) -> list[NodeId]:
-    """Return the shortest weighted path from source to target as original IDs."""
-    idx = {nid: i for i, nid in enumerate(node_ids)}
-    _dist, path = _dijkstra(
-        len(node_ids), edges, weights, idx[source], idx[target],
-    )
-    return [node_ids[i] for i in path]
+    """Return the shortest weighted path from source to target."""
+    _dist, path = _dijkstra_nid(node_ids, edges, weights, source, target)
+    return path
 
 
 def shortest_path_lengths(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
     weights: list[float],
     source: NodeId,
     cutoff: float | None = None,
 ) -> dict[NodeId, float]:
     """Return {node_id: distance} for all nodes reachable from source."""
-    idx = {nid: i for i, nid in enumerate(node_ids)}
     c = cutoff if cutoff is not None else -1.0
-    result = _sssp_lengths(len(node_ids), edges, weights, idx[source], c)
-    return {node_ids[k]: v for k, v in result.items()}
+    return _sssp_nid(node_ids, edges, weights, source, c)
 
 
 def multi_source_shortest_path_lengths(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
     weights: list[float],
     sources: list[NodeId],
     cutoff: float | None = None,
 ) -> dict[NodeId, float]:
     """Return {node_id: distance} from nearest source to each reachable node."""
-    idx = {nid: i for i, nid in enumerate(node_ids)}
-    src_indices = [idx[s] for s in sources]
     c = cutoff if cutoff is not None else -1.0
-    result = _multi_source_dijkstra(
-        len(node_ids), edges, weights, src_indices, c,
-    )
-    return {node_ids[k]: v for k, v in result.items()}
+    return _msdijk_nid(node_ids, edges, weights, sources, c)
 
 
 def eccentricity(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
     weights: list[float],
     source: NodeId,
 ) -> float:
@@ -170,12 +158,11 @@ def eccentricity(
 
 def two_edge_connected_components(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
 ) -> Generator[set[NodeId], None, None]:
     """Yield 2-edge-connected components (bridges removed, then CC)."""
-    n = len(node_ids)
-    bridge_set: set[tuple[int, int]] = set()
-    for u, v in _bridges(n, edges):
+    bridge_set: set[tuple[NodeId, NodeId]] = set()
+    for u, v in bridges(node_ids, edges):
         bridge_set.add((min(u, v), max(u, v)))
 
     non_bridge_edges = [
@@ -187,7 +174,7 @@ def two_edge_connected_components(
 
 def nodes_on_simple_paths(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges: list[tuple[NodeId, NodeId]],
     source: NodeId,
     targets: list[NodeId],
 ) -> set[NodeId]:
@@ -201,48 +188,42 @@ def nodes_on_simple_paths(
     if n == 0:
         return set()
 
-    idx = {nid: i for i, nid in enumerate(node_ids)}
-    src = idx[source]
-    tgts = {idx[t] for t in targets}
-
-    result_indices: set[int] = set()
-    if src in tgts:
-        result_indices.add(src)
-        tgts.discard(src)
+    tgts = set(targets)
+    result: set[NodeId] = set()
+    if source in tgts:
+        result.add(source)
+        tgts.discard(source)
     if not tgts:
-        return {node_ids[i] for i in result_indices}
+        return result
 
-    blocks = _biconnected_components(n, edges)
+    blocks = list(biconnected_components(node_ids, edges))
     if not blocks:
-        return {node_ids[i] for i in result_indices}
+        return result
 
-    tree = _build_block_cut_tree(n, blocks)
+    tree = _build_block_cut_tree(node_ids, blocks)
     return _collect_path_nodes(
-        node_ids, blocks, tree, src, tgts, result_indices,
+        node_ids, blocks, tree, source, tgts, result,
     )
 
 
 def _build_block_cut_tree(
-    n: int,
-    blocks: list[set[int]],
-) -> tuple[list[list[int]], list[list[int]], dict[int, int]]:
+    node_ids: list[NodeId],
+    blocks: list[set[NodeId]],
+) -> tuple[dict[NodeId, list[int]], list[list[int]], dict[NodeId, int]]:
     """Build block-cut tree from biconnected components.
 
-    Returns (node_blocks, tree_adj, ap_id) where:
-    - node_blocks[v] = list of block indices containing v
-    - tree_adj[i] = adjacency list for tree node i
-    - ap_id = mapping from graph AP nodes to tree node IDs
+    Returns (node_blocks, tree_adj, ap_id).
     """
     num_blocks = len(blocks)
-    node_blocks: list[list[int]] = [[] for _ in range(n)]
+    node_blocks: dict[NodeId, list[int]] = {}
     for bi, block in enumerate(blocks):
         for v in block:
-            node_blocks[v].append(bi)
+            node_blocks.setdefault(v, []).append(bi)
 
-    ap_id: dict[int, int] = {}
+    ap_id: dict[NodeId, int] = {}
     next_id = num_blocks
-    for v in range(n):
-        if len(node_blocks[v]) > 1:
+    for v, blks in node_blocks.items():
+        if len(blks) > 1:
             ap_id[v] = next_id
             next_id += 1
 
@@ -258,24 +239,25 @@ def _build_block_cut_tree(
 
 def _collect_path_nodes(  # noqa: PLR0913
     node_ids: list[NodeId],
-    blocks: list[set[int]],
-    tree: tuple[list[list[int]], list[list[int]], dict[int, int]],
-    src: int,
-    tgts: set[int],
-    result_indices: set[int],
+    blocks: list[set[NodeId]],
+    tree: tuple[dict[NodeId, list[int]], list[list[int]], dict[NodeId, int]],
+    src: NodeId,
+    tgts: set[NodeId],
+    result: set[NodeId],
 ) -> set[NodeId]:
     """BFS on block-cut tree, trace paths, collect nodes."""
     node_blocks, tree_adj, ap_id = tree
     num_blocks = len(blocks)
 
-    def tn(v: int) -> int:
+    def tn(v: NodeId) -> int:
         if v in ap_id:
             return ap_id[v]
-        return node_blocks[v][0] if node_blocks[v] else -1
+        blks = node_blocks.get(v)
+        return blks[0] if blks else -1
 
     src_tn = tn(src)
     if src_tn == -1:
-        return {node_ids[i] for i in result_indices}
+        return result
 
     total = len(tree_adj)
     par = [-1] * total
@@ -295,9 +277,9 @@ def _collect_path_nodes(  # noqa: PLR0913
         v = t_tn
         while v != src_tn:
             if v < num_blocks:
-                result_indices.update(blocks[v])
+                result.update(blocks[v])
             v = par[v]
         if src_tn < num_blocks:
-            result_indices.update(blocks[src_tn])
+            result.update(blocks[src_tn])
 
-    return {node_ids[i] for i in result_indices}
+    return result

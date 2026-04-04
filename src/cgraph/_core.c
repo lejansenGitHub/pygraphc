@@ -154,6 +154,164 @@ static void free_edges(EdgeList *el) {
     }
 }
 
+/* ── Integer hash map (open addressing, power-of-2) ── */
+
+typedef struct {
+    long *keys;
+    int *vals;
+    int cap;      /* always power of 2 */
+    int mask;     /* cap - 1 */
+} IntMap;
+
+static int intmap_init(IntMap *m, int n) {
+    int cap = 16;
+    while (cap < n * 2) cap <<= 1;
+    m->cap = cap;
+    m->mask = cap - 1;
+    m->keys = (long *)malloc((size_t)cap * sizeof(long));
+    m->vals = (int *)malloc((size_t)cap * sizeof(int));
+    if (!m->keys || !m->vals) {
+        free(m->keys); free(m->vals);
+        PyErr_NoMemory();
+        return -1;
+    }
+    memset(m->keys, 0xFF, (size_t)cap * sizeof(long)); /* -1 = empty sentinel */
+    return 0;
+}
+
+static void intmap_free(IntMap *m) {
+    free(m->keys);
+    free(m->vals);
+}
+
+static inline void intmap_put(IntMap *m, long key, int val) {
+    int i = (int)((unsigned long)key & (unsigned long)m->mask);
+    while (m->keys[i] != -1) {
+        if (m->keys[i] == key) { m->vals[i] = val; return; }
+        i = (i + 1) & m->mask;
+    }
+    m->keys[i] = key;
+    m->vals[i] = val;
+}
+
+static inline int intmap_get(IntMap *m, long key) {
+    int i = (int)((unsigned long)key & (unsigned long)m->mask);
+    while (m->keys[i] != -1) {
+        if (m->keys[i] == key) return m->vals[i];
+        i = (i + 1) & m->mask;
+    }
+    return -1;  /* not found */
+}
+
+/* ── Edge parsing with node-ID translation via C hash map ── */
+
+static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
+    PyObject *fast = PySequence_Fast(edges_obj, "edges must be a sequence");
+    if (!fast) return -1;
+
+    Py_ssize_t m = PySequence_Fast_GET_SIZE(fast);
+    el->m = m;
+    el->owns_memory = 1;
+    if (m == 0) {
+        el->src = NULL; el->dst = NULL;
+        Py_DECREF(fast);
+        return 0;
+    }
+
+    el->src = (int *)malloc((size_t)m * sizeof(int));
+    el->dst = (int *)malloc((size_t)m * sizeof(int));
+    if (!el->src || !el->dst) {
+        free(el->src); free(el->dst);
+        Py_DECREF(fast);
+        PyErr_NoMemory();
+        return -1;
+    }
+
+    PyObject **items = PySequence_Fast_ITEMS(fast);
+    for (Py_ssize_t i = 0; i < m; i++) {
+        PyObject *edge = items[i];
+        PyObject *edge_fast = PySequence_Fast(edge, "each edge must be a 2-tuple");
+        if (!edge_fast || PySequence_Fast_GET_SIZE(edge_fast) != 2) {
+            Py_XDECREF(edge_fast);
+            free(el->src); free(el->dst);
+            Py_DECREF(fast);
+            PyErr_SetString(PyExc_ValueError, "each edge must be a 2-tuple");
+            return -1;
+        }
+        PyObject **ep = PySequence_Fast_ITEMS(edge_fast);
+        long u_nid = PyLong_AsLong(ep[0]);
+        long v_nid = PyLong_AsLong(ep[1]);
+        Py_DECREF(edge_fast);
+        if (PyErr_Occurred()) {
+            free(el->src); free(el->dst);
+            Py_DECREF(fast);
+            return -1;
+        }
+        int u_idx = intmap_get(im, u_nid);
+        int v_idx = intmap_get(im, v_nid);
+        if (u_idx < 0 || v_idx < 0) {
+            free(el->src); free(el->dst);
+            Py_DECREF(fast);
+            PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
+            return -1;
+        }
+        el->src[i] = u_idx;
+        el->dst[i] = v_idx;
+    }
+    Py_DECREF(fast);
+    return 0;
+}
+
+/* ── NidContext: shared setup for node-ID-based API ── */
+
+typedef struct {
+    PyObject *nid_fast;
+    PyObject **nid_items;
+    int n;
+    IntMap im;
+    EdgeList el;
+} NidContext;
+
+static int nid_parse(PyObject *node_ids_obj, PyObject *edges_obj, NidContext *ctx) {
+    ctx->nid_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
+    if (!ctx->nid_fast) return -1;
+    ctx->n = (int)PySequence_Fast_GET_SIZE(ctx->nid_fast);
+    ctx->nid_items = PySequence_Fast_ITEMS(ctx->nid_fast);
+    ctx->im.keys = NULL;
+    ctx->im.vals = NULL;
+    ctx->el.src = NULL; ctx->el.dst = NULL;
+    ctx->el.m = 0; ctx->el.owns_memory = 0;
+
+    if (ctx->n == 0) return 0;
+
+    if (intmap_init(&ctx->im, ctx->n) < 0) {
+        Py_DECREF(ctx->nid_fast);
+        return -1;
+    }
+    for (int i = 0; i < ctx->n; i++) {
+        long nid = PyLong_AsLong(ctx->nid_items[i]);
+        if (nid == -1 && PyErr_Occurred()) {
+            intmap_free(&ctx->im);
+            Py_DECREF(ctx->nid_fast);
+            return -1;
+        }
+        intmap_put(&ctx->im, nid, i);
+    }
+
+    if (parse_edges_mapped(&ctx->im, edges_obj, &ctx->el) < 0) {
+        intmap_free(&ctx->im);
+        Py_DECREF(ctx->nid_fast);
+        return -1;
+    }
+    return 0;
+}
+
+static void nid_free(NidContext *ctx) {
+    free_edges(&ctx->el);
+    if (ctx->im.keys) intmap_free(&ctx->im);
+    Py_DECREF(ctx->nid_fast);
+}
+
 /* ── Helper: run union-find, return component_id array + num_components ── */
 
 typedef struct {
@@ -1280,6 +1438,584 @@ static PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
     return result_dict;
 }
 
+/* ── translate_edges(node_ids, nid_edges) -> index-based edges ── */
+
+static PyObject *py_translate_edges(PyObject *self, PyObject *args) {
+    PyObject *node_ids_obj, *edges_obj;
+    if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
+
+    PyObject *nid_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
+    if (!nid_fast) return NULL;
+    int n = (int)PySequence_Fast_GET_SIZE(nid_fast);
+    PyObject **nid_items = PySequence_Fast_ITEMS(nid_fast);
+
+    /* Build hash map: node_id -> index */
+    IntMap im;
+    if (intmap_init(&im, n) < 0) { Py_DECREF(nid_fast); return NULL; }
+    for (int i = 0; i < n; i++) {
+        long nid = PyLong_AsLong(nid_items[i]);
+        if (nid == -1 && PyErr_Occurred()) {
+            intmap_free(&im); Py_DECREF(nid_fast); return NULL;
+        }
+        intmap_put(&im, nid, i);
+    }
+    Py_DECREF(nid_fast);
+
+    /* Parse nid_edges and translate */
+    PyObject *fast = PySequence_Fast(edges_obj, "edges must be a sequence");
+    if (!fast) { intmap_free(&im); return NULL; }
+    Py_ssize_t m = PySequence_Fast_GET_SIZE(fast);
+
+    PyObject *result = PyList_New(m);
+    if (!result) { intmap_free(&im); Py_DECREF(fast); return NULL; }
+
+    PyObject **items = PySequence_Fast_ITEMS(fast);
+    for (Py_ssize_t i = 0; i < m; i++) {
+        PyObject *edge = items[i];
+        PyObject *edge_fast = PySequence_Fast(edge, "each edge must be a 2-tuple");
+        if (!edge_fast || PySequence_Fast_GET_SIZE(edge_fast) != 2) {
+            Py_XDECREF(edge_fast);
+            intmap_free(&im); Py_DECREF(fast); Py_DECREF(result);
+            PyErr_SetString(PyExc_ValueError, "each edge must be a 2-tuple");
+            return NULL;
+        }
+        PyObject **ep = PySequence_Fast_ITEMS(edge_fast);
+        long u_nid = PyLong_AsLong(ep[0]);
+        long v_nid = PyLong_AsLong(ep[1]);
+        Py_DECREF(edge_fast);
+        if (PyErr_Occurred()) {
+            intmap_free(&im); Py_DECREF(fast); Py_DECREF(result);
+            return NULL;
+        }
+        int u_idx = intmap_get(&im, u_nid);
+        int v_idx = intmap_get(&im, v_nid);
+        if (u_idx < 0 || v_idx < 0) {
+            intmap_free(&im); Py_DECREF(fast); Py_DECREF(result);
+            PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
+            return NULL;
+        }
+        PyObject *tup = PyTuple_New(2);
+        PyTuple_SET_ITEM(tup, 0, PyLong_FromLong(u_idx));
+        PyTuple_SET_ITEM(tup, 1, PyLong_FromLong(v_idx));
+        PyList_SET_ITEM(result, i, tup);
+    }
+
+    intmap_free(&im);
+    Py_DECREF(fast);
+    return result;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Node-ID API: edges use original node IDs, C does hash map + algo + remap.
+ * Zero Python object creation for intermediate index-based edges.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── connected_components (node-ID edges) ── */
+
+static PyObject *py_cc_nid(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges;
+    if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
+
+    NidContext ctx;
+    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.n;
+    if (n == 0) { nid_free(&ctx); return PyList_New(0); }
+
+    ComponentResult cr;
+    if (compute_components(n, &ctx.el, &cr) < 0) { nid_free(&ctx); return NULL; }
+
+    int nc = cr.num_comp;
+    int *sizes  = (int *)calloc(nc, sizeof(int));
+    int **bkt   = (int **)malloc(nc * sizeof(int *));
+    int *off    = (int *)calloc(nc, sizeof(int));
+    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
+    for (int c = 0; c < nc; c++) bkt[c] = (int *)malloc(sizes[c] * sizeof(int));
+    for (int i = 0; i < n; i++) { int c = cr.labels[i]; bkt[c][off[c]++] = i; }
+
+    PyObject *result = PyList_New(nc);
+    if (result) {
+        for (int c = 0; c < nc; c++) {
+            PyObject *s = PySet_New(NULL);
+            for (int j = 0; j < sizes[c]; j++)
+                PySet_Add(s, ctx.nid_items[bkt[c][j]]);
+            PyList_SET_ITEM(result, c, s);
+        }
+    }
+
+    free(cr.labels); free(sizes); free(off);
+    for (int c = 0; c < nc; c++) free(bkt[c]);
+    free(bkt);
+    nid_free(&ctx);
+    return result;
+}
+
+/* ── bridges (node-ID edges) ── */
+
+static PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges;
+    if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
+
+    NidContext ctx;
+    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.n;
+
+    PyObject *result = PyList_New(0);
+    if (!result || n == 0 || ctx.el.m == 0) { nid_free(&ctx); return result; }
+
+    AdjList al;
+    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
+
+    int *disc = malloc(n * sizeof(int)), *low = malloc(n * sizeof(int));
+    int *stk = malloc(n * sizeof(int)), *sidx = malloc(n * sizeof(int));
+    int *peid = malloc(n * sizeof(int));
+    if (!disc||!low||!stk||!sidx||!peid) {
+        free(disc);free(low);free(stk);free(sidx);free(peid);
+        free_adj(&al); nid_free(&ctx); Py_DECREF(result);
+        PyErr_NoMemory(); return NULL;
+    }
+    memset(disc, -1, n * sizeof(int));
+    int timer = 0;
+
+    for (int start = 0; start < n; start++) {
+        if (disc[start] != -1) continue;
+        int sp = 0;
+        stk[0] = start; sidx[0] = al.offset[start];
+        disc[start] = low[start] = timer++; peid[start] = -1;
+        while (sp >= 0) {
+            int u = stk[sp];
+            if (sidx[sp] < al.offset[u + 1]) {
+                int i = sidx[sp]++;
+                int v = al.adj[i], eid = al.eid[i];
+                if (eid == peid[u]) continue;
+                if (disc[v] == -1) {
+                    disc[v] = low[v] = timer++; peid[v] = eid;
+                    stk[++sp] = v; sidx[sp] = al.offset[v];
+                } else { if (low[u] > disc[v]) low[u] = disc[v]; }
+            } else {
+                if (sp > 0) {
+                    int p = stk[sp-1];
+                    if (low[p] > low[u]) low[p] = low[u];
+                    if (low[u] > disc[p]) {
+                        int ei = peid[u];
+                        int su = EDGE_SRC(&ctx.el, ei), sv = EDGE_DST(&ctx.el, ei);
+                        PyObject *t = PyTuple_New(2);
+                        Py_INCREF(ctx.nid_items[su]); Py_INCREF(ctx.nid_items[sv]);
+                        PyTuple_SET_ITEM(t, 0, ctx.nid_items[su]);
+                        PyTuple_SET_ITEM(t, 1, ctx.nid_items[sv]);
+                        PyList_Append(result, t); Py_DECREF(t);
+                    }
+                }
+                sp--;
+            }
+        }
+    }
+
+    free(disc);free(low);free(stk);free(sidx);free(peid);
+    free_adj(&al); nid_free(&ctx);
+    return result;
+}
+
+/* ── articulation_points (node-ID edges) ── */
+
+static PyObject *py_ap_nid(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges;
+    if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
+
+    NidContext ctx;
+    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.n;
+
+    PyObject *result = PySet_New(NULL);
+    if (!result || n == 0) { nid_free(&ctx); return result; }
+
+    AdjList al;
+    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
+
+    int *disc=malloc(n*sizeof(int)), *low=malloc(n*sizeof(int));
+    int *stk=malloc(n*sizeof(int)), *sidx=malloc(n*sizeof(int));
+    int *peid=malloc(n*sizeof(int)), *ch=calloc(n, sizeof(int));
+    if (!disc||!low||!stk||!sidx||!peid||!ch) {
+        free(disc);free(low);free(stk);free(sidx);free(peid);free(ch);
+        free_adj(&al); nid_free(&ctx); Py_DECREF(result);
+        PyErr_NoMemory(); return NULL;
+    }
+    memset(disc, -1, n * sizeof(int));
+    int timer = 0;
+
+    for (int start = 0; start < n; start++) {
+        if (disc[start] != -1) continue;
+        int sp = 0;
+        stk[0] = start; sidx[0] = al.offset[start];
+        disc[start] = low[start] = timer++; peid[start] = -1; ch[start] = 0;
+        while (sp >= 0) {
+            int u = stk[sp];
+            if (sidx[sp] < al.offset[u + 1]) {
+                int i = sidx[sp]++;
+                int v = al.adj[i], eid = al.eid[i];
+                if (eid == peid[u]) continue;
+                if (disc[v] == -1) {
+                    disc[v] = low[v] = timer++; peid[v] = eid; ch[v] = 0; ch[u]++;
+                    stk[++sp] = v; sidx[sp] = al.offset[v];
+                } else { if (low[u] > disc[v]) low[u] = disc[v]; }
+            } else {
+                if (sp > 0) {
+                    int p = stk[sp-1];
+                    if (low[p] > low[u]) low[p] = low[u];
+                    if (peid[p] != -1 && low[u] >= disc[p])
+                        PySet_Add(result, ctx.nid_items[p]);
+                }
+                sp--;
+            }
+        }
+        if (ch[start] >= 2)
+            PySet_Add(result, ctx.nid_items[start]);
+    }
+
+    free(disc);free(low);free(stk);free(sidx);free(peid);free(ch);
+    free_adj(&al); nid_free(&ctx);
+    return result;
+}
+
+/* ── biconnected_components (node-ID edges) ── */
+
+static PyObject *py_bcc_nid(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges;
+    if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
+
+    NidContext ctx;
+    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.n;
+
+    PyObject *result = PyList_New(0);
+    if (!result || n == 0 || ctx.el.m == 0) { nid_free(&ctx); return result; }
+
+    Py_ssize_t m = ctx.el.m;
+    AdjList al;
+    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
+
+    int *disc=malloc(n*sizeof(int)), *low=malloc(n*sizeof(int));
+    int *stk=malloc(n*sizeof(int)), *sidx=malloc(n*sizeof(int));
+    int *peid=malloc(n*sizeof(int));
+    int *esu=malloc(m*sizeof(int)), *esv=malloc(m*sizeof(int));
+    if (!disc||!low||!stk||!sidx||!peid||!esu||!esv) {
+        free(disc);free(low);free(stk);free(sidx);free(peid);free(esu);free(esv);
+        free_adj(&al); nid_free(&ctx); Py_DECREF(result);
+        PyErr_NoMemory(); return NULL;
+    }
+    memset(disc, -1, n * sizeof(int));
+    int timer = 0, esp = 0;
+
+    for (int start = 0; start < n; start++) {
+        if (disc[start] != -1) continue;
+        int sp = 0;
+        stk[0] = start; sidx[0] = al.offset[start];
+        disc[start] = low[start] = timer++; peid[start] = -1;
+        while (sp >= 0) {
+            int u = stk[sp];
+            if (sidx[sp] < al.offset[u + 1]) {
+                int i = sidx[sp]++;
+                int v = al.adj[i], eid = al.eid[i];
+                if (eid == peid[u]) continue;
+                if (disc[v] == -1) {
+                    esu[esp] = u; esv[esp] = v; esp++;
+                    disc[v] = low[v] = timer++; peid[v] = eid;
+                    stk[++sp] = v; sidx[sp] = al.offset[v];
+                } else if (disc[v] < disc[u]) {
+                    esu[esp] = u; esv[esp] = v; esp++;
+                    if (low[u] > disc[v]) low[u] = disc[v];
+                }
+            } else {
+                if (sp > 0) {
+                    int p = stk[sp-1];
+                    if (low[p] > low[u]) low[p] = low[u];
+                    if (low[u] >= disc[p]) {
+                        PyObject *comp = PySet_New(NULL);
+                        while (esp > 0) {
+                            esp--;
+                            PySet_Add(comp, ctx.nid_items[esu[esp]]);
+                            PySet_Add(comp, ctx.nid_items[esv[esp]]);
+                            if (esu[esp] == p && esv[esp] == u) break;
+                        }
+                        PyList_Append(result, comp); Py_DECREF(comp);
+                    }
+                }
+                sp--;
+            }
+        }
+    }
+
+    free(disc);free(low);free(stk);free(sidx);free(peid);free(esu);free(esv);
+    free_adj(&al); nid_free(&ctx);
+    return result;
+}
+
+/* ── bfs (node-ID edges) ── */
+
+static PyObject *py_bfs_nid(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges, *src_obj;
+    if (!PyArg_ParseTuple(args, "OOO", &nids, &edges, &src_obj)) return NULL;
+
+    NidContext ctx;
+    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.n;
+
+    long src_nid = PyLong_AsLong(src_obj);
+    if (src_nid == -1 && PyErr_Occurred()) { nid_free(&ctx); return NULL; }
+    int source = intmap_get(&ctx.im, src_nid);
+    if (source < 0) {
+        nid_free(&ctx);
+        PyErr_SetString(PyExc_ValueError, "source not in node_ids");
+        return NULL;
+    }
+
+    AdjList al;
+    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); return NULL; }
+
+    int *vis = calloc(n, sizeof(int)), *queue = malloc(n * sizeof(int));
+    if (!vis || !queue) {
+        free(vis); free(queue); free_adj(&al); nid_free(&ctx);
+        PyErr_NoMemory(); return NULL;
+    }
+
+    int head = 0, tail = 0;
+    queue[tail++] = source; vis[source] = 1;
+    while (head < tail) {
+        int u = queue[head++];
+        for (int i = al.offset[u]; i < al.offset[u+1]; i++) {
+            int v = al.adj[i];
+            if (!vis[v]) { vis[v] = 1; queue[tail++] = v; }
+        }
+    }
+
+    PyObject *result = PyList_New(tail);
+    if (result) {
+        for (int i = 0; i < tail; i++) {
+            Py_INCREF(ctx.nid_items[queue[i]]);
+            PyList_SET_ITEM(result, i, ctx.nid_items[queue[i]]);
+        }
+    }
+
+    free(vis); free(queue); free_adj(&al); nid_free(&ctx);
+    return result;
+}
+
+/* ── dijkstra (node-ID edges) ── */
+
+static PyObject *py_dijkstra_nid(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges, *wobj, *src_obj, *tgt_obj;
+    if (!PyArg_ParseTuple(args, "OOOOO", &nids, &edges, &wobj, &src_obj, &tgt_obj))
+        return NULL;
+
+    NidContext ctx;
+    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.n;
+
+    long sn = PyLong_AsLong(src_obj), tn = PyLong_AsLong(tgt_obj);
+    if (PyErr_Occurred()) { nid_free(&ctx); return NULL; }
+    int source = n > 0 ? intmap_get(&ctx.im, sn) : -1;
+    int target = n > 0 ? intmap_get(&ctx.im, tn) : -1;
+
+    if (source == target && source >= 0) {
+        PyObject *path = PyList_New(1);
+        Py_INCREF(ctx.nid_items[source]);
+        PyList_SET_ITEM(path, 0, ctx.nid_items[source]);
+        nid_free(&ctx);
+        return Py_BuildValue("(dN)", 0.0, path);
+    }
+    if (n == 0 || source < 0 || target < 0) {
+        nid_free(&ctx);
+        PyObject *p = PyList_New(0);
+        return Py_BuildValue("(dN)", HUGE_VAL, p);
+    }
+
+    WeightList wl;
+    if (parse_weights(wobj, &wl) < 0) { nid_free(&ctx); return NULL; }
+    AdjList al;
+    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); free_weights(&wl); return NULL; }
+
+    double *dist = malloc(n*sizeof(double));
+    int *prev = malloc(n*sizeof(int)), *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
+    if (!dist||!prev||!heap||!pos) {
+        free(dist);free(prev);free(heap);free(pos);
+        free_adj(&al); free_weights(&wl); nid_free(&ctx);
+        PyErr_NoMemory(); return NULL;
+    }
+    for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; prev[i]=-1; pos[i]=-1; }
+    MinHeap mh = {dist, heap, pos, 0};
+    dist[source]=0.0; heap[0]=source; pos[source]=0; mh.size=1;
+
+    while (mh.size > 0) {
+        int u = mh_pop(&mh);
+        if (u == target || dist[u] == HUGE_VAL) break;
+        for (int i=al.offset[u]; i<al.offset[u+1]; i++) {
+            int v=al.adj[i]; double nd=dist[u]+wl.w[al.eid[i]];
+            if (nd < dist[v]) {
+                prev[v] = u;
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
+                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+            }
+        }
+    }
+
+    double fd = dist[target];
+    PyObject *path;
+    if (fd < HUGE_VAL) {
+        int plen=0; for (int v=target;v!=-1;v=prev[v]) plen++;
+        path = PyList_New(plen);
+        int v=target;
+        for (int i=plen-1;i>=0;i--) {
+            Py_INCREF(ctx.nid_items[v]);
+            PyList_SET_ITEM(path, i, ctx.nid_items[v]);
+            v = prev[v];
+        }
+    } else { path = PyList_New(0); }
+
+    PyObject *res = Py_BuildValue("(dN)", fd, path);
+    free(dist);free(prev);free(heap);free(pos);
+    free_adj(&al); free_weights(&wl); nid_free(&ctx);
+    return res;
+}
+
+/* ── sssp_lengths (node-ID edges) ── */
+
+static PyObject *py_sssp_nid(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges, *wobj, *src_obj;
+    double cutoff;
+    if (!PyArg_ParseTuple(args, "OOOOd", &nids, &edges, &wobj, &src_obj, &cutoff))
+        return NULL;
+
+    int use_cutoff = (cutoff >= 0.0);
+    NidContext ctx;
+    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.n;
+
+    PyObject *rd = PyDict_New();
+    if (!rd) { nid_free(&ctx); return NULL; }
+
+    long sn = PyLong_AsLong(src_obj);
+    if (PyErr_Occurred()) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
+    int source = n > 0 ? intmap_get(&ctx.im, sn) : -1;
+    if (n == 0 || source < 0) { nid_free(&ctx); return rd; }
+
+    WeightList wl;
+    if (parse_weights(wobj, &wl) < 0) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
+    AdjList al;
+    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); free_weights(&wl); Py_DECREF(rd); return NULL; }
+
+    double *dist = malloc(n*sizeof(double));
+    int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
+    if (!dist||!heap||!pos) {
+        free(dist);free(heap);free(pos);
+        free_adj(&al); free_weights(&wl); nid_free(&ctx); Py_DECREF(rd);
+        PyErr_NoMemory(); return NULL;
+    }
+    for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; pos[i]=-1; }
+    MinHeap mh = {dist, heap, pos, 0};
+    dist[source]=0.0; heap[0]=source; pos[source]=0; mh.size=1;
+
+    while (mh.size > 0) {
+        int u = mh_pop(&mh);
+        if (dist[u]==HUGE_VAL) break;
+        if (use_cutoff && dist[u]>cutoff) break;
+        for (int i=al.offset[u]; i<al.offset[u+1]; i++) {
+            int v=al.adj[i]; double nd=dist[u]+wl.w[al.eid[i]];
+            if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
+                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+            }
+        }
+    }
+
+    for (int i=0;i<n;i++) {
+        if (dist[i] < HUGE_VAL && (!use_cutoff || dist[i] <= cutoff)) {
+            PyObject *val = PyFloat_FromDouble(dist[i]);
+            PyDict_SetItem(rd, ctx.nid_items[i], val);
+            Py_DECREF(val);
+        }
+    }
+
+    free(dist);free(heap);free(pos);
+    free_adj(&al); free_weights(&wl); nid_free(&ctx);
+    return rd;
+}
+
+/* ── multi_source_dijkstra (node-ID edges) ── */
+
+static PyObject *py_msdijk_nid(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges, *wobj, *srcs_obj;
+    double cutoff;
+    if (!PyArg_ParseTuple(args, "OOOOd", &nids, &edges, &wobj, &srcs_obj, &cutoff))
+        return NULL;
+
+    int use_cutoff = (cutoff >= 0.0);
+    NidContext ctx;
+    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.n;
+
+    PyObject *rd = PyDict_New();
+    if (!rd) { nid_free(&ctx); return NULL; }
+    if (n == 0) { nid_free(&ctx); return rd; }
+
+    PyObject *sf = PySequence_Fast(srcs_obj, "sources must be a sequence");
+    if (!sf) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
+
+    WeightList wl;
+    if (parse_weights(wobj, &wl) < 0) { Py_DECREF(sf); nid_free(&ctx); Py_DECREF(rd); return NULL; }
+    AdjList al;
+    if (build_adj(n, &ctx.el, &al) < 0) { Py_DECREF(sf); free_weights(&wl); nid_free(&ctx); Py_DECREF(rd); return NULL; }
+
+    double *dist = malloc(n*sizeof(double));
+    int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
+    if (!dist||!heap||!pos) {
+        free(dist);free(heap);free(pos);
+        free_adj(&al); free_weights(&wl); Py_DECREF(sf); nid_free(&ctx); Py_DECREF(rd);
+        PyErr_NoMemory(); return NULL;
+    }
+    for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; pos[i]=-1; }
+    MinHeap mh = {dist, heap, pos, 0};
+
+    Py_ssize_t nsrc = PySequence_Fast_GET_SIZE(sf);
+    PyObject **si = PySequence_Fast_ITEMS(sf);
+    for (Py_ssize_t i=0;i<nsrc;i++) {
+        long sn = PyLong_AsLong(si[i]);
+        if (PyErr_Occurred()) {
+            free(dist);free(heap);free(pos);
+            free_adj(&al); free_weights(&wl); Py_DECREF(sf); nid_free(&ctx); Py_DECREF(rd);
+            return NULL;
+        }
+        int s = intmap_get(&ctx.im, sn);
+        if (s >= 0 && dist[s] > 0.0) {
+            dist[s]=0.0; int p=mh.size++; heap[p]=s; pos[s]=p; mh_sift_up(&mh,p);
+        }
+    }
+    Py_DECREF(sf);
+
+    while (mh.size > 0) {
+        int u = mh_pop(&mh);
+        if (dist[u]==HUGE_VAL) break;
+        if (use_cutoff && dist[u]>cutoff) break;
+        for (int i=al.offset[u]; i<al.offset[u+1]; i++) {
+            int v=al.adj[i]; double nd=dist[u]+wl.w[al.eid[i]];
+            if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
+                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+            }
+        }
+    }
+
+    for (int i=0;i<n;i++) {
+        if (dist[i] < HUGE_VAL && (!use_cutoff || dist[i] <= cutoff)) {
+            PyObject *val = PyFloat_FromDouble(dist[i]);
+            PyDict_SetItem(rd, ctx.nid_items[i], val);
+            Py_DECREF(val);
+        }
+    }
+
+    free(dist);free(heap);free(pos);
+    free_adj(&al); free_weights(&wl); nid_free(&ctx);
+    return rd;
+}
+
 /* ── Module definition ── */
 
 static PyMethodDef methods[] = {
@@ -1320,6 +2056,33 @@ static PyMethodDef methods[] = {
     {"multi_source_dijkstra", py_multi_source_dijkstra, METH_VARARGS,
      "multi_source_dijkstra(n, edges, weights, sources, cutoff) -> dict[int, float]\n\n"
      "Multi-source shortest path lengths. cutoff < 0 means no cutoff."},
+    {"translate_edges", py_translate_edges, METH_VARARGS,
+     "translate_edges(node_ids, nid_edges) -> list[tuple[int, int]]\n\n"
+     "Translate edges from node-ID-based to index-based using a C hash map."},
+    {"cc_nid", py_cc_nid, METH_VARARGS,
+     "cc_nid(node_ids, nid_edges) -> list[set[NodeId]]\n\n"
+     "Connected components with node-ID-based edges."},
+    {"bridges_nid", py_bridges_nid, METH_VARARGS,
+     "bridges_nid(node_ids, nid_edges) -> list[tuple[NodeId, NodeId]]\n\n"
+     "Bridges with node-ID-based edges."},
+    {"ap_nid", py_ap_nid, METH_VARARGS,
+     "ap_nid(node_ids, nid_edges) -> set[NodeId]\n\n"
+     "Articulation points with node-ID-based edges."},
+    {"bcc_nid", py_bcc_nid, METH_VARARGS,
+     "bcc_nid(node_ids, nid_edges) -> list[set[NodeId]]\n\n"
+     "Biconnected components with node-ID-based edges."},
+    {"bfs_nid", py_bfs_nid, METH_VARARGS,
+     "bfs_nid(node_ids, nid_edges, source_nid) -> list[NodeId]\n\n"
+     "BFS with node-ID-based edges and source."},
+    {"dijkstra_nid", py_dijkstra_nid, METH_VARARGS,
+     "dijkstra_nid(node_ids, nid_edges, weights, source_nid, target_nid) -> (float, list)\n\n"
+     "Dijkstra with node-ID-based edges."},
+    {"sssp_nid", py_sssp_nid, METH_VARARGS,
+     "sssp_nid(node_ids, nid_edges, weights, source_nid, cutoff) -> dict[NodeId, float]\n\n"
+     "SSSP lengths with node-ID-based edges."},
+    {"msdijk_nid", py_msdijk_nid, METH_VARARGS,
+     "msdijk_nid(node_ids, nid_edges, weights, source_nids, cutoff) -> dict[NodeId, float]\n\n"
+     "Multi-source Dijkstra with node-ID-based edges."},
     {NULL, NULL, 0, NULL},
 };
 

@@ -185,14 +185,14 @@ def test_node_coverage() -> None:
 
 def test_remapped_basic() -> None:
     node_ids = [100, 200, 300, 400]
-    edges = [(0, 1), (2, 3)]
+    edges = [(100, 200), (300, 400)]
     result = list(connected_components(node_ids, edges))
     assert len(result) == 2
     assert {100, 200} in result
     assert {300, 400} in result
 
 
-def test_remapped_no_edges() -> None:
+def test_noncontiguous_no_edges() -> None:
     node_ids = [10, 20, 30]
     result = list(connected_components(node_ids, []))
     assert len(result) == 3
@@ -201,9 +201,9 @@ def test_remapped_no_edges() -> None:
     assert {30} in result
 
 
-def test_remapped_single_component() -> None:
+def test_noncontiguous_single_component() -> None:
     node_ids = [5, 10, 15]
-    edges = [(0, 1), (1, 2)]
+    edges = [(5, 10), (10, 15)]
     result = list(connected_components(node_ids, edges))
     assert len(result) == 1
     assert result[0] == {5, 10, 15}
@@ -214,9 +214,9 @@ def test_remapped_empty() -> None:
     assert result == []
 
 
-def test_remapped_with_branches_basic() -> None:
+def test_noncontiguous_with_branches_basic() -> None:
     node_ids = [100, 200, 300, 400]
-    edges = [(0, 1), (2, 3)]
+    edges = [(100, 200), (300, 400)]
     branch_ids = [901, 902]
     result = list(connected_components_with_branch_ids(node_ids, edges, branch_ids))
     assert len(result) == 2
@@ -225,9 +225,9 @@ def test_remapped_with_branches_basic() -> None:
     assert result_map[frozenset({300, 400})] == {902}
 
 
-def test_remapped_with_branches_merged() -> None:
+def test_noncontiguous_with_branches_merged() -> None:
     node_ids = [10, 20, 30]
-    edges = [(0, 1), (1, 2)]
+    edges = [(10, 20), (20, 30)]
     branch_ids = [500, 600]
     result = list(connected_components_with_branch_ids(node_ids, edges, branch_ids))
     assert len(result) == 1
@@ -236,7 +236,7 @@ def test_remapped_with_branches_merged() -> None:
     assert br == {500, 600}
 
 
-def test_remapped_with_branches_isolated() -> None:
+def test_noncontiguous_with_branches_isolated() -> None:
     node_ids = [7, 8, 9]
     result = list(connected_components_with_branch_ids(node_ids, [], []))
     assert len(result) == 3
@@ -412,7 +412,7 @@ def test_biconnected_components(
         ),
         pytest.param(
             [10, 20, 30],
-            [(0, 1), (1, 2)],
+            [(10, 20), (20, 30)],
             10,
             {10, 20, 30},
             id="remapped_ids",
@@ -477,7 +477,7 @@ def test_shortest_path_unreachable() -> None:
 
 def test_shortest_path_remapped() -> None:
     node_ids = [100, 200, 300]
-    edges = [(0, 1), (1, 2)]
+    edges = [(100, 200), (200, 300)]
     weights = [3.0, 4.0]
     result = shortest_path(node_ids, edges, weights, 100, 300)
     assert result == [100, 200, 300]
@@ -619,7 +619,7 @@ def test_nodes_on_simple_paths_excludes_dead_end() -> None:
     """Dead-end node 5 should NOT be on any simple path from 0 to 3."""
     # 0-1-2-3, plus 1-5 (dead end)
     node_ids = [0, 1, 2, 3, 5]
-    edges = [(0, 1), (1, 2), (2, 3), (1, 4)]  # 4 is index of node 5
+    edges = [(0, 1), (1, 2), (2, 3), (1, 5)]
     result = nodes_on_simple_paths(node_ids, edges, 0, [3])
     assert result == {0, 1, 2, 3}
 
