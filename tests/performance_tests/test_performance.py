@@ -1,5 +1,5 @@
 """
-Performance tests comparing C union-find vs scipy connected_components.
+Performance tests comparing C graph algorithms vs scipy/networkx.
 
 Tests graph sizes from 10^3 to 10^7 nodes with ~3 edges per node on average.
 """
@@ -65,23 +65,14 @@ def test_connected_components_performance(
     exponent: int,
     time_limit_seconds: float,
 ) -> None:
-    """
-    The remapped API must stay within absolute time limits per graph size.
-
-    Uses identity node_ids (0..n-1) so the benchmark isolates C performance
-    without being affected by Python object construction overhead.
-    """
-    # --- Input ---
     number_of_nodes = 10**exponent
     node_ids = list(range(number_of_nodes))
     edges = generate_sparse_grid_graph(number_of_nodes)
 
-    # --- Execute ---
     start = time.perf_counter()
     components = list(connected_components(node_ids, edges))
     elapsed = time.perf_counter() - start
 
-    # --- Assert ---
     total_nodes = sum(len(component) for component in components)
     assert total_nodes == number_of_nodes
     assert elapsed < time_limit_seconds, f"took {elapsed:.3f}s for 10^{exponent} nodes, limit is {time_limit_seconds}s"
@@ -93,15 +84,8 @@ def test_connected_components_performance(
     ids=["1K", "10K", "100K", "1M", "10M"],
 )
 def test_speedup_vs_scipy(exponent: int) -> None:
-    """
-    Measure and print speedup vs scipy for the remapped API.
-
-    Compares list-of-tuples and numpy edge inputs against scipy's CSR-based
-    connected_components to verify we maintain a consistent speedup.
-    """
     pytest.importorskip("scipy")
 
-    # --- Input ---
     number_of_nodes = 10**exponent
     node_ids = list(range(number_of_nodes))
     edges_list = generate_sparse_grid_graph(number_of_nodes)
@@ -111,7 +95,6 @@ def test_speedup_vs_scipy(exponent: int) -> None:
     list(connected_components(node_ids, edges_list))
     _run_scipy(number_of_nodes, edges_list)
 
-    # --- Execute ---
     start = time.perf_counter()
     scipy_result = _run_scipy(number_of_nodes, edges_list)
     scipy_time = time.perf_counter() - start
@@ -124,7 +107,6 @@ def test_speedup_vs_scipy(exponent: int) -> None:
     c_np_result = list(connected_components(node_ids, edges_np))
     c_np_time = time.perf_counter() - start
 
-    # --- Assert ---
     assert sum(len(component) for component in c_list_result) == number_of_nodes
     assert sum(len(component) for component in c_np_result) == number_of_nodes
     assert len(c_list_result) == len(scipy_result)
