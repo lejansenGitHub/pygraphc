@@ -31,6 +31,7 @@ dev = [
     "ruff>=0.9",
     "mypy>=1.14",
     "pre-commit>=4.0",
+    "blueprint-linters>=0.2.0",
 ]
 benchmark = [
     "pytest>=8.0",
@@ -42,6 +43,9 @@ benchmark = [
 Homepage = "https://github.com/lejansenGitHub/cgraph"
 Repository = "https://github.com/lejansenGitHub/cgraph"
 Issues = "https://github.com/lejansenGitHub/cgraph/issues"
+
+[tool.uv]
+find-links = ["vendor/"]
 
 [build-system]
 requires = ["setuptools>=75.0"]

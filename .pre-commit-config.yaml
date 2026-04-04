@@ -41,27 +41,19 @@ repos:
         entry: '#\s*noqa:\s*[A-Z]\w+\s*$'
         types: [python]
 
-      # --- Custom linters ---
+      # --- Blueprint linters (installed via vendored wheel) ---
 
-      - id: mock-requires-spec
-        name: "MagicMock must use spec="
-        entry: python -m linter_scripts.mock_requires_spec
+      - id: blueprint-linters
+        name: "blueprint linters (lib)"
+        entry: python -m blueprint_linters --preset lib
         language: system
         types: [python]
-        files: tests/
-
-      - id: test-structure-convention
-        name: "test structure convention (docstring + sections)"
-        entry: python -m linter_scripts.test_structure_convention
-        language: system
-        types: [python]
-        files: tests/unit_tests/.*test_
 
       # --- Unit tests on commit ---
 
       - id: unit-tests
         name: unit tests
-        entry: python -m pytest tests/unit_tests/ -x -q
+        entry: python -m pytest tests/ -m "not integration and not performance" -x -q
         language: system
         pass_filenames: false
         types: [python]
@@ -71,7 +63,7 @@ repos:
 
       - id: diff-cover
         name: "diff-cover: new/changed lines must be covered"
-        entry: bash -c 'pytest tests/unit_tests/ --cov=src --cov-report=xml -q && diff-cover coverage.xml --compare-branch=main --fail-under=80'
+        entry: bash -c 'pytest tests/ -m "not integration and not performance" --cov=src --cov-report=xml -q && diff-cover coverage.xml --compare-branch=main --fail-under=80'
         language: system
         pass_filenames: false
         stages: [pre-push]
