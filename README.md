@@ -91,7 +91,20 @@ Parallel edges are supported — each edge is tracked by ID, so two edges betwee
 
 ## Benchmarks vs networkx
 
-Realistic end-to-end comparison: both sides start from the same data (edge tuples), then build their data structures and run the algorithm. networkx uses `add_edges_from` (bulk insert). Sparse random graphs with ~3 edges per node.
+Realistic end-to-end comparison starting from domain objects. Both sides extract edges from the same `Branch` instances, then build their data structures and run the algorithm.
+
+```python
+class Branch:
+    def __init__(self, branch_id: int, node_a: int, node_b: int):
+        self.branch_id = branch_id
+        self.node_a = node_a
+        self.node_b = node_b
+```
+
+- **networkx**: `add_nodes_from` + `add_edges_from` (bulk insert) + run algorithm
+- **cgraph**: gather `(node_a, node_b)` tuples from objects + run algorithm (C handles ID mapping internally)
+
+Sparse random graphs with ~3 edges per node.
 
 ### Connected components
 
