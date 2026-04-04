@@ -39,45 +39,74 @@ This was a deliberate decision: the old igp-mono code required callers to build 
 
 ## Algorithms Needed (from igp-mono audit)
 
-### From `backend/topology/` (current igp-mono, scipy-based)
-- **Connected components** ✅ (done — drop-in replacement for scipy version)
+### From `backend/topology/` — connected components (scipy-based)
+- **Connected components** ✅ (done — drop-in replacement for scipy version in `connected_components.py`)
+
+### From `backend/topology/src/graphs/n_1/` — N-1 contingency analysis
+
+The N-1 analysis is the most complex and performance-critical graph code in igp-mono (1583-line `graph_n_1.py` + 627-line `get_locations.py`). It uses a **two-layer connected component abstraction** that exists specifically to work around slow networkx operations:
+
+1. **Layer 1 (CC Graph)**: Filters open switches + faulty edges → `nx.connected_components()` → re-adds fault edges between component IDs → finds **bridges** via `nx.bridges()` → custom DFS per bridge to find split components
+2. **Layer 2 (CC2 Graph)**: Takes Layer 1 components as nodes → `nx.connected_components()` again → re-adds open switches → iteratively removes parallel/series edges → removes leaf nodes
+3. **Path finding**: Custom `all_edge_paths_multigraph()` — modified DFS tracking visited **edges** (not nodes) with node visit limits and cut-off depth. Called per fault × per participant. Exponential worst case.
+
+**The core hypothesis**: much of this two-layer complexity exists because the underlying graph operations (connected components, bridges, path enumeration) were too slow in networkx. With fast C primitives, simpler algorithms might be fast enough — or at minimum, the existing approach gets dramatically faster.
+
+**Graph operations used by N-1:**
+- `nx.connected_components()` — called multiple times per analysis
+- `nx.bridges()` — critical edge identification (Python-only in networkx)
+- Custom stack-based DFS (`_bridge_dfs`) — find components split by a bridge
+- Custom edge-path DFS (`all_edge_paths_multigraph`) — enumerate switching paths
+- Degree queries, neighbor iteration, subgraph creation
+
+### From `backend/topology/src/graphs/find_primary_protection_zones/`
+- Connected components (multiple filter variants: no feeding transformers, no open switches, no fuses)
+- Custom BFS with visited tracking
+- Component neighbor mapping via fuse edges
+- Set operations on node/edge IDs
 
 ### From `backend/switch_state_optimization/` (SSO, networkx-based)
 - **Connected components** — 8+ uses via `nx.connected_components()`
 - **Shortest path** (weighted) — `nx.shortest_path(G, u, v, weight=...)`, `nx.single_source_shortest_path_length(G, source, cutoff=...)`
+- **Multi-source Dijkstra** — `nx.multi_source_dijkstra_path_length()` for electrical distance from multiple sources
 - **Eccentricity** (weighted) — `nx.eccentricity(G, v=u, weight=...)`
 - **Simple paths** — `nodes_on_any_simple_paths(G, source, targets)` (custom library function)
 - **Graph utilities** — `neighbors()`, `degree()`, `subgraph()`, `pairwise()`
 
-### Not yet needed but anticipated
-- **Biconnected components** — protection zone analysis (not in SSO but expected for grid topology)
-- **Articulation points / cut vertices** — same context
-- **BFS** — general traversal primitive, useful as building block
+### Across igp-mono (106 files use networkx)
+- `nx.connected_components()` — ~50 files
+- `nx.shortest_path()` / `nx.shortest_simple_paths()` — ~15 files
+- `nx.multi_source_dijkstra_path_length()` — 3 files
+- `nx.bridges()` — 1 file (N-1, but critical)
 
 ## Implementation Phases
 
-### Phase 1: SSO Migration (C tier additions)
-Priority: the algorithms SSO currently gets from networkx.
+### Phase 1: N-1 Primitives (highest impact)
+The N-1 analysis is the most performance-sensitive consumer. Bridges and connected components are called repeatedly.
 
 | Algorithm | C tier | Python tier | Benchmark vs | Notes |
 |-----------|--------|-------------|-------------|-------|
-| BFS (unweighted) | `_bfs(num_nodes, edges, source)` | `bfs(node_ids, edges, source)` | `nx.bfs_tree` | Foundation for shortest path |
+| Bridge edges | `_bridges(num_nodes, edges)` | `bridges(node_ids, edges)` | `nx.bridges` | Tarjan's in C. N-1 bottleneck — called once but on full grid |
+| Biconnected components | `_biconnected_components(num_nodes, edges)` | `biconnected_components(node_ids, edges)` | `nx.biconnected_components` | Falls out of same Tarjan traversal |
+| Articulation points | `_articulation_points(num_nodes, edges)` | `articulation_points(node_ids, edges)` | `nx.articulation_points` | Same traversal, different output |
+| BFS (unweighted) | `_bfs(num_nodes, edges, source)` | `bfs(node_ids, edges, source)` | `nx.bfs_tree` | Used by protection zones + N-1 component splitting |
+
+### Phase 2: SSO Migration (weighted graph algorithms)
+| Algorithm | C tier | Python tier | Benchmark vs | Notes |
+|-----------|--------|-------------|-------------|-------|
 | Shortest path (weighted) | `_dijkstra(num_nodes, edges, weights, source, target)` | `shortest_path(node_ids, edges, weights, source, target)` | `nx.shortest_path` | Binary heap in C |
 | Single-source shortest path lengths | `_sssp_lengths(num_nodes, edges, weights, source, cutoff)` | `shortest_path_lengths(node_ids, edges, weights, source, cutoff)` | `nx.single_source_shortest_path_length` | With cutoff support |
+| Multi-source Dijkstra | `_multi_source_dijkstra(...)` | `multi_source_shortest_path_lengths(...)` | `nx.multi_source_dijkstra_path_length` | Electrical distance from multiple feed-ins |
 | Eccentricity | — | `eccentricity(node_ids, edges, weights, source)` | `nx.eccentricity` | Python tier: max of single-source distances |
 
-### Phase 2: Topology Primitives (C tier)
-| Algorithm | C tier | Python tier | Benchmark vs | Notes |
-|-----------|--------|-------------|-------------|-------|
-| Biconnected components | `_biconnected_components(num_nodes, edges)` | `biconnected_components(node_ids, edges)` | `nx.biconnected_components` | Tarjan's algorithm in C |
-| Articulation points | `_articulation_points(num_nodes, edges)` | `articulation_points(node_ids, edges)` | `nx.articulation_points` | Falls out of biconnected components |
-| Bridge edges | `_bridges(num_nodes, edges)` | `bridges(node_ids, edges)` | `nx.bridges` | Falls out of biconnected components |
-
-### Phase 3: Composite Algorithms (Python tier only)
+### Phase 3: Composite Algorithms (Python tier, collapse to C if benchmarks demand it)
 | Algorithm | Python tier | Benchmark vs | Notes |
 |-----------|-------------|-------------|-------|
 | `nodes_on_any_simple_paths(node_ids, edges, source, targets)` | Orchestrates BFS + connected components | `libraries.graph_functions.graph_traversal` | Replaces custom igp-mono function |
-| Protection zone detection | Combines articulation points + connected components | — | Future |
+| Protection zone detection | Combines articulation points + connected components | Current igp-mono implementation | BFS + component neighbor mapping |
+
+### Future: N-1 simplification investigation
+With fast C-backed bridges + connected components + BFS, investigate whether the two-layer CC abstraction in `graph_n_1.py` can be simplified. The layers exist to reduce graph size before expensive path enumeration — but if the primitives are 10-50x faster, a simpler single-pass approach might be fast enough. This is an investigation, not a commitment.
 
 ## Benchmark Test Pattern
 
@@ -117,6 +146,9 @@ src/cgraph/
 
 ## Migration Path for igp-mono
 
-1. cgraph replaces `backend/topology/src/graphs/connected_components.py` (scipy version) — already possible
-2. SSO migrates from networkx to cgraph as algorithms are added
-3. The `node_ids` API means SSO just passes its ID lists directly — no index mapping code needed
+1. **Connected components** — cgraph replaces `backend/topology/src/graphs/connected_components.py` (scipy version). Already possible today.
+2. **N-1 analysis** — replace `nx.bridges()` + `nx.connected_components()` calls in `graph_n_1.py` with cgraph equivalents. Benchmark the N-1 analysis end-to-end before and after.
+3. **Protection zones** — replace BFS + connected component calls in `find_primary_protection_zones.py`.
+4. **SSO** — migrate from networkx to cgraph for connected components + Dijkstra + eccentricity.
+5. **Broader networkx elimination** — ~106 files use networkx. As cgraph covers more algorithms, systematically replace. The `node_ids` API means callers just pass their ID lists directly — no index mapping code needed.
+6. **N-1 simplification** — once primitives are fast, investigate whether the two-layer CC abstraction can be replaced with a simpler approach.
