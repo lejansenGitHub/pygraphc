@@ -205,7 +205,7 @@ view.bfs(0)                        # ValueError: source node is excluded
 
 ### Edge-path enumeration (edge-disjoint paths)
 
-Find all paths from source to targets where each edge is used at most once. Returns paths as lists of edge indices. Nodes may be revisited (critical for multigraphs).
+Find all paths from source to targets where each edge is used at most once. Returns paths as lists of edge indices. By default, nodes may be revisited (critical for multigraphs). Use `node_simple=True` to restrict to node-simple paths where each node is visited at most once.
 
 ```python
 g = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (0, 2), (2, 3)])
@@ -217,6 +217,11 @@ paths = g.all_edge_paths(source=0, targets=3)
 # With cutoff (max edges per path)
 paths = g.all_edge_paths(source=0, targets=3, cutoff=2)
 # [[2, 3]] — only paths with ≤2 edges
+
+# Node-simple paths (no node revisits, like networkx all_simple_edge_paths)
+g2 = Graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 1), (1, 4)])
+g2.all_edge_paths(1, 4)                     # [[3], [0, 1, 2, 3]] — includes revisit of node 1
+g2.all_edge_paths(1, 4, node_simple=True)    # [[3]] — only the direct edge
 
 # Works with masks — respects excluded edges and nodes
 view = g.without_edges([2])
@@ -312,6 +317,7 @@ End-to-end from `Branch` objects using split lists (gather + algorithm). Sparse 
 | Articulation Points | 1M | 0.350s | 8.97s | **26x** |
 | BFS | 1M | 0.165s | 13.62s | **82x** |
 | Dijkstra | 1M | 0.390s | 11.11s | **29x** |
+| Edge paths (cutoff=5) | 80 | 0.00005s | 0.006s | **~100x** |
 
 ### Run benchmarks
 

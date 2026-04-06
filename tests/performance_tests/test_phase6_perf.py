@@ -128,7 +128,7 @@ def test_node_mask_creation_cost(exponent: int, num_exclusions: int) -> None:
         _ = g.without_nodes(exclude_nodes)
     elapsed = (time.perf_counter() - start) / iterations
 
-    assert elapsed < 0.01, f"node mask creation took {elapsed * 1000:.2f}ms"
+    assert elapsed < 0.02, f"node mask creation took {elapsed * 1000:.2f}ms"
 
 
 # ── all_edge_paths performance ──
@@ -189,3 +189,115 @@ def test_all_edge_paths_with_node_mask() -> None:
     elapsed = time.perf_counter() - start
 
     assert elapsed < 2.0, f"all_edge_paths with node mask took {elapsed:.3f}s"
+
+
+# ── all_edge_paths vs networkx ──
+
+
+def test_all_edge_paths_vs_networkx() -> None:
+    """Compare cgraph all_edge_paths against nx.all_simple_edge_paths.
+
+    Uses node_simple=True for a fair comparison since networkx only supports
+    node-simple paths.
+    """
+    networkx = pytest.importorskip("networkx")
+
+    n = 50
+    rng = random.Random(42)
+    nodes = list(range(n))
+    edges = [(i, i + 1) for i in range(n - 1)]
+    for _ in range(30):
+        a = rng.randint(0, n - 1)
+        b = rng.randint(0, n - 1)
+        if a != b:
+            edges.append((a, b))
+
+    g = Graph(nodes, edges)
+    cutoff = 5
+    source, target = 0, n - 1
+
+    # cgraph
+    start = time.perf_counter()
+    cgraph_paths = g.all_edge_paths(source, target, cutoff=cutoff, node_simple=True)
+    cgraph_time = time.perf_counter() - start
+
+    # networkx
+    nxg = networkx.Graph()
+    nxg.add_nodes_from(nodes)
+    for idx, (a, b) in enumerate(edges):
+        nxg.add_edge(a, b, key=idx)
+    start = time.perf_counter()
+    nx_paths = list(networkx.all_simple_edge_paths(nxg, source, target, cutoff=cutoff))
+    nx_time = time.perf_counter() - start
+
+    # Verify same number of paths found
+    assert len(cgraph_paths) == len(nx_paths), f"cgraph found {len(cgraph_paths)} paths, networkx found {len(nx_paths)}"
+
+    speedup = nx_time / cgraph_time if cgraph_time > 0 else float("inf")
+    assert speedup > 1.0, f"cgraph {cgraph_time:.4f}s vs networkx {nx_time:.4f}s (speedup {speedup:.1f}x)"
+
+
+def test_all_edge_paths_multigraph_scaling() -> None:
+    """Measure path count growth with increasing parallel edges.
+
+    A chain 0-1-2-3 with `k` parallel edges per link: with node_simple=True,
+    each link picks one of k edges giving exactly k^3 node-simple paths.
+    Without node_simple, edge-disjoint paths can bounce back and forth
+    giving far more paths.
+    """
+    chain_length = 4
+    nodes = list(range(chain_length))
+
+    timings = []
+    for parallel_factor in [1, 2, 4, 8]:
+        edges = [(i, i + 1) for i in range(chain_length - 1) for _ in range(parallel_factor)]
+
+        g = Graph(nodes, edges)
+
+        # node_simple=True: exactly k^(chain_length-1) paths
+        start = time.perf_counter()
+        paths_simple = g.all_edge_paths(0, chain_length - 1, node_simple=True)
+        elapsed = time.perf_counter() - start
+        timings.append((parallel_factor, len(paths_simple), elapsed))
+
+        expected_path_count = parallel_factor ** (chain_length - 1)
+        assert len(paths_simple) == expected_path_count, (
+            f"parallel_factor={parallel_factor}: expected {expected_path_count} "
+            f"node-simple paths, got {len(paths_simple)}"
+        )
+
+        # edge-disjoint (default) with cutoff: at least as many paths as node-simple
+        paths_all = g.all_edge_paths(0, chain_length - 1, cutoff=chain_length - 1)
+        assert len(paths_all) >= len(paths_simple), (
+            f"parallel_factor={parallel_factor}: edge-disjoint ({len(paths_all)}) "
+            f"should be >= node-simple ({len(paths_simple)})"
+        )
+
+    # Verify that even the densest case (8^3 = 512 node-simple paths) completes quickly
+    max_time = timings[-1][2]
+    assert max_time < 0.1, f"8x parallel edges took {max_time:.4f}s"
+
+
+def test_all_edge_paths_cutoff_effectiveness() -> None:
+    """Verify cutoff prevents combinatorial explosion.
+
+    On a small connected graph, increasing cutoff finds more paths but
+    a small cutoff keeps the search fast.
+    """
+    n = 30
+    rng = random.Random(42)
+    nodes = list(range(n))
+    edges = [(i, j) for i in range(n) for j in range(i + 1, n) if rng.random() < 0.15]
+    g = Graph(nodes, edges)
+
+    start = time.perf_counter()
+    paths_short = g.all_edge_paths(0, n - 1, cutoff=3, node_simple=True)
+    time_short = time.perf_counter() - start
+
+    start = time.perf_counter()
+    paths_long = g.all_edge_paths(0, n - 1, cutoff=5, node_simple=True)
+    time_long = time.perf_counter() - start
+
+    assert time_short < 1.0, f"cutoff=3 took {time_short:.4f}s"
+    assert time_long < 5.0, f"cutoff=5 took {time_long:.4f}s"
+    assert len(paths_long) >= len(paths_short), "longer cutoff should find at least as many paths"

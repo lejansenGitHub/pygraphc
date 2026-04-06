@@ -420,17 +420,22 @@ class Graph:
         source: NodeId,
         targets: NodeId | Collection[int],
         cutoff: int | None = None,
+        *,
+        node_simple: bool = False,
     ) -> list[list[int]]:
         """Find all paths from source to targets using each edge at most once.
 
         Returns a list of paths. Each path is a list of edge indices.
-        Nodes may appear multiple times in a path (relevant for multigraphs).
+
+        node_simple: if True, each node may be visited at most once per path
+            (source counts as visited at initialization). Default False allows
+            node revisits via different edges — relevant for multigraphs.
 
         cutoff: maximum number of edges per path. None = no limit.
         """
         tgt_list = [targets] if isinstance(targets, int) else list(targets)
         c = cutoff if cutoff is not None else -1
-        result: list[list[int]] = _all_edge_paths_ctx(self._ctx, source, tgt_list, c)
+        result: list[list[int]] = _all_edge_paths_ctx(self._ctx, source, tgt_list, c, None, None, node_simple)
         return result
 
     def connected_components(self) -> Generator[set[NodeId], None, None]:
@@ -692,11 +697,15 @@ class GraphView:
         source: NodeId,
         targets: NodeId | Collection[int],
         cutoff: int | None = None,
+        *,
+        node_simple: bool = False,
     ) -> list[list[int]]:
         """Find all paths from source to targets using each edge at most once.
 
         Returns a list of paths. Each path is a list of edge indices.
         Respects both edge and node masks.
+
+        node_simple: if True, each node may be visited at most once per path.
         """
         tgt_list = [targets] if isinstance(targets, int) else list(targets)
         c = cutoff if cutoff is not None else -1
@@ -707,6 +716,7 @@ class GraphView:
             c,
             self._mask,
             self._node_mask,
+            node_simple,
         )
         return result
 

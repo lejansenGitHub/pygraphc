@@ -757,10 +757,43 @@ while stack not empty:
 
 **Key properties**:
 - Edge-uniqueness (not node-uniqueness): each edge index used at most once per path
-- Node revisits allowed: critical for multigraphs where u→v→u→w is valid if different
-  edges are used for each traversal
+- Node revisits allowed by default: critical for multigraphs where u→v→u→w is valid
+  if different edges are used for each traversal
+- Optional `node_simple=True` mode: each node visited at most once (see below)
 - Cutoff: maximum path length (number of edges). Prevents combinatorial explosion.
 - Yields paths lazily (generator): caller can stop early
+
+**Node-simple mode** (`node_simple=True`):
+
+Some callers need **node-simple, edge-disjoint** paths: each edge used at most once
+AND each node entered at most once. This is stricter than default (edge-only) mode.
+
+Discovered during N-1 migration: the existing `all_edge_paths_multigraph` in igp-mono
+uses `max_number_of_visits = 1` per node, meaning each node (including source) can be
+entered via an edge at most once. Without this constraint, cgraph finds extra paths
+that revisit intermediate nodes via parallel edges, producing incorrect results for
+the N-1 switch configuration algorithm.
+
+The node-simple constraint is domain-free: "find all paths where no physical link
+and no junction point is reused" is a standard routing problem.
+
+**C implementation**: Add a `uint8_t *node_visited` array (size n, initialized to 0).
+When entering a node via an edge, check `node_visited[v]`; if already 1, skip.
+On backtrack, reset to 0.
+
+```c
+// In the DFS traversal loop:
+if (node_simple) {
+    if (node_visited[v]) continue;  // skip: already visited
+    node_visited[v] = 1;
+    // ... push to stack ...
+    // on backtrack: node_visited[v] = 0;
+}
+```
+
+For the source node: set `node_visited[source] = 1` before starting (source counts
+as visited — it cannot be re-entered). This matches `all_edge_paths_multigraph`
+which increments `number_of_visits[source]` at initialization.
 
 **C implementation** (`_core.c`):
 
@@ -797,18 +830,22 @@ def all_edge_paths(
     source: int,
     targets: int | Collection[int],
     cutoff: int | None = None,
+    node_simple: bool = False,
 ) -> list[list[int]]:
     """Find all paths from source to targets using each edge at most once.
 
     Returns a list of paths. Each path is a list of edge indices.
-    Nodes may appear multiple times in a path (relevant for multigraphs).
+
+    node_simple: if True, each node may be visited at most once (source
+        counts as visited at initialization). Default False allows node
+        revisits via different edges.
 
     cutoff: maximum number of edges per path. None = no limit (use with
             caution on dense graphs).
     """
 
 # On GraphView (same signature, respects masks):
-def all_edge_paths(self, source, targets, cutoff=None) -> list[list[int]]:
+def all_edge_paths(self, source, targets, cutoff=None, node_simple=False):
     """Same, but skips masked edges/nodes."""
 ```
 

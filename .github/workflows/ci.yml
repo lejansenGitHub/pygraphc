@@ -58,6 +58,8 @@ jobs:
             files: test_bridges_perf.py test_dijkstra_perf.py
           - name: masked-views
             files: test_masked_views.py
+          - name: phase6
+            files: test_phase6_perf.py
     name: performance (${{ matrix.suite.name }})
     steps:
       - uses: actions/checkout@v4
