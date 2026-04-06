@@ -3,7 +3,6 @@
 import types
 from collections import deque
 from collections.abc import Collection, Generator, Iterable, Iterator
-from typing import Any
 
 from cgraph._core import ap_ctx as _ap_ctx
 from cgraph._core import ap_nid as _ap_nid
@@ -96,7 +95,8 @@ def bridges(
     edges: list[tuple[NodeId, NodeId]],
 ) -> list[tuple[NodeId, NodeId]]:
     """Return bridge edges as (node_id, node_id) pairs."""
-    return _bridges_nid(node_ids, edges)
+    result: list[tuple[NodeId, NodeId]] = _bridges_nid(node_ids, edges)
+    return result
 
 
 def articulation_points(
@@ -104,7 +104,8 @@ def articulation_points(
     edges: list[tuple[NodeId, NodeId]],
 ) -> set[NodeId]:
     """Return the set of articulation points."""
-    return _ap_nid(node_ids, edges)
+    result: set[NodeId] = _ap_nid(node_ids, edges)
+    return result
 
 
 def biconnected_components(
@@ -121,7 +122,8 @@ def bfs(
     source: NodeId,
 ) -> list[NodeId]:
     """Return nodes visited in BFS order from source."""
-    return _bfs_nid(node_ids, edges, source)
+    result: list[NodeId] = _bfs_nid(node_ids, edges, source)
+    return result
 
 
 # ── Phase 2: Weighted graph algorithms ──
@@ -136,7 +138,8 @@ def shortest_path(
 ) -> list[NodeId]:
     """Return the shortest weighted path from source to target."""
     _dist, path = _dijkstra_nid(node_ids, edges, weights, source, target)
-    return path
+    result: list[NodeId] = path
+    return result
 
 
 def shortest_path_lengths(
@@ -148,7 +151,8 @@ def shortest_path_lengths(
 ) -> dict[NodeId, float]:
     """Return {node_id: distance} for all nodes reachable from source."""
     c = cutoff if cutoff is not None else -1.0
-    return _sssp_nid(node_ids, edges, weights, source, c)
+    result: dict[NodeId, float] = _sssp_nid(node_ids, edges, weights, source, c)
+    return result
 
 
 def multi_source_shortest_path_lengths(
@@ -160,7 +164,8 @@ def multi_source_shortest_path_lengths(
 ) -> dict[NodeId, float]:
     """Return {node_id: distance} from nearest source to each reachable node."""
     c = cutoff if cutoff is not None else -1.0
-    return _msdijk_nid(node_ids, edges, weights, sources, c)
+    result: dict[NodeId, float] = _msdijk_nid(node_ids, edges, weights, sources, c)
+    return result
 
 
 def eccentricity(
@@ -326,6 +331,8 @@ class Graph:
 
     __slots__ = ("_ctx", "_node_ids", "_edges")
 
+    _edges: list[tuple[int, int]] | None
+
     def __init__(
         self,
         node_ids: list[NodeId],
@@ -333,7 +340,7 @@ class Graph:
         dst: list[int] | None = None,
     ) -> None:
         self._node_ids = node_ids
-        self._edges = edges_or_src if dst is None else None
+        self._edges = edges_or_src if dst is None else None  # type: ignore[assignment]
         if dst is not None:
             self._ctx = _parse_graph(node_ids, edges_or_src, dst)
         else:
@@ -342,12 +349,14 @@ class Graph:
     @property
     def edge_count(self) -> int:
         """Number of edges in the graph."""
-        return _graph_edge_count(self._ctx)
+        result: int = _graph_edge_count(self._ctx)
+        return result
 
     @property
     def node_count(self) -> int:
         """Number of nodes in the graph."""
-        return _graph_node_count(self._ctx)
+        result: int = _graph_node_count(self._ctx)
+        return result
 
     def edge_indices(self, u: NodeId, v: NodeId) -> list[int]:
         """Return indices of edges between u and v (list, for multigraph support)."""
@@ -373,11 +382,13 @@ class Graph:
 
     def bridges(self) -> list[tuple[NodeId, NodeId]]:
         """Return bridge edges as (node_id, node_id) pairs."""
-        return _bridges_ctx(self._ctx)
+        result: list[tuple[NodeId, NodeId]] = _bridges_ctx(self._ctx)
+        return result
 
     def articulation_points(self) -> set[NodeId]:
         """Return the set of articulation points."""
-        return _ap_ctx(self._ctx)
+        result: set[NodeId] = _ap_ctx(self._ctx)
+        return result
 
     def biconnected_components(self) -> Generator[set[NodeId], None, None]:
         """Yield each biconnected component as a set of node IDs."""
@@ -385,7 +396,8 @@ class Graph:
 
     def bfs(self, source: NodeId) -> list[NodeId]:
         """Return nodes visited in BFS order from source."""
-        return _bfs_ctx(self._ctx, source)
+        result: list[NodeId] = _bfs_ctx(self._ctx, source)
+        return result
 
     def shortest_path(
         self,
@@ -395,7 +407,8 @@ class Graph:
     ) -> list[NodeId]:
         """Return the shortest weighted path from source to target."""
         _dist, path = _dijkstra_ctx(self._ctx, weights, source, target)
-        return path
+        result: list[NodeId] = path
+        return result
 
     def shortest_path_lengths(
         self,
@@ -405,7 +418,8 @@ class Graph:
     ) -> dict[NodeId, float]:
         """Return {node_id: distance} for all nodes reachable from source."""
         c = cutoff if cutoff is not None else -1.0
-        return _sssp_ctx(self._ctx, weights, source, c)
+        result: dict[NodeId, float] = _sssp_ctx(self._ctx, weights, source, c)
+        return result
 
     def multi_source_shortest_path_lengths(
         self,
@@ -415,7 +429,8 @@ class Graph:
     ) -> dict[NodeId, float]:
         """Return {node_id: distance} from nearest source to each reachable node."""
         c = cutoff if cutoff is not None else -1.0
-        return _msdijk_ctx(self._ctx, weights, sources, c)
+        result: dict[NodeId, float] = _msdijk_ctx(self._ctx, weights, sources, c)
+        return result
 
     def eccentricity(self, weights: list[float], source: NodeId) -> float:
         """Return the eccentricity of source (max shortest-path distance)."""
@@ -505,11 +520,13 @@ class GraphView:
 
     def bridges(self) -> list[tuple[NodeId, NodeId]]:
         """Return bridge edges as (node_id, node_id) pairs."""
-        return _bridges_ctx(self._graph._ctx, self._mask)
+        result: list[tuple[NodeId, NodeId]] = _bridges_ctx(self._graph._ctx, self._mask)
+        return result
 
     def articulation_points(self) -> set[NodeId]:
         """Return the set of articulation points."""
-        return _ap_ctx(self._graph._ctx, self._mask)
+        result: set[NodeId] = _ap_ctx(self._graph._ctx, self._mask)
+        return result
 
     def biconnected_components(self) -> Generator[set[NodeId], None, None]:
         """Yield each biconnected component as a set of node IDs."""
@@ -517,7 +534,8 @@ class GraphView:
 
     def bfs(self, source: NodeId) -> list[NodeId]:
         """Return nodes visited in BFS order from source."""
-        return _bfs_ctx(self._graph._ctx, source, self._mask)
+        result: list[NodeId] = _bfs_ctx(self._graph._ctx, source, self._mask)
+        return result
 
     def shortest_path(
         self,
@@ -533,7 +551,8 @@ class GraphView:
             target,
             self._mask,
         )
-        return path
+        result: list[NodeId] = path
+        return result
 
     def shortest_path_lengths(
         self,
@@ -543,7 +562,8 @@ class GraphView:
     ) -> dict[NodeId, float]:
         """Return {node_id: distance} for all nodes reachable from source."""
         c = cutoff if cutoff is not None else -1.0
-        return _sssp_ctx(self._graph._ctx, weights, source, c, self._mask)
+        result: dict[NodeId, float] = _sssp_ctx(self._graph._ctx, weights, source, c, self._mask)
+        return result
 
     def multi_source_shortest_path_lengths(
         self,
@@ -553,7 +573,8 @@ class GraphView:
     ) -> dict[NodeId, float]:
         """Return {node_id: distance} from nearest source to each reachable node."""
         c = cutoff if cutoff is not None else -1.0
-        return _msdijk_ctx(self._graph._ctx, weights, sources, c, self._mask)
+        result: dict[NodeId, float] = _msdijk_ctx(self._graph._ctx, weights, sources, c, self._mask)
+        return result
 
     def eccentricity(self, weights: list[float], source: NodeId) -> float:
         """Return the eccentricity of source (max shortest-path distance)."""
@@ -567,8 +588,8 @@ def for_each_edge_excluded(
     graph: Graph,
     algorithm: str,
     edge_indices: Iterable[int] | None = None,
-    **algorithm_kwargs: Any,
-) -> Iterator[tuple[int, Any]]:
+    **algorithm_kwargs: object,
+) -> Iterator[tuple[int, object]]:
     """Run an algorithm once per excluded edge, yielding (edge_index, result).
 
     Reuses a single mask bytearray, toggling one bit per iteration.
