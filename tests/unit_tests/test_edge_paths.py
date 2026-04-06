@@ -177,3 +177,86 @@ def test_combined_edge_and_node_mask(diamond):
     view = diamond.without_nodes([2]).without_edges([0])
     paths = view.all_edge_paths(0, 3)
     assert paths == []  # no way to reach 3
+
+
+# ── node_simple parameter ──
+
+
+def test_node_simple_prevents_revisit():
+    """Triangle 1-2-3-1 + edge 3-4. node_simple=True blocks the long path."""
+    g = Graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 1), (1, 4)])
+    # Without node_simple: both [3] and [0, 1, 2, 3] are valid
+    paths = g.all_edge_paths(1, 4, node_simple=False)
+    assert [3] in paths
+    assert [0, 1, 2, 3] in paths
+
+    # With node_simple: [0, 1, 2, 3] revisits node 1, so only [3] remains
+    paths_simple = g.all_edge_paths(1, 4, node_simple=True)
+    assert paths_simple == [[3]]
+
+
+def test_node_simple_diamond(diamond):
+    """Diamond has no node revisits, so node_simple doesn't change results."""
+    paths_normal = sorted(diamond.all_edge_paths(0, 3))
+    paths_simple = sorted(diamond.all_edge_paths(0, 3, node_simple=True))
+    assert paths_normal == paths_simple
+
+
+def test_node_simple_on_cycle():
+    """Cycle 1-2-3-4-1 from 1 to 3. Both paths are node-simple."""
+    g = Graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 4), (4, 1)])
+    paths = g.all_edge_paths(1, 3, node_simple=True)
+    assert len(paths) == 2
+
+
+def test_node_simple_multigraph():
+    """Parallel edges 1-2 (e0, e1), 2-3 (e2). node_simple allows only one path per parallel."""
+    g = Graph([1, 2, 3], [(1, 2), (1, 2), (2, 3)])
+
+    # Without node_simple: e0->e2 and e1->e2 (and potentially paths via revisits)
+    paths = g.all_edge_paths(1, 3, node_simple=False)
+    path_tuples = sorted(tuple(p) for p in paths)
+    assert (0, 2) in path_tuples
+    assert (1, 2) in path_tuples
+
+    # With node_simple: same result — no node revisits in these paths
+    paths_simple = g.all_edge_paths(1, 3, node_simple=True)
+    path_tuples_simple = sorted(tuple(p) for p in paths_simple)
+    assert path_tuples_simple == path_tuples
+
+
+def test_node_simple_figure_eight():
+    """Figure-eight: two triangles sharing a center node.
+
+    1-2-3-1 and 1-4-5-1, then edge 5-6.
+    Without node_simple: can go 1->4->5->1->2->... (revisit 1) then reach 6
+    via going back through the cycle.
+    With node_simple: can't revisit node 1.
+    """
+    g = Graph(
+        [1, 2, 3, 4, 5, 6],
+        [(1, 2), (2, 3), (3, 1), (1, 4), (4, 5), (5, 1), (5, 6)],
+    )
+    paths = g.all_edge_paths(1, 6, node_simple=False)
+    paths_simple = g.all_edge_paths(1, 6, node_simple=True)
+
+    # node_simple should produce fewer paths (no revisiting node 1)
+    assert len(paths_simple) <= len(paths)
+    # The direct path 1->4->5->6 (edges 3,4,6) should exist in both
+    assert [3, 4, 6] in paths
+    assert [3, 4, 6] in paths_simple
+
+
+def test_node_simple_with_view(diamond):
+    """node_simple works with GraphView masks."""
+    view = diamond.without_edges([0])  # remove edge 0-1
+    paths = view.all_edge_paths(0, 3, node_simple=True)
+    # Only path: 0->2->3 via edges 1, 3
+    assert paths == [[1, 3]]
+
+
+def test_node_simple_with_cutoff():
+    """node_simple combined with cutoff."""
+    g = Graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 1), (1, 4)])
+    paths = g.all_edge_paths(1, 4, cutoff=1, node_simple=True)
+    assert paths == [[3]]  # only direct edge

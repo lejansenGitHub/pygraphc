@@ -2923,8 +2923,9 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *src_obj, *targets_obj;
     int cutoff = -1;
     PyObject *mask_obj = Py_None, *nmask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "OOO|iOO", &capsule, &src_obj, &targets_obj,
-                          &cutoff, &mask_obj, &nmask_obj))
+    int node_simple = 0;
+    if (!PyArg_ParseTuple(args, "OOO|iOOp", &capsule, &src_obj, &targets_obj,
+                          &cutoff, &mask_obj, &nmask_obj, &node_simple))
         return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
@@ -2982,14 +2983,18 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
 
     /* Allocate DFS state */
     uint8_t *visited_edges = (uint8_t *)calloc(m, sizeof(uint8_t));
+    uint8_t *visited_nodes = node_simple ? (uint8_t *)calloc(n, sizeof(uint8_t)) : NULL;
     int *stk_node = (int *)malloc((size_t)(max_depth + 1) * sizeof(int));
     int *stk_pos  = (int *)malloc((size_t)(max_depth + 1) * sizeof(int));
     int *path_eids = (int *)malloc((size_t)max_depth * sizeof(int));
-    if (!visited_edges || !stk_node || !stk_pos || !path_eids) {
-        free(visited_edges); free(stk_node); free(stk_pos); free(path_eids);
+    if (!visited_edges || !stk_node || !stk_pos || !path_eids ||
+        (node_simple && !visited_nodes)) {
+        free(visited_edges); free(visited_nodes);
+        free(stk_node); free(stk_pos); free(path_eids);
         release_mask(&nmbuf); release_mask(&embuf); free(is_target);
         Py_DECREF(result); PyErr_NoMemory(); return NULL;
     }
+    if (visited_nodes) visited_nodes[source] = 1;  /* source counts as visited */
 
     /* DFS */
     int sp = 0;
@@ -3003,13 +3008,15 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
             int eid = al->eid[idx];
             int v = al->adj[idx];
 
-            /* Skip masked/visited edges */
+            /* Skip masked/visited edges and nodes */
             if (visited_edges[eid]) continue;
             if (emask && emask[eid]) continue;
             if (nmask && nmask[v]) continue;
+            if (visited_nodes && visited_nodes[v]) continue;
 
             /* Mark edge as visited, record in path */
             visited_edges[eid] = 1;
+            if (visited_nodes) visited_nodes[v] = 1;
             path_eids[sp] = eid;
 
             /* Check if v is a target */
@@ -3036,11 +3043,15 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
                 stk_node[sp] = v;
                 stk_pos[sp] = al->offset[v];
             } else {
-                /* At max depth, don't descend, unmark edge */
+                /* At max depth, don't descend, unmark edge and node */
                 visited_edges[eid] = 0;
+                if (visited_nodes) visited_nodes[v] = 0;
             }
         } else {
-            /* Pop: unmark the edge that brought us here */
+            /* Pop: unmark the edge that brought us here and the node */
+            if (sp > 0 && visited_nodes) {
+                visited_nodes[stk_node[sp]] = 0;
+            }
             sp--;
             if (sp >= 0) {
                 visited_edges[path_eids[sp]] = 0;
@@ -3048,12 +3059,14 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
         }
     }
 
-    free(visited_edges); free(stk_node); free(stk_pos); free(path_eids);
+    free(visited_edges); free(visited_nodes);
+    free(stk_node); free(stk_pos); free(path_eids);
     release_mask(&nmbuf); release_mask(&embuf); free(is_target);
     return result;
 
 error:
-    free(visited_edges); free(stk_node); free(stk_pos); free(path_eids);
+    free(visited_edges); free(visited_nodes);
+    free(stk_node); free(stk_pos); free(path_eids);
     release_mask(&nmbuf); release_mask(&embuf); free(is_target);
     Py_DECREF(result);
     return NULL;
@@ -3145,8 +3158,9 @@ static PyMethodDef methods[] = {
     {"sssp_ctx", py_sssp_ctx, METH_VARARGS, "SSSP lengths from cached graph."},
     {"msdijk_ctx", py_msdijk_ctx, METH_VARARGS, "Multi-source Dijkstra from cached graph."},
     {"all_edge_paths_ctx", py_all_edge_paths_ctx, METH_VARARGS,
-     "all_edge_paths_ctx(capsule, source, targets[, cutoff, edge_mask, node_mask]) -> list[list[int]]\n\n"
-     "Find all paths from source to targets using each edge at most once."},
+     "all_edge_paths_ctx(capsule, source, targets[, cutoff, edge_mask, node_mask, node_simple]) -> list[list[int]]\n\n"
+     "Find all paths from source to targets using each edge at most once.\n"
+     "If node_simple is true, each node may be visited at most once per path."},
     {NULL, NULL, 0, NULL},
 };
 
