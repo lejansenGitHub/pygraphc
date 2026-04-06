@@ -154,10 +154,10 @@ End-to-end from `Branch` objects. Sparse random graphs, ~3 edges per node.
 
 | Algorithm | Nodes | cgraph | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
-| CC | 1K | 0.0001s | 0.001s | **13x** |
-| CC | 10K | 0.001s | 0.013s | **14x** |
-| CC | 100K | 0.015s | 0.349s | **23x** |
-| CC | 1M | 0.157s | 6.81s | **43x** |
+| Connected Components | 1K | 0.0001s | 0.001s | **13x** |
+| Connected Components | 10K | 0.001s | 0.013s | **14x** |
+| Connected Components | 100K | 0.015s | 0.349s | **23x** |
+| Connected Components | 1M | 0.157s | 6.81s | **43x** |
 | Bridges | 1M | 0.401s | 21.42s | **53x** |
 | AP | 1M | 0.350s | 8.97s | **26x** |
 | BFS | 1M | 0.165s | 13.62s | **82x** |
