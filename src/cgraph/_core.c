@@ -3008,18 +3008,20 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
             int eid = al->eid[idx];
             int v = al->adj[idx];
 
-            /* Skip masked/visited edges and nodes */
+            /* Skip masked/visited edges */
             if (visited_edges[eid]) continue;
             if (emask && emask[eid]) continue;
             if (nmask && nmask[v]) continue;
-            if (visited_nodes && visited_nodes[v]) continue;
 
             /* Mark edge as visited, record in path */
             visited_edges[eid] = 1;
-            if (visited_nodes) visited_nodes[v] = 1;
             path_eids[sp] = eid;
 
-            /* Check if v is a target */
+            /* Check if v is a target BEFORE checking node_simple.
+             * This matches the Python all_edge_paths_multigraph which yields
+             * the path before checking if the node can be entered. This is
+             * critical for self-loops: source -> self-loop -> source(=target)
+             * should yield even though source is already visited. */
             if (is_target[v]) {
                 /* Build path list */
                 PyObject *path = PyList_New(sp + 1);
@@ -3036,6 +3038,15 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
                 }
                 Py_DECREF(path);
             }
+
+            /* Check node_simple constraint: skip entering already-visited nodes */
+            if (visited_nodes && visited_nodes[v]) {
+                visited_edges[eid] = 0;
+                continue;
+            }
+
+            /* Mark node as visited (only when actually entering) */
+            if (visited_nodes) visited_nodes[v] = 1;
 
             /* Push v if depth allows */
             if (sp + 1 < max_depth) {
