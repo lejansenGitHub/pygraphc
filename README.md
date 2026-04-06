@@ -144,7 +144,21 @@ for edge_idx, components in for_each_edge_excluded(g, "connected_components"):
     print(f"Without edge {edge_idx}: {len(components)} components")
 ```
 
-The mask adds ~1 ns per edge (one byte load + branch). For a 100K-edge graph, this is negligible. The key win is avoiding O(V + E) graph rebuild per modification.
+**Mask overhead** is 2–8% vs an unmasked `Graph` call — negligible in absolute terms. The check compiles to a single byte load + branch per edge, trivially predicted. When no mask is used (`Graph` methods), the `NULL` pointer check is predicted away at zero cost.
+
+Sparse random graph, 100K nodes (~3 edges per node), best of 20 runs:
+
+| Algorithm | No mask | With mask | Overhead |
+|-----------|--------:|----------:|---------:|
+| Connected Components | 1.4ms | 1.5ms | +3% |
+| Bridges | 1.5ms | 1.6ms | +7% |
+| Articulation Points | 1.6ms | 1.7ms | +8% |
+| Biconnected Components | 9.9ms | 10.6ms | +7% |
+| BFS | 2.3ms | 2.5ms | +8% |
+| Dijkstra (single pair) | 6.9ms | 7.3ms | +7% |
+| SSSP lengths | 13.6ms | 13.8ms | +2% |
+
+The key win is avoiding O(V + E) graph rebuild per edge modification.
 
 Parallel edges are supported — each edge is tracked by ID, so two edges between the same pair of nodes are handled correctly (e.g. for bridges, Dijkstra weight selection).
 
