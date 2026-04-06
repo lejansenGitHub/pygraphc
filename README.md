@@ -119,31 +119,29 @@ At small scales, data gathering dominates. At large scales, the C core dominates
 
 ### Data gathering strategies
 
-How you build the edge list matters. At 1M nodes:
+How you build the edge data matters. Connected components at 1M nodes:
 
-| Strategy | Gather | cgraph | Total |
-|----------|-------:|-------:|------:|
-| **A) list of tuples** | 0.068s | 0.089s | **0.157s** |
-| **B) numpy via two lists** | 0.084s | 0.069s | **0.153s** |
+| Strategy | Gather | cgraph | Total | Speedup |
+|----------|-------:|-------:|------:|--------:|
+| A) list of tuples | 0.072s | 0.093s | **0.165s** | baseline |
+| **B) two flat lists** | **0.036s** | **0.087s** | **0.123s** | **1.34x** |
 
-Strategy A (tuples) is the simplest:
+Strategy A (tuples) — simplest, no dependencies:
 ```python
 edges = [(b.node_a, b.node_b) for b in branches]
-components = list(connected_components(node_ids, edges))
+connected_components(node_ids, edges)
 ```
 
-Strategy B (numpy) is ~3x faster end-to-end when numpy is available:
+Strategy B (two flat lists) — **fastest**, no dependencies:
 ```python
 src = [b.node_a for b in branches]
 dst = [b.node_b for b in branches]
-edges = np.column_stack([np.array(src, dtype=np.int32),
-                         np.array(dst, dtype=np.int32)])
-components = list(connected_components(node_ids, edges))
+connected_components(node_ids, src, dst)
 ```
 
-Both work — cgraph accepts either format. The numpy path is faster because:
-- Building two flat lists is cheaper than building m tuple objects
-- cgraph reads the numpy buffer directly in C (zero-copy), skipping per-element Python unpacking
+Strategy B is faster because building two flat lists avoids creating m tuple objects, and cgraph parses two flat lists more efficiently than unpacking tuples.
+
+Both numpy arrays and Python lists are accepted for `src`/`dst`/`edges`.
 
 ### Benchmarks vs networkx
 

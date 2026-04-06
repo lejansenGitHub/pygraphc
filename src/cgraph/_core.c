@@ -339,6 +339,117 @@ static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
     return 0;
 }
 
+/* ── Edge parsing from two separate src/dst sequences or 1D arrays ── */
+
+static int _parse_one_array(IntMap *im, PyObject *obj, int *out, Py_ssize_t m,
+                            const char *label) {
+    /* Try buffer protocol: 1D int32 or int64 array */
+    Py_buffer buf;
+    if (PyObject_GetBuffer(obj, &buf, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
+        int is_i32 = is_int32_fmt(buf.format, buf.itemsize);
+        int is_i64 = is_int64_fmt(buf.format, buf.itemsize);
+        if ((is_i32 || is_i64) && buf.ndim == 1 && buf.shape[0] == m) {
+            if (is_i32) {
+                int *data = (int *)buf.buf;
+                for (Py_ssize_t i = 0; i < m; i++) {
+                    int idx = intmap_get(im, (long)data[i]);
+                    if (idx < 0) {
+                        PyBuffer_Release(&buf);
+                        PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
+                        return -1;
+                    }
+                    out[i] = idx;
+                }
+            } else {
+                long long *data = (long long *)buf.buf;
+                for (Py_ssize_t i = 0; i < m; i++) {
+                    int idx = intmap_get(im, (long)data[i]);
+                    if (idx < 0) {
+                        PyBuffer_Release(&buf);
+                        PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
+                        return -1;
+                    }
+                    out[i] = idx;
+                }
+            }
+            PyBuffer_Release(&buf);
+            return 0;
+        }
+        PyBuffer_Release(&buf);
+    } else {
+        PyErr_Clear();
+    }
+
+    /* Slow path: sequence of ints */
+    PyObject *fast = PySequence_Fast(obj, label);
+    if (!fast) return -1;
+    if (PySequence_Fast_GET_SIZE(fast) != m) {
+        Py_DECREF(fast);
+        PyErr_SetString(PyExc_ValueError, "src and dst must have the same length");
+        return -1;
+    }
+    PyObject **items = PySequence_Fast_ITEMS(fast);
+    for (Py_ssize_t i = 0; i < m; i++) {
+        long nid = PyLong_AsLong(items[i]);
+        if (nid == -1 && PyErr_Occurred()) { Py_DECREF(fast); return -1; }
+        int idx = intmap_get(im, nid);
+        if (idx < 0) {
+            Py_DECREF(fast);
+            PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
+            return -1;
+        }
+        out[i] = idx;
+    }
+    Py_DECREF(fast);
+    return 0;
+}
+
+static int parse_edges_mapped_split(IntMap *im, PyObject *src_obj, PyObject *dst_obj,
+                                    EdgeList *el) {
+    /* Determine m from src */
+    Py_ssize_t m;
+    Py_buffer buf;
+    if (PyObject_GetBuffer(src_obj, &buf, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
+        m = (buf.ndim == 1) ? buf.shape[0] : -1;
+        PyBuffer_Release(&buf);
+        if (m < 0) {
+            PyErr_SetString(PyExc_ValueError, "src must be a 1D array or sequence");
+            return -1;
+        }
+    } else {
+        PyErr_Clear();
+        PyObject *fast = PySequence_Fast(src_obj, "src must be a sequence");
+        if (!fast) return -1;
+        m = PySequence_Fast_GET_SIZE(fast);
+        Py_DECREF(fast);
+    }
+
+    el->m = m;
+    el->owns_memory = 1;
+    if (m == 0) {
+        el->src = NULL; el->dst = NULL;
+        return 0;
+    }
+
+    el->src = (int *)malloc((size_t)m * sizeof(int));
+    el->dst = (int *)malloc((size_t)m * sizeof(int));
+    if (!el->src || !el->dst) {
+        free(el->src); free(el->dst);
+        PyErr_NoMemory();
+        return -1;
+    }
+
+    if (_parse_one_array(im, src_obj, el->src, m, "src must be a sequence") < 0) {
+        free(el->src); free(el->dst);
+        return -1;
+    }
+    if (_parse_one_array(im, dst_obj, el->dst, m, "dst must be a sequence") < 0) {
+        free(el->src); free(el->dst);
+        return -1;
+    }
+    return 0;
+}
+
 /* ── NidContext: shared setup for node-ID-based API ── */
 
 typedef struct {
@@ -376,6 +487,41 @@ static int nid_parse(PyObject *node_ids_obj, PyObject *edges_obj, NidContext *ct
     }
 
     if (parse_edges_mapped(&ctx->im, edges_obj, &ctx->el) < 0) {
+        intmap_free(&ctx->im);
+        Py_DECREF(ctx->nid_fast);
+        return -1;
+    }
+    return 0;
+}
+
+static int nid_parse_split(PyObject *node_ids_obj, PyObject *src_obj, PyObject *dst_obj,
+                           NidContext *ctx) {
+    ctx->nid_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
+    if (!ctx->nid_fast) return -1;
+    ctx->n = (int)PySequence_Fast_GET_SIZE(ctx->nid_fast);
+    ctx->nid_items = PySequence_Fast_ITEMS(ctx->nid_fast);
+    ctx->im.keys = NULL;
+    ctx->im.vals = NULL;
+    ctx->el.src = NULL; ctx->el.dst = NULL;
+    ctx->el.m = 0; ctx->el.owns_memory = 0;
+
+    if (ctx->n == 0) return 0;
+
+    if (intmap_init(&ctx->im, ctx->n) < 0) {
+        Py_DECREF(ctx->nid_fast);
+        return -1;
+    }
+    for (int i = 0; i < ctx->n; i++) {
+        long nid = PyLong_AsLong(ctx->nid_items[i]);
+        if (nid == -1 && PyErr_Occurred()) {
+            intmap_free(&ctx->im);
+            Py_DECREF(ctx->nid_fast);
+            return -1;
+        }
+        intmap_put(&ctx->im, nid, i);
+    }
+
+    if (parse_edges_mapped_split(&ctx->im, src_obj, dst_obj, &ctx->el) < 0) {
         intmap_free(&ctx->im);
         Py_DECREF(ctx->nid_fast);
         return -1;
@@ -1619,6 +1765,45 @@ static PyObject *py_cc_nid(PyObject *self, PyObject *args) {
     return result;
 }
 
+/* ── connected_components (node-ID, split src/dst) ── */
+
+static PyObject *py_cc_nid_split(PyObject *self, PyObject *args) {
+    PyObject *nids, *src, *dst;
+    if (!PyArg_ParseTuple(args, "OOO", &nids, &src, &dst)) return NULL;
+
+    NidContext ctx;
+    if (nid_parse_split(nids, src, dst, &ctx) < 0) return NULL;
+    int n = ctx.n;
+    if (n == 0) { nid_free(&ctx); return PyList_New(0); }
+
+    ComponentResult cr;
+    if (compute_components(n, &ctx.el, &cr) < 0) { nid_free(&ctx); return NULL; }
+
+    int nc = cr.num_comp;
+    int *sizes  = (int *)calloc(nc, sizeof(int));
+    int **bkt   = (int **)malloc(nc * sizeof(int *));
+    int *off    = (int *)calloc(nc, sizeof(int));
+    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
+    for (int c = 0; c < nc; c++) bkt[c] = (int *)malloc(sizes[c] * sizeof(int));
+    for (int i = 0; i < n; i++) { int c = cr.labels[i]; bkt[c][off[c]++] = i; }
+
+    PyObject *result = PyList_New(nc);
+    if (result) {
+        for (int c = 0; c < nc; c++) {
+            PyObject *s = PySet_New(NULL);
+            for (int j = 0; j < sizes[c]; j++)
+                PySet_Add(s, ctx.nid_items[bkt[c][j]]);
+            PyList_SET_ITEM(result, c, s);
+        }
+    }
+
+    free(cr.labels); free(sizes); free(off);
+    for (int c = 0; c < nc; c++) free(bkt[c]);
+    free(bkt);
+    nid_free(&ctx);
+    return result;
+}
+
 /* ── bridges (node-ID edges) ── */
 
 static PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
@@ -2132,6 +2317,9 @@ static PyMethodDef methods[] = {
     {"cc_nid", py_cc_nid, METH_VARARGS,
      "cc_nid(node_ids, nid_edges) -> list[set[NodeId]]\n\n"
      "Connected components with node-ID-based edges."},
+    {"cc_nid_split", py_cc_nid_split, METH_VARARGS,
+     "cc_nid_split(node_ids, src, dst) -> list[set[NodeId]]\n\n"
+     "Connected components with separate src/dst sequences or 1D arrays."},
     {"bridges_nid", py_bridges_nid, METH_VARARGS,
      "bridges_nid(node_ids, nid_edges) -> list[tuple[NodeId, NodeId]]\n\n"
      "Bridges with node-ID-based edges."},

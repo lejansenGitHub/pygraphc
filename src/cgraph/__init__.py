@@ -8,6 +8,7 @@ from cgraph._core import bcc_nid as _bcc_nid
 from cgraph._core import bfs_nid as _bfs_nid
 from cgraph._core import bridges_nid as _bridges_nid
 from cgraph._core import cc_nid as _cc_nid
+from cgraph._core import cc_nid_split as _cc_nid_split
 from cgraph._core import connected_components_with_branches_remapped as _cc_branches_remapped
 from cgraph._core import dijkstra_nid as _dijkstra_nid
 from cgraph._core import msdijk_nid as _msdijk_nid
@@ -39,14 +40,20 @@ BranchId = int
 
 def connected_components(
     node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
+    edges_or_src: list[tuple[int, int]] | list[int],
+    dst: list[int] | None = None,
 ) -> Generator[set[NodeId], None, None]:
     """
     Yield each connected component as a set of original node IDs.
 
-    Edges are pairs of original node IDs (not indices).
+    Two calling conventions:
+        connected_components(node_ids, edges)       — edges as pairs of node IDs
+        connected_components(node_ids, src, dst)     — two flat lists of node IDs
     """
-    yield from _cc_nid(node_ids, edges)
+    if dst is not None:
+        yield from _cc_nid_split(node_ids, edges_or_src, dst)
+    else:
+        yield from _cc_nid(node_ids, edges_or_src)
 
 
 def connected_components_with_branch_ids(
