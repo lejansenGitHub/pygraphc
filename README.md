@@ -89,9 +89,14 @@ eccentricity(node_ids, edges, weights, source=0)  # 6.0
 
 Parallel edges are supported — each edge is tracked by ID, so two edges between the same pair of nodes are handled correctly (e.g. for bridges, Dijkstra weight selection).
 
-## Benchmarks vs networkx
+## Performance
 
-Realistic end-to-end comparison starting from domain objects. Both sides extract edges from the same `Branch` instances, then build their data structures and run the algorithm.
+### Cost breakdown
+
+Every cgraph call has two phases:
+
+1. **Data gathering** — extracting edges from your domain objects (pure Python, cgraph can't optimize this)
+2. **cgraph call** — parsing input + C algorithm + building result sets
 
 ```python
 class Branch:
@@ -101,55 +106,62 @@ class Branch:
         self.node_b = node_b
 ```
 
-- **networkx**: `add_nodes_from` + `add_edges_from` (bulk insert) + run algorithm
-- **cgraph**: gather `(node_a, node_b)` tuples from objects + run algorithm (C handles ID mapping internally)
+Connected components on sparse random graphs (~3 edges per node):
 
-Sparse random graphs with ~3 edges per node.
+| Nodes | Gather | cgraph | Total | Gather % | cgraph % |
+|------:|-------:|-------:|------:|---------:|---------:|
+| 1K | <0.001s | <0.001s | 0.0001s | 50% | 50% |
+| 10K | 0.001s | <0.001s | 0.001s | 59% | 41% |
+| 100K | 0.007s | 0.008s | 0.015s | 47% | 53% |
+| 1M | 0.068s | 0.089s | 0.157s | 43% | 57% |
 
-### Connected components
+At small scales, data gathering dominates. At large scales, the C core dominates.
 
-| Nodes | cgraph | networkx | Speedup |
-|------:|-------:|---------:|--------:|
-| 1K | 0.0001s | 0.0009s | **8x** |
-| 10K | 0.001s | 0.011s | **9x** |
-| 100K | 0.021s | 0.324s | **16x** |
-| 1M | 0.185s | 7.02s | **38x** |
+### Data gathering strategies
 
-### Bridges
+How you build the edge list matters. At 1M nodes:
 
-| Nodes | cgraph | networkx | Speedup |
-|------:|-------:|---------:|--------:|
-| 1K | 0.0001s | 0.005s | **47x** |
-| 10K | 0.001s | 0.053s | **38x** |
-| 100K | 0.021s | 1.45s | **70x** |
-| 1M | 0.410s | 22.90s | **56x** |
+| Strategy | Gather | cgraph | Total |
+|----------|-------:|-------:|------:|
+| **A) list of tuples** | 0.068s | 0.089s | **0.157s** |
+| **B) numpy via two lists** | 0.084s | 0.069s | **0.153s** |
 
-### Articulation points
+Strategy A (tuples) is the simplest:
+```python
+edges = [(b.node_a, b.node_b) for b in branches]
+components = list(connected_components(node_ids, edges))
+```
 
-| Nodes | cgraph | networkx | Speedup |
-|------:|-------:|---------:|--------:|
-| 1K | 0.0001s | 0.002s | **22x** |
-| 10K | 0.002s | 0.018s | **9x** |
-| 100K | 0.025s | 0.480s | **19x** |
-| 1M | 0.421s | 10.26s | **24x** |
+Strategy B (numpy) is ~3x faster end-to-end when numpy is available:
+```python
+src = [b.node_a for b in branches]
+dst = [b.node_b for b in branches]
+edges = np.column_stack([np.array(src, dtype=np.int32),
+                         np.array(dst, dtype=np.int32)])
+components = list(connected_components(node_ids, edges))
+```
 
-### BFS
+Both work — cgraph accepts either format. The numpy path is faster because:
+- Building two flat lists is cheaper than building m tuple objects
+- cgraph reads the numpy buffer directly in C (zero-copy), skipping per-element Python unpacking
 
-| Nodes | cgraph | networkx | Speedup |
-|------:|-------:|---------:|--------:|
-| 1K | 0.0001s | 0.002s | **19x** |
-| 10K | 0.001s | 0.019s | **15x** |
-| 100K | 0.015s | 0.653s | **45x** |
-| 1M | 0.225s | 14.61s | **65x** |
+### Benchmarks vs networkx
 
-### Dijkstra (SSSP)
+End-to-end from `Branch` objects. Sparse random graphs, ~3 edges per node.
 
-| Nodes | cgraph | networkx | Speedup |
-|------:|-------:|---------:|--------:|
-| 1K | 0.0001s | 0.001s | **10x** |
-| 10K | 0.002s | 0.020s | **9x** |
-| 100K | 0.039s | 0.678s | **17x** |
-| 1M | 0.698s | 12.90s | **18x** |
+- **networkx**: `add_nodes_from` + `add_edges_from` + algorithm
+- **cgraph**: gather tuples from objects + algorithm
+
+| Algorithm | Nodes | cgraph | networkx | Speedup |
+|-----------|------:|-------:|---------:|--------:|
+| CC | 1K | 0.0001s | 0.001s | **13x** |
+| CC | 10K | 0.001s | 0.013s | **14x** |
+| CC | 100K | 0.015s | 0.349s | **23x** |
+| CC | 1M | 0.157s | 6.81s | **43x** |
+| Bridges | 1M | 0.401s | 21.42s | **53x** |
+| AP | 1M | 0.350s | 8.97s | **26x** |
+| BFS | 1M | 0.165s | 13.62s | **82x** |
+| Dijkstra | 1M | 0.390s | 11.11s | **29x** |
 
 ### Run benchmarks
 
@@ -157,6 +169,7 @@ Sparse random graphs with ~3 edges per node.
 pip install -e ".[benchmark]"
 pip install networkx
 pytest tests/performance_tests/ -v -s -k speedup
+python benchmarks/bench_all.py  # structured cost breakdown
 ```
 
 ## Tests
