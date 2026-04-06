@@ -435,9 +435,7 @@ class Graph:
         """
         tgt_list = [targets] if isinstance(targets, int) else list(targets)
         c = cutoff if cutoff is not None else -1
-        result: list[list[int]] = _all_edge_paths_ctx(
-            self._ctx, source, tgt_list, c, None, None, node_simple
-        )
+        result: list[list[int]] = _all_edge_paths_ctx(self._ctx, source, tgt_list, c, None, None, node_simple)
         return result
 
     def connected_components(self) -> Generator[set[NodeId], None, None]:

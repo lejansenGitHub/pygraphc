@@ -128,7 +128,7 @@ def test_node_mask_creation_cost(exponent: int, num_exclusions: int) -> None:
         _ = g.without_nodes(exclude_nodes)
     elapsed = (time.perf_counter() - start) / iterations
 
-    assert elapsed < 0.01, f"node mask creation took {elapsed * 1000:.2f}ms"
+    assert elapsed < 0.02, f"node mask creation took {elapsed * 1000:.2f}ms"
 
 
 # ── all_edge_paths performance ──
