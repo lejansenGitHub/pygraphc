@@ -119,6 +119,33 @@ Split-list constructor is also supported: `Graph(node_ids, src, dst)`.
 
 On a 100K-node graph, running 3 algorithms via `Graph` is ~2x faster than 3 separate free-function calls, since input parsing and adjacency-list construction happen only once.
 
+### Edge-masked views (exclude edges without rebuilding)
+
+Create lightweight views that exclude edges from the graph without rebuilding the CSR. The base graph is never mutated — views overlay a byte mask on the shared adjacency structure.
+
+```python
+from cgraph import Graph, GraphView, for_each_edge_excluded
+
+g = Graph(node_ids, edges)
+
+# Exclude edges by index (position in the original edge list)
+view = g.without_edges([3])          # exclude edge at index 3
+list(view.connected_components())    # runs on the masked graph
+view.bridges()
+view.bfs(0)
+view.shortest_path(weights, source=0, target=5)
+
+# Look up edge indices by node pair
+idx = g.edge_indices(2, 3)           # -> [3]  (list, for multigraph support)
+view = g.without_edges(idx)
+
+# Run an algorithm for each edge excluded, one at a time
+for edge_idx, components in for_each_edge_excluded(g, "connected_components"):
+    print(f"Without edge {edge_idx}: {len(components)} components")
+```
+
+The mask adds ~1 ns per edge (one byte load + branch). For a 100K-edge graph, this is negligible. The key win is avoiding O(V + E) graph rebuild per modification.
+
 Parallel edges are supported — each edge is tracked by ID, so two edges between the same pair of nodes are handled correctly (e.g. for bridges, Dijkstra weight selection).
 
 ## Performance

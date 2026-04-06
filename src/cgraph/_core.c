@@ -536,6 +536,30 @@ static void nid_free(NidContext *ctx) {
     Py_DECREF(ctx->nid_fast);
 }
 
+/* ── Edge mask helper ── */
+
+static int parse_mask(PyObject *mask_obj, Py_ssize_t expected_len,
+                      const uint8_t **mask_out, Py_buffer *mask_buf) {
+    if (mask_obj == NULL || mask_obj == Py_None) {
+        *mask_out = NULL;
+        mask_buf->obj = NULL;
+        return 0;
+    }
+    if (PyObject_GetBuffer(mask_obj, mask_buf, PyBUF_SIMPLE) < 0)
+        return -1;
+    if (mask_buf->len < expected_len) {
+        PyBuffer_Release(mask_buf);
+        PyErr_SetString(PyExc_ValueError, "mask length must be >= edge count");
+        return -1;
+    }
+    *mask_out = (const uint8_t *)mask_buf->buf;
+    return 0;
+}
+
+static inline void release_mask(Py_buffer *mask_buf) {
+    if (mask_buf->obj) PyBuffer_Release(mask_buf);
+}
+
 /* ── Helper: run union-find, return component_id array + num_components ── */
 
 typedef struct {
@@ -545,14 +569,18 @@ typedef struct {
 
 /*
  * Core routine: parse edges, run union-find, assign sequential component IDs.
+ * mask: if non-NULL, skip edges where mask[i] != 0.
  * Caller must free result.labels.
  * Returns 0 on success, -1 on error.
  */
-static int compute_components(int n, EdgeList *el, ComponentResult *cr) {
+static int compute_components_masked(int n, EdgeList *el, const uint8_t *mask,
+                                     ComponentResult *cr) {
     UF uf;
     if (uf_init(&uf, n) < 0) { PyErr_NoMemory(); return -1; }
-    for (Py_ssize_t i = 0; i < el->m; i++)
+    for (Py_ssize_t i = 0; i < el->m; i++) {
+        if (mask && mask[i]) continue;
         uf_union(&uf, EDGE_SRC(el, i), EDGE_DST(el, i));
+    }
 
     /* labels + root_to_id in one allocation */
     int *buf = (int *)malloc(2 * (size_t)n * sizeof(int));
@@ -576,6 +604,10 @@ static int compute_components(int n, EdgeList *el, ComponentResult *cr) {
 
     uf_free(&uf);
     return 0;
+}
+
+static inline int compute_components(int n, EdgeList *el, ComponentResult *cr) {
+    return compute_components_masked(n, el, NULL, cr);
 }
 
 /* ── connected_components(n, edges) -> list[set[int]] ── */
@@ -943,6 +975,22 @@ static PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     }
 
     return PyCapsule_New(g, "cgraph.GraphCtx", graphctx_destructor);
+}
+
+static PyObject *py_graph_edge_count(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    return PyLong_FromSsize_t(g->nid.el.m);
+}
+
+static PyObject *py_graph_node_count(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    return PyLong_FromLong(g->nid.n);
 }
 
 /* ── Weight parsing: list of floats or numpy float64 array ── */
@@ -2321,18 +2369,22 @@ static PyObject *py_msdijk_nid(PyObject *self, PyObject *args) {
     return rd;
 }
 
-/* ── Context-based algorithm variants (reuse parsed graph) ── */
+/* ── Context-based algorithm variants (reuse parsed graph, optional mask) ── */
 
 static PyObject *py_cc_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule;
-    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    PyObject *capsule, *mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|O", &capsule, &mask_obj)) return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
     int n = g->nid.n;
     if (n == 0) return PyList_New(0);
 
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+
     ComponentResult cr;
-    if (compute_components(n, &g->nid.el, &cr) < 0) return NULL;
+    if (compute_components_masked(n, &g->nid.el, mask, &cr) < 0) { release_mask(&mbuf); return NULL; }
+    release_mask(&mbuf);
     int nc = cr.num_comp;
 
     PyObject *result = PyList_New(nc);
@@ -2355,8 +2407,8 @@ static PyObject *py_cc_ctx(PyObject *self, PyObject *args) {
 }
 
 static PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule;
-    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    PyObject *capsule, *mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|O", &capsule, &mask_obj)) return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
     int n = g->nid.n;
@@ -2364,9 +2416,12 @@ static PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
     PyObject *result = PyList_New(0);
     if (!result || n == 0 || g->nid.el.m == 0 || !g->has_adj) return result;
 
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+
     AdjList *al = &g->al;
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
-    if (!buf5) { Py_DECREF(result); PyErr_NoMemory(); return NULL; }
+    if (!buf5) { release_mask(&mbuf); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
     int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
     int *sidx = buf5 + 3*n, *peid = buf5 + 4*n;
     memset(disc, -1, n * sizeof(int));
@@ -2382,6 +2437,7 @@ static PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
             if (sidx[sp] < al->offset[u + 1]) {
                 int i = sidx[sp]++;
                 int v = al->adj[i], eid = al->eid[i];
+                if (mask && mask[eid]) continue;
                 if (eid == peid[u]) continue;
                 if (disc[v] == -1) {
                     disc[v] = low[v] = timer++; peid[v] = eid;
@@ -2406,12 +2462,13 @@ static PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
         }
     }
     free(buf5);
+    release_mask(&mbuf);
     return result;
 }
 
 static PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule;
-    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    PyObject *capsule, *mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|O", &capsule, &mask_obj)) return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
     int n = g->nid.n;
@@ -2419,9 +2476,12 @@ static PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
     PyObject *result = PySet_New(NULL);
     if (!result || n == 0 || !g->has_adj) return result;
 
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+
     AdjList *al = &g->al;
     int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
-    if (!buf6) { Py_DECREF(result); PyErr_NoMemory(); return NULL; }
+    if (!buf6) { release_mask(&mbuf); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
     int *disc = buf6, *low = buf6 + n, *stk = buf6 + 2*n;
     int *sidx = buf6 + 3*n, *peid = buf6 + 4*n, *ch = buf6 + 5*n;
     memset(disc, -1, n * sizeof(int));
@@ -2438,6 +2498,7 @@ static PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
             if (sidx[sp] < al->offset[u + 1]) {
                 int i = sidx[sp]++;
                 int v = al->adj[i], eid = al->eid[i];
+                if (mask && mask[eid]) continue;
                 if (eid == peid[u]) continue;
                 if (disc[v] == -1) {
                     disc[v] = low[v] = timer++; peid[v] = eid; ch[v] = 0; ch[u]++;
@@ -2457,12 +2518,13 @@ static PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
             PySet_Add(result, g->nid.nid_items[start]);
     }
     free(buf6);
+    release_mask(&mbuf);
     return result;
 }
 
 static PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule;
-    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    PyObject *capsule, *mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|O", &capsule, &mask_obj)) return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
     int n = g->nid.n;
@@ -2471,11 +2533,14 @@ static PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
     if (!result || n == 0 || g->nid.el.m == 0 || !g->has_adj) return result;
 
     Py_ssize_t m = g->nid.el.m;
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+
     AdjList *al = &g->al;
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     int *esbuf = (int *)malloc(2 * (size_t)m * sizeof(int));
     if (!buf5 || !esbuf) {
-        free(buf5); free(esbuf); Py_DECREF(result);
+        free(buf5); free(esbuf); release_mask(&mbuf); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
     int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
@@ -2494,6 +2559,7 @@ static PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
             if (sidx[sp] < al->offset[u + 1]) {
                 int i = sidx[sp]++;
                 int v = al->adj[i], eid = al->eid[i];
+                if (mask && mask[eid]) continue;
                 if (eid == peid[u]) continue;
                 if (disc[v] == -1) {
                     esu[esp] = u; esv[esp] = v; esp++;
@@ -2523,12 +2589,13 @@ static PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
         }
     }
     free(buf5); free(esbuf);
+    release_mask(&mbuf);
     return result;
 }
 
 static PyObject *py_bfs_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *src_obj;
-    if (!PyArg_ParseTuple(args, "OO", &capsule, &src_obj)) return NULL;
+    PyObject *capsule, *src_obj, *mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|O", &capsule, &src_obj, &mask_obj)) return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
     int n = g->nid.n;
@@ -2542,15 +2609,19 @@ static PyObject *py_bfs_ctx(PyObject *self, PyObject *args) {
     }
     if (!g->has_adj) return PyList_New(0);
 
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+
     AdjList *al = &g->al;
     int *vis = calloc(n, sizeof(int)), *queue = malloc(n * sizeof(int));
-    if (!vis || !queue) { free(vis); free(queue); PyErr_NoMemory(); return NULL; }
+    if (!vis || !queue) { free(vis); free(queue); release_mask(&mbuf); PyErr_NoMemory(); return NULL; }
 
     int head = 0, tail = 0;
     queue[tail++] = source; vis[source] = 1;
     while (head < tail) {
         int u = queue[head++];
         for (int i = al->offset[u]; i < al->offset[u+1]; i++) {
+            if (mask && mask[al->eid[i]]) continue;
             int v = al->adj[i];
             if (!vis[v]) { vis[v] = 1; queue[tail++] = v; }
         }
@@ -2564,12 +2635,13 @@ static PyObject *py_bfs_ctx(PyObject *self, PyObject *args) {
         }
     }
     free(vis); free(queue);
+    release_mask(&mbuf);
     return result;
 }
 
 static PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *wobj, *src_obj, *tgt_obj;
-    if (!PyArg_ParseTuple(args, "OOOO", &capsule, &wobj, &src_obj, &tgt_obj))
+    PyObject *capsule, *wobj, *src_obj, *tgt_obj, *mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OOOO|O", &capsule, &wobj, &src_obj, &tgt_obj, &mask_obj))
         return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
@@ -2591,16 +2663,19 @@ static PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
         return Py_BuildValue("(dN)", HUGE_VAL, p);
     }
 
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+
     WeightList wl;
-    if (parse_weights(wobj, &wl) < 0) return NULL;
-    if (!g->has_adj) { free_weights(&wl); PyObject *p = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, p); }
+    if (parse_weights(wobj, &wl) < 0) { release_mask(&mbuf); return NULL; }
+    if (!g->has_adj) { free_weights(&wl); release_mask(&mbuf); PyObject *p = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, p); }
     AdjList *al = &g->al;
 
     double *dist = malloc(n*sizeof(double));
     int *prev = malloc(n*sizeof(int)), *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
     if (!dist||!prev||!heap||!pos) {
         free(dist);free(prev);free(heap);free(pos);
-        free_weights(&wl); PyErr_NoMemory(); return NULL;
+        free_weights(&wl); release_mask(&mbuf); PyErr_NoMemory(); return NULL;
     }
     for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; prev[i]=-1; pos[i]=-1; }
     MinHeap mh = {dist, heap, pos, 0};
@@ -2610,6 +2685,7 @@ static PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
         int u = mh_pop(&mh);
         if (u == target || dist[u] == HUGE_VAL) break;
         for (int i=al->offset[u]; i<al->offset[u+1]; i++) {
+            if (mask && mask[al->eid[i]]) continue;
             int v=al->adj[i]; double nd=dist[u]+wl.w[al->eid[i]];
             if (nd < dist[v]) {
                 prev[v] = u;
@@ -2634,14 +2710,14 @@ static PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
 
     PyObject *res = Py_BuildValue("(dN)", fd, path);
     free(dist);free(prev);free(heap);free(pos);
-    free_weights(&wl);
+    free_weights(&wl); release_mask(&mbuf);
     return res;
 }
 
 static PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *wobj, *src_obj;
+    PyObject *capsule, *wobj, *src_obj, *mask_obj = Py_None;
     double cutoff;
-    if (!PyArg_ParseTuple(args, "OOOd", &capsule, &wobj, &src_obj, &cutoff))
+    if (!PyArg_ParseTuple(args, "OOOd|O", &capsule, &wobj, &src_obj, &cutoff, &mask_obj))
         return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
@@ -2656,15 +2732,18 @@ static PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
     int source = n > 0 ? intmap_get(&g->nid.im, sn) : -1;
     if (n == 0 || source < 0 || !g->has_adj) return rd;
 
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(rd); return NULL; }
+
     WeightList wl;
-    if (parse_weights(wobj, &wl) < 0) { Py_DECREF(rd); return NULL; }
+    if (parse_weights(wobj, &wl) < 0) { release_mask(&mbuf); Py_DECREF(rd); return NULL; }
     AdjList *al = &g->al;
 
     double *dist = malloc(n*sizeof(double));
     int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
     if (!dist||!heap||!pos) {
         free(dist);free(heap);free(pos);
-        free_weights(&wl); Py_DECREF(rd); PyErr_NoMemory(); return NULL;
+        free_weights(&wl); release_mask(&mbuf); Py_DECREF(rd); PyErr_NoMemory(); return NULL;
     }
     for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; pos[i]=-1; }
     MinHeap mh = {dist, heap, pos, 0};
@@ -2675,6 +2754,7 @@ static PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
         if (dist[u]==HUGE_VAL) break;
         if (use_cutoff && dist[u]>cutoff) break;
         for (int i=al->offset[u]; i<al->offset[u+1]; i++) {
+            if (mask && mask[al->eid[i]]) continue;
             int v=al->adj[i]; double nd=dist[u]+wl.w[al->eid[i]];
             if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
                 if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
@@ -2691,14 +2771,14 @@ static PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
         }
     }
     free(dist);free(heap);free(pos);
-    free_weights(&wl);
+    free_weights(&wl); release_mask(&mbuf);
     return rd;
 }
 
 static PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *wobj, *srcs_obj;
+    PyObject *capsule, *wobj, *srcs_obj, *mask_obj = Py_None;
     double cutoff;
-    if (!PyArg_ParseTuple(args, "OOOd", &capsule, &wobj, &srcs_obj, &cutoff))
+    if (!PyArg_ParseTuple(args, "OOOd|O", &capsule, &wobj, &srcs_obj, &cutoff, &mask_obj))
         return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
@@ -2709,18 +2789,21 @@ static PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
     if (!rd) return NULL;
     if (n == 0 || !g->has_adj) return rd;
 
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(rd); return NULL; }
+
     PyObject *sf = PySequence_Fast(srcs_obj, "sources must be a sequence");
-    if (!sf) { Py_DECREF(rd); return NULL; }
+    if (!sf) { release_mask(&mbuf); Py_DECREF(rd); return NULL; }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl) < 0) { Py_DECREF(sf); Py_DECREF(rd); return NULL; }
+    if (parse_weights(wobj, &wl) < 0) { Py_DECREF(sf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
     AdjList *al = &g->al;
 
     double *dist = malloc(n*sizeof(double));
     int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
     if (!dist||!heap||!pos) {
         free(dist);free(heap);free(pos);
-        free_weights(&wl); Py_DECREF(sf); Py_DECREF(rd);
+        free_weights(&wl); Py_DECREF(sf); release_mask(&mbuf); Py_DECREF(rd);
         PyErr_NoMemory(); return NULL;
     }
     for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; pos[i]=-1; }
@@ -2732,7 +2815,7 @@ static PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
         long sn = PyLong_AsLong(si[i]);
         if (PyErr_Occurred()) {
             free(dist);free(heap);free(pos);
-            free_weights(&wl); Py_DECREF(sf); Py_DECREF(rd);
+            free_weights(&wl); Py_DECREF(sf); release_mask(&mbuf); Py_DECREF(rd);
             return NULL;
         }
         int s = intmap_get(&g->nid.im, sn);
@@ -2747,6 +2830,7 @@ static PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
         if (dist[u]==HUGE_VAL) break;
         if (use_cutoff && dist[u]>cutoff) break;
         for (int i=al->offset[u]; i<al->offset[u+1]; i++) {
+            if (mask && mask[al->eid[i]]) continue;
             int v=al->adj[i]; double nd=dist[u]+wl.w[al->eid[i]];
             if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
                 if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
@@ -2763,7 +2847,7 @@ static PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
         }
     }
     free(dist);free(heap);free(pos);
-    free_weights(&wl);
+    free_weights(&wl); release_mask(&mbuf);
     return rd;
 }
 
@@ -2840,6 +2924,10 @@ static PyMethodDef methods[] = {
     {"parse_graph", py_parse_graph, METH_VARARGS,
      "parse_graph(node_ids, edges[, dst]) -> capsule\n\n"
      "Parse graph once, return opaque capsule for reuse across algorithms."},
+    {"graph_edge_count", py_graph_edge_count, METH_VARARGS,
+     "graph_edge_count(capsule) -> int\n\nReturn edge count from parsed graph."},
+    {"graph_node_count", py_graph_node_count, METH_VARARGS,
+     "graph_node_count(capsule) -> int\n\nReturn node count from parsed graph."},
     {"cc_ctx", py_cc_ctx, METH_VARARGS, "Connected components from cached graph."},
     {"bridges_ctx", py_bridges_ctx, METH_VARARGS, "Bridges from cached graph."},
     {"ap_ctx", py_ap_ctx, METH_VARARGS, "Articulation points from cached graph."},

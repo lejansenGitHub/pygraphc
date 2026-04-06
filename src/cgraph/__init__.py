@@ -1,7 +1,9 @@
 """Fast graph algorithms via C extensions: union-find, Tarjan's, BFS, Dijkstra."""
 
+import types
 from collections import deque
-from collections.abc import Generator
+from collections.abc import Collection, Generator, Iterable, Iterator
+from typing import Any
 
 from cgraph._core import ap_ctx as _ap_ctx
 from cgraph._core import ap_nid as _ap_nid
@@ -17,6 +19,8 @@ from cgraph._core import cc_nid_split as _cc_nid_split
 from cgraph._core import connected_components_with_branches_remapped as _cc_branches_remapped
 from cgraph._core import dijkstra_ctx as _dijkstra_ctx
 from cgraph._core import dijkstra_nid as _dijkstra_nid
+from cgraph._core import graph_edge_count as _graph_edge_count
+from cgraph._core import graph_node_count as _graph_node_count
 from cgraph._core import msdijk_ctx as _msdijk_ctx
 from cgraph._core import msdijk_nid as _msdijk_nid
 from cgraph._core import parse_graph as _parse_graph
@@ -26,6 +30,7 @@ from cgraph._core import sssp_nid as _sssp_nid
 __all__ = [
     "BranchId",
     "Graph",
+    "GraphView",
     "NodeId",
     "articulation_points",
     "bfs",
@@ -34,6 +39,7 @@ __all__ = [
     "connected_components",
     "connected_components_with_branch_ids",
     "eccentricity",
+    "for_each_edge_excluded",
     "multi_source_shortest_path_lengths",
     "nodes_on_simple_paths",
     "shortest_path",
@@ -331,6 +337,33 @@ class Graph:
         else:
             self._ctx = _parse_graph(node_ids, edges_or_src)
 
+    @property
+    def edge_count(self) -> int:
+        """Number of edges in the graph."""
+        return _graph_edge_count(self._ctx)
+
+    @property
+    def node_count(self) -> int:
+        """Number of nodes in the graph."""
+        return _graph_node_count(self._ctx)
+
+    def edge_indices(self, u: NodeId, v: NodeId) -> list[int]:
+        """Return indices of edges between u and v (list, for multigraph support)."""
+        edges = self._edges
+        if edges is None:
+            return []
+        result = []
+        for i, (a, b) in enumerate(edges):
+            if (a == u and b == v) or (a == v and b == u):
+                result.append(i)
+        return result
+
+    def without_edges(
+        self, edge_indices: Collection[int],
+    ) -> "GraphView":
+        """Create a lightweight view with the given edges excluded."""
+        return GraphView(self, edge_indices)
+
     def connected_components(self) -> Generator[set[NodeId], None, None]:
         """Yield each connected component as a set of original node IDs."""
         yield from _cc_ctx(self._ctx)
@@ -428,3 +461,116 @@ class Graph:
         return _collect_path_nodes(
             self._node_ids, blocks, tree, source, tgts, result,
         )
+
+
+class GraphView:
+    """Lightweight view of a Graph with excluded edges.
+
+    Shares the base graph's parsed data (IntMap, CSR). Only holds a
+    bytearray mask of excluded edge indices. Creating a view is O(m)
+    worst case, O(k) if built from scratch with k exclusions.
+
+    Edges are identified by their index in the original edge list
+    (the order in which they were passed to ``Graph()``).
+    """
+
+    __slots__ = ("_graph", "_mask")
+
+    def __init__(
+        self, graph: Graph, excluded_edge_indices: Collection[int],
+    ) -> None:
+        self._graph = graph
+        self._mask = bytearray(graph.edge_count)
+        for idx in excluded_edge_indices:
+            self._mask[idx] = 1
+
+    @classmethod
+    def _from_mask(cls, graph: Graph, mask: bytearray) -> "GraphView":
+        """Create a view from an existing mask (no copy)."""
+        view = object.__new__(cls)
+        view._graph = graph
+        view._mask = mask
+        return view
+
+    def connected_components(self) -> Generator[set[NodeId], None, None]:
+        """Yield each connected component as a set of original node IDs."""
+        yield from _cc_ctx(self._graph._ctx, self._mask)
+
+    def bridges(self) -> list[tuple[NodeId, NodeId]]:
+        """Return bridge edges as (node_id, node_id) pairs."""
+        return _bridges_ctx(self._graph._ctx, self._mask)
+
+    def articulation_points(self) -> set[NodeId]:
+        """Return the set of articulation points."""
+        return _ap_ctx(self._graph._ctx, self._mask)
+
+    def biconnected_components(self) -> Generator[set[NodeId], None, None]:
+        """Yield each biconnected component as a set of node IDs."""
+        yield from _bcc_ctx(self._graph._ctx, self._mask)
+
+    def bfs(self, source: NodeId) -> list[NodeId]:
+        """Return nodes visited in BFS order from source."""
+        return _bfs_ctx(self._graph._ctx, source, self._mask)
+
+    def shortest_path(
+        self,
+        weights: list[float],
+        source: NodeId,
+        target: NodeId,
+    ) -> list[NodeId]:
+        """Return the shortest weighted path from source to target."""
+        _dist, path = _dijkstra_ctx(
+            self._graph._ctx, weights, source, target, self._mask,
+        )
+        return path
+
+    def shortest_path_lengths(
+        self,
+        weights: list[float],
+        source: NodeId,
+        cutoff: float | None = None,
+    ) -> dict[NodeId, float]:
+        """Return {node_id: distance} for all nodes reachable from source."""
+        c = cutoff if cutoff is not None else -1.0
+        return _sssp_ctx(self._graph._ctx, weights, source, c, self._mask)
+
+    def multi_source_shortest_path_lengths(
+        self,
+        weights: list[float],
+        sources: list[NodeId],
+        cutoff: float | None = None,
+    ) -> dict[NodeId, float]:
+        """Return {node_id: distance} from nearest source to each reachable node."""
+        c = cutoff if cutoff is not None else -1.0
+        return _msdijk_ctx(self._graph._ctx, weights, sources, c, self._mask)
+
+    def eccentricity(self, weights: list[float], source: NodeId) -> float:
+        """Return the eccentricity of source (max shortest-path distance)."""
+        lengths = self.shortest_path_lengths(weights, source)
+        if not lengths:
+            return 0.0
+        return max(lengths.values())
+
+
+def for_each_edge_excluded(
+    graph: Graph,
+    algorithm: str,
+    edge_indices: Iterable[int] | None = None,
+    **algorithm_kwargs: Any,
+) -> Iterator[tuple[int, Any]]:
+    """Run an algorithm once per excluded edge, yielding (edge_index, result).
+
+    Reuses a single mask bytearray, toggling one bit per iteration.
+    If edge_indices is None, iterates over all edges.
+    """
+    mask = bytearray(graph.edge_count)
+    indices = edge_indices if edge_indices is not None else range(graph.edge_count)
+    for idx in indices:
+        mask[idx] = 1
+        view = GraphView._from_mask(graph, mask)
+        result = getattr(view, algorithm)(**algorithm_kwargs)
+        # Materialize generators since the mask is shared and will be reset
+        if isinstance(result, types.GeneratorType):
+            result = list(result)
+        yield idx, result
+        mask[idx] = 0
