@@ -87,6 +87,38 @@ multi_source_shortest_path_lengths(node_ids, edges, weights, sources=[0, 3])
 eccentricity(node_ids, edges, weights, source=0)  # 6.0
 ```
 
+### Graph class (parse once, run many algorithms)
+
+When running multiple algorithms on the same graph, use the `Graph` class to avoid re-parsing the input each time:
+
+```python
+from cgraph import Graph
+
+node_ids = [0, 1, 2, 3, 4, 5]
+edges = [(0, 1), (1, 2), (2, 0), (2, 3), (3, 4), (4, 5), (5, 3)]
+
+g = Graph(node_ids, edges)
+
+# All calls reuse the same parsed C structures (IntMap + EdgeList + CSR adjacency list)
+g.bridges()                    # [(2, 3)]
+g.articulation_points()        # {2, 3}
+list(g.connected_components()) # [{0, 1, 2, 3, 4, 5}]
+g.bfs(0)                       # [0, 1, 2, ...]
+
+# Weighted algorithms (weights still passed per-call)
+weights = [1.0, 2.0, 1.0, 5.0, 1.0, 2.0, 1.0]
+g.shortest_path(weights, source=0, target=5)
+g.shortest_path_lengths(weights, source=0)
+
+# Composite algorithms
+list(g.two_edge_connected_components())
+g.nodes_on_simple_paths(source=0, targets=[5])
+```
+
+Split-list constructor is also supported: `Graph(node_ids, src, dst)`.
+
+On a 100K-node graph, running 3 algorithms via `Graph` is ~2x faster than 3 separate free-function calls, since input parsing and adjacency-list construction happen only once.
+
 Parallel edges are supported — each edge is tracked by ID, so two edges between the same pair of nodes are handled correctly (e.g. for bridges, Dijkstra weight selection).
 
 ## Performance

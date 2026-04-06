@@ -893,6 +893,58 @@ static void free_adj(AdjList *al) {
     free(al->eid);
 }
 
+/* ── GraphCtx: cached parsed graph for reuse across algorithms ── */
+
+typedef struct {
+    NidContext nid;
+    AdjList    al;
+    int        has_adj;
+} GraphCtx;
+
+static void graphctx_destructor(PyObject *capsule) {
+    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "cgraph.GraphCtx");
+    if (!g) { PyErr_Clear(); return; }
+    if (g->has_adj) free_adj(&g->al);
+    free_edges(&g->nid.el);
+    if (g->nid.im.keys) intmap_free(&g->nid.im);
+    Py_DECREF(g->nid.nid_fast);
+    free(g);
+}
+
+static inline GraphCtx *get_graphctx(PyObject *capsule) {
+    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "cgraph.GraphCtx");
+    if (!g) PyErr_SetString(PyExc_TypeError, "expected a parsed Graph capsule");
+    return g;
+}
+
+static PyObject *py_parse_graph(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges_or_src, *dst_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|O", &nids, &edges_or_src, &dst_obj))
+        return NULL;
+
+    GraphCtx *g = (GraphCtx *)malloc(sizeof(GraphCtx));
+    if (!g) { PyErr_NoMemory(); return NULL; }
+    g->has_adj = 0;
+
+    int rc;
+    if (dst_obj != Py_None)
+        rc = nid_parse_split(nids, edges_or_src, dst_obj, &g->nid);
+    else
+        rc = nid_parse(nids, edges_or_src, &g->nid);
+    if (rc < 0) { free(g); return NULL; }
+
+    if (g->nid.n > 0 && g->nid.el.m > 0) {
+        if (build_adj(g->nid.n, &g->nid.el, &g->al) < 0) {
+            nid_free(&g->nid);
+            free(g);
+            return NULL;
+        }
+        g->has_adj = 1;
+    }
+
+    return PyCapsule_New(g, "cgraph.GraphCtx", graphctx_destructor);
+}
+
 /* ── Weight parsing: list of floats or numpy float64 array ── */
 
 typedef struct {
@@ -2269,6 +2321,452 @@ static PyObject *py_msdijk_nid(PyObject *self, PyObject *args) {
     return rd;
 }
 
+/* ── Context-based algorithm variants (reuse parsed graph) ── */
+
+static PyObject *py_cc_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+    if (n == 0) return PyList_New(0);
+
+    ComponentResult cr;
+    if (compute_components(n, &g->nid.el, &cr) < 0) return NULL;
+    int nc = cr.num_comp;
+
+    PyObject *result = PyList_New(nc);
+    if (!result) { free(cr.labels); return NULL; }
+    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
+    if (!sets) { free(cr.labels); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
+    for (int c = 0; c < nc; c++) {
+        sets[c] = PySet_New(NULL);
+        if (!sets[c]) {
+            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
+            free(sets); free(cr.labels); Py_DECREF(result); return NULL;
+        }
+    }
+    for (int i = 0; i < n; i++)
+        PySet_Add(sets[cr.labels[i]], g->nid.nid_items[i]);
+    for (int c = 0; c < nc; c++)
+        PyList_SET_ITEM(result, c, sets[c]);
+    free(sets); free(cr.labels);
+    return result;
+}
+
+static PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    PyObject *result = PyList_New(0);
+    if (!result || n == 0 || g->nid.el.m == 0 || !g->has_adj) return result;
+
+    AdjList *al = &g->al;
+    int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
+    if (!buf5) { Py_DECREF(result); PyErr_NoMemory(); return NULL; }
+    int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
+    int *sidx = buf5 + 3*n, *peid = buf5 + 4*n;
+    memset(disc, -1, n * sizeof(int));
+    int timer = 0;
+
+    for (int start = 0; start < n; start++) {
+        if (disc[start] != -1) continue;
+        int sp = 0;
+        stk[0] = start; sidx[0] = al->offset[start];
+        disc[start] = low[start] = timer++; peid[start] = -1;
+        while (sp >= 0) {
+            int u = stk[sp];
+            if (sidx[sp] < al->offset[u + 1]) {
+                int i = sidx[sp]++;
+                int v = al->adj[i], eid = al->eid[i];
+                if (eid == peid[u]) continue;
+                if (disc[v] == -1) {
+                    disc[v] = low[v] = timer++; peid[v] = eid;
+                    stk[++sp] = v; sidx[sp] = al->offset[v];
+                } else { if (low[u] > disc[v]) low[u] = disc[v]; }
+            } else {
+                if (sp > 0) {
+                    int p = stk[sp-1];
+                    if (low[p] > low[u]) low[p] = low[u];
+                    if (low[u] > disc[p]) {
+                        int ei = peid[u];
+                        int su = EDGE_SRC(&g->nid.el, ei), sv = EDGE_DST(&g->nid.el, ei);
+                        PyObject *t = PyTuple_New(2);
+                        Py_INCREF(g->nid.nid_items[su]); Py_INCREF(g->nid.nid_items[sv]);
+                        PyTuple_SET_ITEM(t, 0, g->nid.nid_items[su]);
+                        PyTuple_SET_ITEM(t, 1, g->nid.nid_items[sv]);
+                        PyList_Append(result, t); Py_DECREF(t);
+                    }
+                }
+                sp--;
+            }
+        }
+    }
+    free(buf5);
+    return result;
+}
+
+static PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    PyObject *result = PySet_New(NULL);
+    if (!result || n == 0 || !g->has_adj) return result;
+
+    AdjList *al = &g->al;
+    int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
+    if (!buf6) { Py_DECREF(result); PyErr_NoMemory(); return NULL; }
+    int *disc = buf6, *low = buf6 + n, *stk = buf6 + 2*n;
+    int *sidx = buf6 + 3*n, *peid = buf6 + 4*n, *ch = buf6 + 5*n;
+    memset(disc, -1, n * sizeof(int));
+    memset(ch, 0, n * sizeof(int));
+    int timer = 0;
+
+    for (int start = 0; start < n; start++) {
+        if (disc[start] != -1) continue;
+        int sp = 0;
+        stk[0] = start; sidx[0] = al->offset[start];
+        disc[start] = low[start] = timer++; peid[start] = -1; ch[start] = 0;
+        while (sp >= 0) {
+            int u = stk[sp];
+            if (sidx[sp] < al->offset[u + 1]) {
+                int i = sidx[sp]++;
+                int v = al->adj[i], eid = al->eid[i];
+                if (eid == peid[u]) continue;
+                if (disc[v] == -1) {
+                    disc[v] = low[v] = timer++; peid[v] = eid; ch[v] = 0; ch[u]++;
+                    stk[++sp] = v; sidx[sp] = al->offset[v];
+                } else { if (low[u] > disc[v]) low[u] = disc[v]; }
+            } else {
+                if (sp > 0) {
+                    int p = stk[sp-1];
+                    if (low[p] > low[u]) low[p] = low[u];
+                    if (peid[p] != -1 && low[u] >= disc[p])
+                        PySet_Add(result, g->nid.nid_items[p]);
+                }
+                sp--;
+            }
+        }
+        if (ch[start] >= 2)
+            PySet_Add(result, g->nid.nid_items[start]);
+    }
+    free(buf6);
+    return result;
+}
+
+static PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    PyObject *result = PyList_New(0);
+    if (!result || n == 0 || g->nid.el.m == 0 || !g->has_adj) return result;
+
+    Py_ssize_t m = g->nid.el.m;
+    AdjList *al = &g->al;
+    int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
+    int *esbuf = (int *)malloc(2 * (size_t)m * sizeof(int));
+    if (!buf5 || !esbuf) {
+        free(buf5); free(esbuf); Py_DECREF(result);
+        PyErr_NoMemory(); return NULL;
+    }
+    int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
+    int *sidx = buf5 + 3*n, *peid = buf5 + 4*n;
+    int *esu = esbuf, *esv = esbuf + m;
+    memset(disc, -1, n * sizeof(int));
+    int timer = 0, esp = 0;
+
+    for (int start = 0; start < n; start++) {
+        if (disc[start] != -1) continue;
+        int sp = 0;
+        stk[0] = start; sidx[0] = al->offset[start];
+        disc[start] = low[start] = timer++; peid[start] = -1;
+        while (sp >= 0) {
+            int u = stk[sp];
+            if (sidx[sp] < al->offset[u + 1]) {
+                int i = sidx[sp]++;
+                int v = al->adj[i], eid = al->eid[i];
+                if (eid == peid[u]) continue;
+                if (disc[v] == -1) {
+                    esu[esp] = u; esv[esp] = v; esp++;
+                    disc[v] = low[v] = timer++; peid[v] = eid;
+                    stk[++sp] = v; sidx[sp] = al->offset[v];
+                } else if (disc[v] < disc[u]) {
+                    esu[esp] = u; esv[esp] = v; esp++;
+                    if (low[u] > disc[v]) low[u] = disc[v];
+                }
+            } else {
+                if (sp > 0) {
+                    int p = stk[sp-1];
+                    if (low[p] > low[u]) low[p] = low[u];
+                    if (low[u] >= disc[p]) {
+                        PyObject *comp = PySet_New(NULL);
+                        while (esp > 0) {
+                            esp--;
+                            PySet_Add(comp, g->nid.nid_items[esu[esp]]);
+                            PySet_Add(comp, g->nid.nid_items[esv[esp]]);
+                            if (esu[esp] == p && esv[esp] == u) break;
+                        }
+                        PyList_Append(result, comp); Py_DECREF(comp);
+                    }
+                }
+                sp--;
+            }
+        }
+    }
+    free(buf5); free(esbuf);
+    return result;
+}
+
+static PyObject *py_bfs_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *src_obj;
+    if (!PyArg_ParseTuple(args, "OO", &capsule, &src_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    long src_nid = PyLong_AsLong(src_obj);
+    if (src_nid == -1 && PyErr_Occurred()) return NULL;
+    int source = intmap_get(&g->nid.im, src_nid);
+    if (source < 0) {
+        PyErr_SetString(PyExc_ValueError, "source not in node_ids");
+        return NULL;
+    }
+    if (!g->has_adj) return PyList_New(0);
+
+    AdjList *al = &g->al;
+    int *vis = calloc(n, sizeof(int)), *queue = malloc(n * sizeof(int));
+    if (!vis || !queue) { free(vis); free(queue); PyErr_NoMemory(); return NULL; }
+
+    int head = 0, tail = 0;
+    queue[tail++] = source; vis[source] = 1;
+    while (head < tail) {
+        int u = queue[head++];
+        for (int i = al->offset[u]; i < al->offset[u+1]; i++) {
+            int v = al->adj[i];
+            if (!vis[v]) { vis[v] = 1; queue[tail++] = v; }
+        }
+    }
+
+    PyObject *result = PyList_New(tail);
+    if (result) {
+        for (int i = 0; i < tail; i++) {
+            Py_INCREF(g->nid.nid_items[queue[i]]);
+            PyList_SET_ITEM(result, i, g->nid.nid_items[queue[i]]);
+        }
+    }
+    free(vis); free(queue);
+    return result;
+}
+
+static PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *wobj, *src_obj, *tgt_obj;
+    if (!PyArg_ParseTuple(args, "OOOO", &capsule, &wobj, &src_obj, &tgt_obj))
+        return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    long sn = PyLong_AsLong(src_obj), tn = PyLong_AsLong(tgt_obj);
+    if (PyErr_Occurred()) return NULL;
+    int source = n > 0 ? intmap_get(&g->nid.im, sn) : -1;
+    int target = n > 0 ? intmap_get(&g->nid.im, tn) : -1;
+
+    if (source == target && source >= 0) {
+        PyObject *path = PyList_New(1);
+        Py_INCREF(g->nid.nid_items[source]);
+        PyList_SET_ITEM(path, 0, g->nid.nid_items[source]);
+        return Py_BuildValue("(dN)", 0.0, path);
+    }
+    if (n == 0 || source < 0 || target < 0) {
+        PyObject *p = PyList_New(0);
+        return Py_BuildValue("(dN)", HUGE_VAL, p);
+    }
+
+    WeightList wl;
+    if (parse_weights(wobj, &wl) < 0) return NULL;
+    if (!g->has_adj) { free_weights(&wl); PyObject *p = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, p); }
+    AdjList *al = &g->al;
+
+    double *dist = malloc(n*sizeof(double));
+    int *prev = malloc(n*sizeof(int)), *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
+    if (!dist||!prev||!heap||!pos) {
+        free(dist);free(prev);free(heap);free(pos);
+        free_weights(&wl); PyErr_NoMemory(); return NULL;
+    }
+    for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; prev[i]=-1; pos[i]=-1; }
+    MinHeap mh = {dist, heap, pos, 0};
+    dist[source]=0.0; heap[0]=source; pos[source]=0; mh.size=1;
+
+    while (mh.size > 0) {
+        int u = mh_pop(&mh);
+        if (u == target || dist[u] == HUGE_VAL) break;
+        for (int i=al->offset[u]; i<al->offset[u+1]; i++) {
+            int v=al->adj[i]; double nd=dist[u]+wl.w[al->eid[i]];
+            if (nd < dist[v]) {
+                prev[v] = u;
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
+                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+            }
+        }
+    }
+
+    double fd = dist[target];
+    PyObject *path;
+    if (fd < HUGE_VAL) {
+        int plen=0; for (int v=target;v!=-1;v=prev[v]) plen++;
+        path = PyList_New(plen);
+        int v=target;
+        for (int i=plen-1;i>=0;i--) {
+            Py_INCREF(g->nid.nid_items[v]);
+            PyList_SET_ITEM(path, i, g->nid.nid_items[v]);
+            v = prev[v];
+        }
+    } else { path = PyList_New(0); }
+
+    PyObject *res = Py_BuildValue("(dN)", fd, path);
+    free(dist);free(prev);free(heap);free(pos);
+    free_weights(&wl);
+    return res;
+}
+
+static PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *wobj, *src_obj;
+    double cutoff;
+    if (!PyArg_ParseTuple(args, "OOOd", &capsule, &wobj, &src_obj, &cutoff))
+        return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+    int use_cutoff = (cutoff >= 0.0);
+
+    PyObject *rd = PyDict_New();
+    if (!rd) return NULL;
+
+    long sn = PyLong_AsLong(src_obj);
+    if (PyErr_Occurred()) { Py_DECREF(rd); return NULL; }
+    int source = n > 0 ? intmap_get(&g->nid.im, sn) : -1;
+    if (n == 0 || source < 0 || !g->has_adj) return rd;
+
+    WeightList wl;
+    if (parse_weights(wobj, &wl) < 0) { Py_DECREF(rd); return NULL; }
+    AdjList *al = &g->al;
+
+    double *dist = malloc(n*sizeof(double));
+    int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
+    if (!dist||!heap||!pos) {
+        free(dist);free(heap);free(pos);
+        free_weights(&wl); Py_DECREF(rd); PyErr_NoMemory(); return NULL;
+    }
+    for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; pos[i]=-1; }
+    MinHeap mh = {dist, heap, pos, 0};
+    dist[source]=0.0; heap[0]=source; pos[source]=0; mh.size=1;
+
+    while (mh.size > 0) {
+        int u = mh_pop(&mh);
+        if (dist[u]==HUGE_VAL) break;
+        if (use_cutoff && dist[u]>cutoff) break;
+        for (int i=al->offset[u]; i<al->offset[u+1]; i++) {
+            int v=al->adj[i]; double nd=dist[u]+wl.w[al->eid[i]];
+            if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
+                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+            }
+        }
+    }
+
+    for (int i=0;i<n;i++) {
+        if (dist[i] < HUGE_VAL && (!use_cutoff || dist[i] <= cutoff)) {
+            PyObject *val = PyFloat_FromDouble(dist[i]);
+            PyDict_SetItem(rd, g->nid.nid_items[i], val);
+            Py_DECREF(val);
+        }
+    }
+    free(dist);free(heap);free(pos);
+    free_weights(&wl);
+    return rd;
+}
+
+static PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *wobj, *srcs_obj;
+    double cutoff;
+    if (!PyArg_ParseTuple(args, "OOOd", &capsule, &wobj, &srcs_obj, &cutoff))
+        return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+    int use_cutoff = (cutoff >= 0.0);
+
+    PyObject *rd = PyDict_New();
+    if (!rd) return NULL;
+    if (n == 0 || !g->has_adj) return rd;
+
+    PyObject *sf = PySequence_Fast(srcs_obj, "sources must be a sequence");
+    if (!sf) { Py_DECREF(rd); return NULL; }
+
+    WeightList wl;
+    if (parse_weights(wobj, &wl) < 0) { Py_DECREF(sf); Py_DECREF(rd); return NULL; }
+    AdjList *al = &g->al;
+
+    double *dist = malloc(n*sizeof(double));
+    int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
+    if (!dist||!heap||!pos) {
+        free(dist);free(heap);free(pos);
+        free_weights(&wl); Py_DECREF(sf); Py_DECREF(rd);
+        PyErr_NoMemory(); return NULL;
+    }
+    for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; pos[i]=-1; }
+    MinHeap mh = {dist, heap, pos, 0};
+
+    Py_ssize_t nsrc = PySequence_Fast_GET_SIZE(sf);
+    PyObject **si = PySequence_Fast_ITEMS(sf);
+    for (Py_ssize_t i=0;i<nsrc;i++) {
+        long sn = PyLong_AsLong(si[i]);
+        if (PyErr_Occurred()) {
+            free(dist);free(heap);free(pos);
+            free_weights(&wl); Py_DECREF(sf); Py_DECREF(rd);
+            return NULL;
+        }
+        int s = intmap_get(&g->nid.im, sn);
+        if (s >= 0 && dist[s] > 0.0) {
+            dist[s]=0.0; int p=mh.size++; heap[p]=s; pos[s]=p; mh_sift_up(&mh,p);
+        }
+    }
+    Py_DECREF(sf);
+
+    while (mh.size > 0) {
+        int u = mh_pop(&mh);
+        if (dist[u]==HUGE_VAL) break;
+        if (use_cutoff && dist[u]>cutoff) break;
+        for (int i=al->offset[u]; i<al->offset[u+1]; i++) {
+            int v=al->adj[i]; double nd=dist[u]+wl.w[al->eid[i]];
+            if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
+                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+            }
+        }
+    }
+
+    for (int i=0;i<n;i++) {
+        if (dist[i] < HUGE_VAL && (!use_cutoff || dist[i] <= cutoff)) {
+            PyObject *val = PyFloat_FromDouble(dist[i]);
+            PyDict_SetItem(rd, g->nid.nid_items[i], val);
+            Py_DECREF(val);
+        }
+    }
+    free(dist);free(heap);free(pos);
+    free_weights(&wl);
+    return rd;
+}
+
 /* ── Module definition ── */
 
 static PyMethodDef methods[] = {
@@ -2339,6 +2837,17 @@ static PyMethodDef methods[] = {
     {"msdijk_nid", py_msdijk_nid, METH_VARARGS,
      "msdijk_nid(node_ids, nid_edges, weights, source_nids, cutoff) -> dict[NodeId, float]\n\n"
      "Multi-source Dijkstra with node-ID-based edges."},
+    {"parse_graph", py_parse_graph, METH_VARARGS,
+     "parse_graph(node_ids, edges[, dst]) -> capsule\n\n"
+     "Parse graph once, return opaque capsule for reuse across algorithms."},
+    {"cc_ctx", py_cc_ctx, METH_VARARGS, "Connected components from cached graph."},
+    {"bridges_ctx", py_bridges_ctx, METH_VARARGS, "Bridges from cached graph."},
+    {"ap_ctx", py_ap_ctx, METH_VARARGS, "Articulation points from cached graph."},
+    {"bcc_ctx", py_bcc_ctx, METH_VARARGS, "Biconnected components from cached graph."},
+    {"bfs_ctx", py_bfs_ctx, METH_VARARGS, "BFS from cached graph."},
+    {"dijkstra_ctx", py_dijkstra_ctx, METH_VARARGS, "Dijkstra from cached graph."},
+    {"sssp_ctx", py_sssp_ctx, METH_VARARGS, "SSSP lengths from cached graph."},
+    {"msdijk_ctx", py_msdijk_ctx, METH_VARARGS, "Multi-source Dijkstra from cached graph."},
     {NULL, NULL, 0, NULL},
 };
 
