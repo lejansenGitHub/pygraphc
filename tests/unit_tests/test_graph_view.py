@@ -4,11 +4,10 @@ import pytest
 
 from cgraph import Graph, GraphView, for_each_edge_excluded
 
-
 # ── Fixtures ──
 
 
-@pytest.fixture()
+@pytest.fixture
 def bridge_graph():
     """Graph: (0-1-2-0) --bridge(2,3)-- (3-4-5-3).
 
@@ -20,7 +19,7 @@ def bridge_graph():
     return Graph(nodes, edges)
 
 
-@pytest.fixture()
+@pytest.fixture
 def weighted_diamond():
     """Diamond: 0-1(1), 0-2(4), 1-3(2), 2-3(1). Edges indexed 0-3."""
     nodes = [0, 1, 2, 3]
@@ -58,7 +57,7 @@ def test_edge_indices(bridge_graph):
 def test_cc_mask_bridge_removed(bridge_graph):
     """Removing the bridge (2,3) splits the graph into two components."""
     view = bridge_graph.without_edges([3])
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{0, 1, 2}, {3, 4, 5}]
 
 
@@ -191,9 +190,7 @@ def test_for_each_edge_excluded_bridges(bridge_graph):
 def test_for_each_edge_excluded_subset():
     """Only iterate over a subset of edge indices."""
     g = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3)])
-    results = dict(
-        for_each_edge_excluded(g, "connected_components", edge_indices=[1])
-    )
+    results = dict(for_each_edge_excluded(g, "connected_components", edge_indices=[1]))
     assert 1 in results
     assert 0 not in results
 
@@ -203,12 +200,12 @@ def test_for_each_edge_excluded_subset():
 
 def test_view_does_not_mutate_base(bridge_graph):
     """Creating and using a view must not change the base graph's results."""
-    comps_before = sorted(list(bridge_graph.connected_components()), key=min)
+    comps_before = sorted(bridge_graph.connected_components(), key=min)
 
     view = bridge_graph.without_edges([3])
     _ = list(view.connected_components())
 
-    comps_after = sorted(list(bridge_graph.connected_components()), key=min)
+    comps_after = sorted(bridge_graph.connected_components(), key=min)
     assert comps_before == comps_after
 
 
@@ -217,8 +214,8 @@ def test_multiple_views_independent(bridge_graph):
     view_a = bridge_graph.without_edges([3])  # remove bridge
     view_b = bridge_graph.without_edges([0])  # remove edge (0,1)
 
-    comps_a = sorted(list(view_a.connected_components()), key=min)
-    comps_b = sorted(list(view_b.connected_components()), key=min)
+    comps_a = sorted(view_a.connected_components(), key=min)
+    comps_b = sorted(view_b.connected_components(), key=min)
 
     assert comps_a == [{0, 1, 2}, {3, 4, 5}]
     assert len(comps_b) == 1  # still connected
@@ -245,7 +242,7 @@ def test_mask_no_edges():
     g = Graph([10, 20, 30], [])
     assert g.edge_count == 0
     view = g.without_edges([])
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{10}, {20}, {30}]
     assert view.bridges() == []
     assert view.articulation_points() == set()
@@ -258,7 +255,7 @@ def test_mask_single_edge():
     """Graph with one edge — masking it isolates both nodes."""
     g = Graph([0, 1], [(0, 1)])
     view = g.without_edges([0])
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{0}, {1}]
     assert view.bridges() == []
 
@@ -278,7 +275,7 @@ def test_mask_all_edges():
     """Masking every edge makes all nodes isolated."""
     g = Graph([0, 1, 2], [(0, 1), (1, 2), (2, 0)])
     view = g.without_edges([0, 1, 2])
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{0}, {1}, {2}]
     assert view.bridges() == []
     assert view.articulation_points() == set()
@@ -330,7 +327,7 @@ def test_mask_one_of_parallel_edges():
     assert comps == [{0, 1}]
     # Both masked — disconnected
     view2 = g.without_edges([0, 1])
-    comps2 = sorted(list(view2.connected_components()), key=min)
+    comps2 = sorted(view2.connected_components(), key=min)
     assert comps2 == [{0}, {1}]
 
 
@@ -352,7 +349,7 @@ def test_mask_isolates_node():
     # 0 is center, connected to 1, 2, 3
     g = Graph([0, 1, 2, 3], [(0, 1), (0, 2), (0, 3)])
     view = g.without_edges([0, 1, 2])  # remove all edges from node 0
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{0}, {1}, {2}, {3}]
     assert view.bfs(0) == [0]
 
@@ -361,7 +358,7 @@ def test_mask_isolates_leaf():
     """Chain 0-1-2: mask edge (1,2) — node 2 becomes isolated."""
     g = Graph([0, 1, 2], [(0, 1), (1, 2)])
     view = g.without_edges([1])
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{0, 1}, {2}]
 
 
@@ -372,7 +369,7 @@ def test_mask_first_edge():
     """Mask only the first edge in the list."""
     g = Graph([0, 1, 2], [(0, 1), (1, 2)])
     view = g.without_edges([0])
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{0}, {1, 2}]
 
 
@@ -380,7 +377,7 @@ def test_mask_last_edge():
     """Mask only the last edge in the list."""
     g = Graph([0, 1, 2], [(0, 1), (1, 2)])
     view = g.without_edges([1])
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{0, 1}, {2}]
 
 
@@ -391,7 +388,7 @@ def test_mask_on_disconnected_graph():
     """Already disconnected graph — masking an edge within a component splits it."""
     g = Graph([0, 1, 2, 3], [(0, 1), (2, 3)])
     view = g.without_edges([0])  # remove edge in first component
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{0}, {1}, {2, 3}]
 
 
@@ -533,6 +530,6 @@ def test_mask_large_node_ids():
     edges = [(1000, 2000), (2000, 3000), (3000, 4000)]
     g = Graph(nids, edges)
     view = g.without_edges([1])  # remove (2000, 3000)
-    comps = sorted(list(view.connected_components()), key=min)
+    comps = sorted(view.connected_components(), key=min)
     assert comps == [{1000, 2000}, {3000, 4000}]
     assert view.bfs(1000) == [1000, 2000]

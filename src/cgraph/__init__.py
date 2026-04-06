@@ -188,10 +188,7 @@ def two_edge_connected_components(
     for u, v in bridges(node_ids, edges):
         bridge_set.add((min(u, v), max(u, v)))
 
-    non_bridge_edges = [
-        (u, v) for u, v in edges
-        if (min(u, v), max(u, v)) not in bridge_set
-    ]
+    non_bridge_edges = [(u, v) for u, v in edges if (min(u, v), max(u, v)) not in bridge_set]
     yield from connected_components(node_ids, non_bridge_edges)
 
 
@@ -225,7 +222,12 @@ def nodes_on_simple_paths(
 
     tree = _build_block_cut_tree(node_ids, blocks)
     return _collect_path_nodes(
-        node_ids, blocks, tree, source, tgts, result,
+        node_ids,
+        blocks,
+        tree,
+        source,
+        tgts,
+        result,
     )
 
 
@@ -359,7 +361,8 @@ class Graph:
         return result
 
     def without_edges(
-        self, edge_indices: Collection[int],
+        self,
+        edge_indices: Collection[int],
     ) -> "GraphView":
         """Create a lightweight view with the given edges excluded."""
         return GraphView(self, edge_indices)
@@ -429,10 +432,7 @@ class Graph:
         for u, v in self.bridges():
             bridge_set.add((min(u, v), max(u, v)))
 
-        non_bridge_edges = [
-            (u, v) for u, v in (self._edges or [])
-            if (min(u, v), max(u, v)) not in bridge_set
-        ]
+        non_bridge_edges = [(u, v) for u, v in (self._edges or []) if (min(u, v), max(u, v)) not in bridge_set]
         yield from connected_components(self._node_ids, non_bridge_edges)
 
     def nodes_on_simple_paths(
@@ -459,7 +459,12 @@ class Graph:
 
         tree = _build_block_cut_tree(self._node_ids, blocks)
         return _collect_path_nodes(
-            self._node_ids, blocks, tree, source, tgts, result,
+            self._node_ids,
+            blocks,
+            tree,
+            source,
+            tgts,
+            result,
         )
 
 
@@ -477,7 +482,9 @@ class GraphView:
     __slots__ = ("_graph", "_mask")
 
     def __init__(
-        self, graph: Graph, excluded_edge_indices: Collection[int],
+        self,
+        graph: Graph,
+        excluded_edge_indices: Collection[int],
     ) -> None:
         self._graph = graph
         self._mask = bytearray(graph.edge_count)
@@ -520,7 +527,11 @@ class GraphView:
     ) -> list[NodeId]:
         """Return the shortest weighted path from source to target."""
         _dist, path = _dijkstra_ctx(
-            self._graph._ctx, weights, source, target, self._mask,
+            self._graph._ctx,
+            weights,
+            source,
+            target,
+            self._mask,
         )
         return path
 

@@ -527,7 +527,10 @@ def test_multi_source_basic() -> None:
     edges = [(0, 1), (1, 2), (2, 3), (3, 4)]
     weights = [1.0, 1.0, 1.0, 1.0]
     result = multi_source_shortest_path_lengths(
-        node_ids, edges, weights, [0, 4],
+        node_ids,
+        edges,
+        weights,
+        [0, 4],
     )
     assert result[0] == pytest.approx(0.0)
     assert result[4] == pytest.approx(0.0)
@@ -541,7 +544,11 @@ def test_multi_source_with_cutoff() -> None:
     edges = [(0, 1), (1, 2), (2, 3), (3, 4)]
     weights = [1.0, 1.0, 1.0, 1.0]
     result = multi_source_shortest_path_lengths(
-        node_ids, edges, weights, [0], cutoff=2.0,
+        node_ids,
+        edges,
+        weights,
+        [0],
+        cutoff=2.0,
     )
     assert 0 in result
     assert 1 in result

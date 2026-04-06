@@ -4,17 +4,16 @@ import pytest
 
 from cgraph import Graph
 
-
 # ── Shared fixtures ──
 
 
-@pytest.fixture()
+@pytest.fixture
 def triangle():
     """Simple triangle graph: 0-1-2-0."""
     return Graph([0, 1, 2], [(0, 1), (1, 2), (2, 0)])
 
 
-@pytest.fixture()
+@pytest.fixture
 def bridge_graph():
     """Graph with a bridge: (0-1-2) -- bridge(2,3) -- (3-4-5)."""
     nodes = [0, 1, 2, 3, 4, 5]
@@ -22,7 +21,7 @@ def bridge_graph():
     return Graph(nodes, edges)
 
 
-@pytest.fixture()
+@pytest.fixture
 def weighted_graph():
     """Weighted diamond: 0-1(1), 0-2(4), 1-3(2), 2-3(1)."""
     nodes = [0, 1, 2, 3]
@@ -41,7 +40,7 @@ def test_cc_single_component(triangle):
 
 def test_cc_two_components():
     g = Graph([0, 1, 2, 3], [(0, 1), (2, 3)])
-    comps = sorted(list(g.connected_components()), key=min)
+    comps = sorted(g.connected_components(), key=min)
     assert comps == [{0, 1}, {2, 3}]
 
 
@@ -52,7 +51,7 @@ def test_cc_empty():
 
 def test_cc_isolated_nodes():
     g = Graph([0, 1, 2], [])
-    comps = sorted(list(g.connected_components()), key=min)
+    comps = sorted(g.connected_components(), key=min)
     assert comps == [{0}, {1}, {2}]
 
 
@@ -169,7 +168,7 @@ def test_eccentricity(weighted_graph):
 
 
 def test_two_edge_cc(bridge_graph):
-    comps = sorted(list(bridge_graph.two_edge_connected_components()), key=min)
+    comps = sorted(bridge_graph.two_edge_connected_components(), key=min)
     normed = [frozenset(c) for c in comps]
     assert frozenset({0, 1, 2}) in normed
     assert frozenset({3, 4, 5}) in normed
@@ -193,7 +192,7 @@ def test_nodes_on_simple_paths_same_component(triangle):
 
 def test_split_list_constructor():
     g = Graph([0, 1, 2, 3], [0, 2], [1, 3])
-    comps = sorted(list(g.connected_components()), key=min)
+    comps = sorted(g.connected_components(), key=min)
     assert comps == [{0, 1}, {2, 3}]
 
 
@@ -218,7 +217,9 @@ def test_large_node_ids():
     nids = [100, 200, 300, 400]
     edges = [(100, 200), (300, 400)]
     g = Graph(nids, edges)
-    comps = sorted(list(g.connected_components()), key=min)
+    comps = sorted(g.connected_components(), key=min)
     assert comps == [{100, 200}, {300, 400}]
-    assert g.bridges() == [(100, 200), (300, 400)] or \
-           {(min(u, v), max(u, v)) for u, v in g.bridges()} == {(100, 200), (300, 400)}
+    assert g.bridges() == [(100, 200), (300, 400)] or {(min(u, v), max(u, v)) for u, v in g.bridges()} == {
+        (100, 200),
+        (300, 400),
+    }
