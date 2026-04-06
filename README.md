@@ -115,20 +115,20 @@ class Branch:
 - **Parse** is the C-side input handling — building the node-ID hash map and translating edges to internal indices. Numpy skips per-element Python unpacking via buffer reads.
 - **C algorithm** is the actual computation (union-find + building Python `set` results). Fixed cost, identical across all interfaces. The `set` construction via `PySet_Add` accounts for ~50ms of the 62ms — this is the CPython floor for creating hash-based sets of 1M elements.
 
-### C algorithm across graph topologies
+### Performance across graph topologies
 
-The C algorithm cost depends heavily on graph structure. Connected components at 1M nodes:
+End-to-end from `Branch` objects using split lists. Connected components at 1M nodes:
 
-| Scenario | Components | Time |
-|----------|-----------:|-----:|
-| 1 component (all connected) | 1 | 28ms |
-| 10 components (100K each) | 10 | 28ms |
-| 1K components (1K each) | 1,000 | 22ms |
-| 1 dominant (900K) + 100K isolated | 100,001 | 48ms |
-| Random sparse (avg degree 3) | 54,266 | 57ms |
-| 1M isolated (0 edges) | 1,000,000 | 168ms |
+| Scenario | Components | Gather | cgraph | Total |
+|----------|-----------:|-------:|-------:|------:|
+| 1 component (all connected) | 1 | 25ms | 30ms | 55ms |
+| 10 components (100K each) | 10 | 22ms | 27ms | 48ms |
+| 1K components (1K each) | 1,000 | 21ms | 23ms | 44ms |
+| 1 dominant + 100K isolated | 100,001 | 19ms | 54ms | 73ms |
+| Random sparse (avg degree 3) | 54,266 | 35ms | 74ms | 109ms |
+| 1M isolated (0 edges) | 1,000,000 | 0ms | 212ms | 212ms |
 
-Many small components are expensive because each `PySet_New()` call allocates a Python set object. Few large components are cheap — the union-find and bulk `PySet_Add` are efficient.
+Few large components are cheap — union-find and bulk `PySet_Add` are efficient. Many small components are expensive because each `PySet_New()` allocates a Python set object. The gather cost scales with edge count, not component count.
 
 ### Calling conventions
 
