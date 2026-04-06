@@ -420,6 +420,7 @@ class Graph:
         source: NodeId,
         targets: NodeId | Collection[int],
         cutoff: int | None = None,
+        *,
         node_simple: bool = False,
     ) -> list[list[int]]:
         """Find all paths from source to targets using each edge at most once.
@@ -698,6 +699,7 @@ class GraphView:
         source: NodeId,
         targets: NodeId | Collection[int],
         cutoff: int | None = None,
+        *,
         node_simple: bool = False,
     ) -> list[list[int]]:
         """Find all paths from source to targets using each edge at most once.
