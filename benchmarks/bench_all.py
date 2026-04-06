@@ -1,15 +1,11 @@
 """
 Structured benchmark: measures the 3 cost phases separately for connected_components.
 
-Phase 1 - Data gathering: extracting edges from domain objects (Branch instances)
-Phase 2 - Input handling: cgraph parsing edges into internal format (nid_parse + parse_edges_mapped)
-Phase 3 - C core: the actual algorithm (union-find, CSR build, result construction)
+Phase 1 - Gather: extracting edges from domain objects (Branch instances)
+Phase 2 - Parse: cgraph hash map build + edge translation (nid_parse)
+Phase 3 - C algo: union-find + result construction
 
-Tests multiple data-gathering strategies:
-  A) List of tuples:   [(b.node_a, b.node_b) for b in branches]
-  B) Numpy from attrs: np.array([[b.node_a, b.node_b] for b in branches], dtype=np.int32)
-  C) Numpy pre-alloc:  pre-allocate array, fill in loop
-  D) Numpy from lists:  build two lists, then np.column_stack
+Tests across interfaces: tuples, split lists, numpy (m,2), split numpy 1D.
 """
 
 import random
@@ -18,6 +14,7 @@ import time
 import numpy as np
 
 from cgraph import connected_components
+from cgraph._core import connected_components as _cc_index
 
 
 class Branch:
@@ -30,7 +27,6 @@ class Branch:
 
 
 def generate_branches(n, avg_degree=3, seed=42):
-    """Generate Branch objects simulating a real domain."""
     rng = random.Random(seed)
     m = (n * avg_degree) // 2
     branches = []
@@ -46,7 +42,7 @@ def median(times):
     return sorted(times)[len(times) // 2]
 
 
-def bench_phase(func, rounds=7, warmup=3):
+def bench(func, rounds=7, warmup=3):
     for _ in range(warmup):
         func()
     times = []
@@ -62,87 +58,74 @@ def run_benchmark(n):
     branches = generate_branches(n)
     m = len(branches)
 
+    # Pre-build all edge formats
+    edges_tuples = [(b.node_a, b.node_b) for b in branches]
+    src_list = [b.node_a for b in branches]
+    dst_list = [b.node_b for b in branches]
+    src_np = np.array(src_list, dtype=np.int32)
+    dst_np = np.array(dst_list, dtype=np.int32)
+    edges_np = np.column_stack([src_np, dst_np])
+
+    # Phase 3: pure C algo (index-based + numpy, no nid_parse)
+    t_algo = bench(lambda: _cc_index(n, edges_np))
+
+    # Total cgraph call per interface
+    t_nid_tuples = bench(lambda: list(connected_components(node_ids, edges_tuples)))
+    t_split_list = bench(lambda: list(connected_components(node_ids, src_list, dst_list)))
+    t_nid_np2d = bench(lambda: list(connected_components(node_ids, edges_np)))
+    t_split_np = bench(lambda: list(connected_components(node_ids, src_np, dst_np)))
+
+    # Phase 2: parse = total cgraph - algo
+    p_tuples = t_nid_tuples - t_algo
+    p_split_list = t_split_list - t_algo
+    p_np2d = t_nid_np2d - t_algo
+    p_split_np = t_split_np - t_algo
+
+    # Phase 1: gather from Branch objects
+    g_tuples = bench(lambda: [(b.node_a, b.node_b) for b in branches])
+    g_split = bench(lambda: ([b.node_a for b in branches], [b.node_b for b in branches]))
+
+    def gather_np2d():
+        s = [b.node_a for b in branches]
+        d = [b.node_b for b in branches]
+        return np.column_stack([np.array(s, dtype=np.int32), np.array(d, dtype=np.int32)])
+    g_np2d = bench(gather_np2d)
+
+    def gather_split_np():
+        return (np.array([b.node_a for b in branches], dtype=np.int32),
+                np.array([b.node_b for b in branches], dtype=np.int32))
+    g_split_np = bench(gather_split_np)
+
+    # Print results
     print(f"\n  n={n:,}  m={m:,}")
-    print(f"  {'strategy':<28} {'gather':>10} {'cgraph':>10} {'total':>10}  "
-          f"{'gather%':>8} {'cgraph%':>8}")
-    print(f"  {'-'*82}")
+    print(f"  {'phase':<25} {'tuples':>9} {'split list':>11} {'np (m,2)':>10} {'split np1d':>11}")
+    print(f"  {'-' * 70}")
+    print(f"  {'1. gather':<25} {g_tuples * 1000:>8.1f}ms {g_split * 1000:>10.1f}ms"
+          f" {g_np2d * 1000:>9.1f}ms {g_split_np * 1000:>10.1f}ms")
+    print(f"  {'2. parse':<25} {p_tuples * 1000:>8.1f}ms {p_split_list * 1000:>10.1f}ms"
+          f" {p_np2d * 1000:>9.1f}ms {p_split_np * 1000:>10.1f}ms")
+    print(f"  {'3. C algo':<25} {t_algo * 1000:>8.1f}ms {t_algo * 1000:>10.1f}ms"
+          f" {t_algo * 1000:>9.1f}ms {t_algo * 1000:>10.1f}ms")
 
-    # --- Strategy A: list of tuples ---
-    def gather_tuples():
-        return [(b.node_a, b.node_b) for b in branches]
-
-    edges_tuples = gather_tuples()  # pre-build for phase 2+3 measurement
-
-    t_gather_a = bench_phase(gather_tuples)
-    t_cgraph_a = bench_phase(lambda: list(connected_components(node_ids, edges_tuples)))
-    t_total_a = t_gather_a + t_cgraph_a
-
-    print(f"  {'A) tuples':<28} {t_gather_a*1000:>9.1f}ms {t_cgraph_a*1000:>9.1f}ms "
-          f"{t_total_a*1000:>9.1f}ms  {t_gather_a/t_total_a*100:>7.1f}% {t_cgraph_a/t_total_a*100:>7.1f}%")
-
-    # --- Strategy B: numpy from list comprehension ---
-    def gather_np_listcomp():
-        return np.array([(b.node_a, b.node_b) for b in branches], dtype=np.int32)
-
-    edges_np_b = gather_np_listcomp()
-
-    t_gather_b = bench_phase(gather_np_listcomp)
-    t_cgraph_b = bench_phase(lambda: list(connected_components(node_ids, edges_np_b)))
-    t_total_b = t_gather_b + t_cgraph_b
-
-    print(f"  {'B) np from listcomp':<28} {t_gather_b*1000:>9.1f}ms {t_cgraph_b*1000:>9.1f}ms "
-          f"{t_total_b*1000:>9.1f}ms  {t_gather_b/t_total_b*100:>7.1f}% {t_cgraph_b/t_total_b*100:>7.1f}%")
-
-    # --- Strategy C: numpy pre-allocated ---
-    def gather_np_prealloc():
-        edges = np.empty((m, 2), dtype=np.int32)
-        for i, b in enumerate(branches):
-            edges[i, 0] = b.node_a
-            edges[i, 1] = b.node_b
-        return edges
-
-    edges_np_c = gather_np_prealloc()
-
-    t_gather_c = bench_phase(gather_np_prealloc)
-    t_cgraph_c = bench_phase(lambda: list(connected_components(node_ids, edges_np_c)))
-    t_total_c = t_gather_c + t_cgraph_c
-
-    print(f"  {'C) np pre-alloc fill':<28} {t_gather_c*1000:>9.1f}ms {t_cgraph_c*1000:>9.1f}ms "
-          f"{t_total_c*1000:>9.1f}ms  {t_gather_c/t_total_c*100:>7.1f}% {t_cgraph_c/t_total_c*100:>7.1f}%")
-
-    # --- Strategy D: two lists then column_stack ---
-    def gather_np_twolists():
-        src = [b.node_a for b in branches]
-        dst = [b.node_b for b in branches]
-        return np.column_stack([np.array(src, dtype=np.int32),
-                                np.array(dst, dtype=np.int32)])
-
-    edges_np_d = gather_np_twolists()
-
-    t_gather_d = bench_phase(gather_np_twolists)
-    t_cgraph_d = bench_phase(lambda: list(connected_components(node_ids, edges_np_d)))
-    t_total_d = t_gather_d + t_cgraph_d
-
-    print(f"  {'D) np from two lists':<28} {t_gather_d*1000:>9.1f}ms {t_cgraph_d*1000:>9.1f}ms "
-          f"{t_total_d*1000:>9.1f}ms  {t_gather_d/t_total_d*100:>7.1f}% {t_cgraph_d/t_total_d*100:>7.1f}%")
-
-    # --- Strategy E: tuples, but pre-build node_ids as range ---
-    # (measures: what if node_ids is already list(range(n))?)
-    # This is the same as A but highlights that node_ids creation is free
-
-    print()
-    return {
-        'A_total': t_total_a, 'B_total': t_total_b,
-        'C_total': t_total_c, 'D_total': t_total_d,
-    }
+    totals = [
+        g_tuples + t_nid_tuples,
+        g_split + t_split_list,
+        g_np2d + t_nid_np2d,
+        g_split_np + t_split_np,
+    ]
+    print(f"  {'TOTAL':<25} {totals[0] * 1000:>8.1f}ms {totals[1] * 1000:>10.1f}ms"
+          f" {totals[2] * 1000:>9.1f}ms {totals[3] * 1000:>10.1f}ms")
+    print(f"  {'vs tuples':<25} {'base':>9} {totals[0] / totals[1]:>10.2f}x"
+          f" {totals[0] / totals[2]:>9.2f}x {totals[0] / totals[3]:>10.2f}x")
 
 
 def main():
-    print("=" * 90)
-    print("Connected Components: cost breakdown by phase")
-    print("  gather = extracting edges from Branch objects (Python)")
-    print("  cgraph = connected_components() call (parsing + C algo + result build)")
-    print("=" * 90)
+    print("=" * 80)
+    print("Connected Components: 3-phase cost breakdown")
+    print("  1. gather = extracting edges from Branch objects (Python)")
+    print("  2. parse  = nid hash map + edge translation (C input handling)")
+    print("  3. C algo = union-find + result set construction")
+    print("=" * 80)
 
     for exp in [4, 5, 6]:
         run_benchmark(10 ** exp)

@@ -93,10 +93,7 @@ Parallel edges are supported — each edge is tracked by ID, so two edges betwee
 
 ### Cost breakdown
 
-Every cgraph call has two phases:
-
-1. **Data gathering** — extracting edges from your domain objects (pure Python, cgraph can't optimize this)
-2. **cgraph call** — parsing input + C algorithm + building result sets
+Every cgraph call has three cost phases. Connected components at 1M nodes, sparse random graph (~3 edges per node):
 
 ```python
 class Branch:
@@ -106,49 +103,43 @@ class Branch:
         self.node_b = node_b
 ```
 
-Connected components on sparse random graphs (~3 edges per node):
+| Phase | Tuples | Split lists | numpy (m,2) |
+|-------|-------:|------------:|------------:|
+| 1. Gather (Python loop over objects) | 68ms | **24ms** | 72ms |
+| 2. Parse (hash map + edge translation) | 29ms | 25ms | **10ms** |
+| 3. C algorithm (union-find + results) | 61ms | 61ms | 61ms |
+| **Total** | **158ms** | **110ms** | **143ms** |
+| vs tuples | baseline | **1.43x** | 1.11x |
 
-| Nodes | Gather | cgraph | Total | Gather % | cgraph % |
-|------:|-------:|-------:|------:|---------:|---------:|
-| 1K | <0.001s | <0.001s | 0.0001s | 50% | 50% |
-| 10K | 0.001s | <0.001s | 0.001s | 59% | 41% |
-| 100K | 0.007s | 0.008s | 0.015s | 47% | 53% |
-| 1M | 0.068s | 0.089s | 0.157s | 43% | 57% |
-
-At small scales, data gathering dominates. At large scales, the C core dominates.
+- **Gather** is pure Python — extracting `node_a`/`node_b` from your objects. cgraph can't optimize this, but the interface choice affects it (tuples cost 68ms, flat lists cost 24ms).
+- **Parse** is the C-side input handling — building the node-ID hash map and translating edges to internal indices. Numpy skips per-element Python unpacking via buffer reads.
+- **C algorithm** is the actual computation. Fixed cost, identical across all interfaces.
 
 ### Data gathering strategies
 
-How you build the edge data matters. Connected components at 1M nodes:
+Two calling conventions — both accept Python lists or numpy arrays:
 
-| Strategy | Gather | cgraph | Total | Speedup |
-|----------|-------:|-------:|------:|--------:|
-| A) list of tuples | 0.072s | 0.093s | **0.165s** | baseline |
-| **B) two flat lists** | **0.036s** | **0.087s** | **0.123s** | **1.34x** |
-
-Strategy A (tuples) — simplest, no dependencies:
+**Strategy A** (tuples) — simplest:
 ```python
 edges = [(b.node_a, b.node_b) for b in branches]
 connected_components(node_ids, edges)
 ```
 
-Strategy B (two flat lists) — **fastest**, no dependencies:
+**Strategy B** (two flat lists) — **1.43x faster** end-to-end:
 ```python
 src = [b.node_a for b in branches]
 dst = [b.node_b for b in branches]
 connected_components(node_ids, src, dst)
 ```
 
-Strategy B is faster because building two flat lists avoids creating m tuple objects, and cgraph parses two flat lists more efficiently than unpacking tuples.
-
-Both numpy arrays and Python lists are accepted for `src`/`dst`/`edges`.
+Strategy B is faster because building two flat lists avoids creating 1.5M tuple objects. The C parsing cost is similar — `PyLong_AsLong` per element dominates regardless of container shape.
 
 ### Benchmarks vs networkx
 
-End-to-end from `Branch` objects. Sparse random graphs, ~3 edges per node.
+End-to-end from `Branch` objects (gather + algorithm). Sparse random graphs, ~3 edges per node.
 
 - **networkx**: `add_nodes_from` + `add_edges_from` + algorithm
-- **cgraph**: gather tuples from objects + algorithm
+- **cgraph**: gather edges from objects + algorithm
 
 | Algorithm | Nodes | cgraph | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
@@ -157,7 +148,7 @@ End-to-end from `Branch` objects. Sparse random graphs, ~3 edges per node.
 | Connected Components | 100K | 0.015s | 0.349s | **23x** |
 | Connected Components | 1M | 0.157s | 6.81s | **43x** |
 | Bridges | 1M | 0.401s | 21.42s | **53x** |
-| AP | 1M | 0.350s | 8.97s | **26x** |
+| Articulation Points | 1M | 0.350s | 8.97s | **26x** |
 | BFS | 1M | 0.165s | 13.62s | **82x** |
 | Dijkstra | 1M | 0.390s | 11.11s | **29x** |
 
