@@ -502,13 +502,416 @@ mask parameter that defaults to NULL, preserving the current fast path.
 3. **Phase 5d** — composite `for_each_edge_excluded` helper
 4. **Phase 5b** — edge-addition views (lower priority, implement on demand)
 
+## Phase 6: MultiGraph, Node Masks, and Edge-Path Enumeration
+
+### Motivation
+
+Many real-world graph problems operate on **multigraphs** — graphs where multiple
+edges connect the same pair of nodes (parallel cables, redundant links, alternative
+routes). These problems also need:
+
+- **Node-masked views**: exclude nodes without copying the graph
+- **Edge-path enumeration**: find all paths where each physical edge is used at most
+  once (edge-disjoint path exploration)
+
+These three features are independent but reinforce each other. Together they cover the
+full spectrum of "what-if" analysis on multigraphs.
+
+### Key Insight: cgraph Already Handles Parallel Edges Internally
+
+The C layer imposes **no uniqueness constraint** on edges:
+
+1. **EdgeList** stores edges by index. `edges = [(1,2), (1,2), (2,3)]` creates three
+   edges with indices 0, 1, 2. No deduplication.
+
+2. **CSR (`build_adj`)** counts every edge occurrence. Node 1 gets two adjacency
+   entries pointing to node 2, each with a distinct `eid`.
+
+3. **Tarjan's bridge/AP/BCC** uses `peid` (parent edge ID) to avoid the parent edge.
+   With parallel edges `(u,v,eid=0)` and `(u,v,eid=1)`:
+   - Traverse eid=0 to reach v → `peid[v] = 0`
+   - At v, encounter eid=1 back to u → `eid=1 != peid[v]=0` → treat as back-edge
+   - This gives `low[v] <= disc[u]`, so eid=0 is **not** a bridge (correct!)
+   - If there's only one edge between u and v, it may be a bridge (also correct)
+
+4. **Union-find (CC)** calls `uf_union(src, dst)` per edge. Duplicate edges just
+   union the same pair twice — no-op. Correct.
+
+5. **BFS** marks nodes as visited. Multiple edges to the same neighbor are harmless —
+   the neighbor is visited via whichever edge comes first.
+
+6. **Dijkstra** relaxes via the minimum weight. Parallel edges with different weights
+   are handled correctly — the lighter edge wins.
+
+**Conclusion**: Phase 6a requires **no C changes** for core algorithms. The work is
+Python-level: documentation, tests, API clarity, and the `edge_indices(u, v)` method
+(already implemented) returning all edge indices between a node pair.
+
+#### Phase 6a: MultiGraph Support (Formalization)
+
+**Goal**: Officially support parallel edges. Document the behavior, add tests, ensure
+all algorithms produce correct results on multigraphs.
+
+**Python changes** (`__init__.py`):
+
+1. Update `Graph.__init__` docstring to state that duplicate edges are allowed.
+   Each duplicate gets a unique edge index (its position in the input list).
+
+2. Add `Graph.is_multigraph` property — True if any node pair has >1 edge.
+
+3. Verify `Graph.edge_indices(u, v)` returns all indices for parallel edges (it
+   should already, since it iterates the CSR and collects all `eid` values for
+   matching `adj` entries).
+
+4. Update `GraphView.without_edges()` docstring to clarify behavior with parallel
+   edges: masking edge index 0 still leaves edge index 1 active.
+
+**Test changes** (`tests/`):
+
+New test file `test_multigraph.py` covering:
+
+```python
+def test_cc_parallel_edges():
+    """Parallel edges don't affect component count."""
+    g = Graph([1, 2, 3], [(1,2), (1,2), (2,3)])
+    assert g.connected_components() == [{1, 2, 3}]
+
+def test_bridges_parallel_edges_not_bridges():
+    """An edge between u,v is not a bridge if a parallel edge exists."""
+    g = Graph([1, 2, 3], [(1,2), (1,2), (2,3)])
+    assert g.bridges() == [(2, 3)]  # (1,2) is NOT a bridge
+
+def test_bridges_single_edge_is_bridge():
+    """Single edge between u,v is a bridge if removal disconnects."""
+    g = Graph([1, 2, 3], [(1,2), (2,3)])
+    assert set(map(frozenset, g.bridges())) == {frozenset({1,2}), frozenset({2,3})}
+
+def test_edge_indices_parallel():
+    """edge_indices returns all indices for parallel edges."""
+    g = Graph([1, 2, 3], [(1,2), (1,2), (2,3)])
+    assert sorted(g.edge_indices(1, 2)) == [0, 1]
+    assert g.edge_indices(2, 3) == [2]
+
+def test_mask_one_of_parallel():
+    """Masking one parallel edge keeps the other active."""
+    g = Graph([1, 2, 3], [(1,2), (1,2), (2,3)])
+    view = g.without_edges([0])
+    assert view.connected_components() == [{1, 2, 3}]  # still connected via edge 1
+
+def test_mask_all_parallel():
+    """Masking all parallel edges disconnects."""
+    g = Graph([1, 2, 3], [(1,2), (1,2), (2,3)])
+    view = g.without_edges([0, 1])
+    components = view.connected_components()
+    assert len(components) == 2
+
+def test_bfs_parallel_edges():
+    """BFS visits node once regardless of parallel edges."""
+    g = Graph([1, 2, 3], [(1,2), (1,2), (2,3)])
+    assert set(g.bfs(1)) == {1, 2, 3}
+
+def test_dijkstra_parallel_edges_picks_lighter():
+    """Shortest path picks the lighter of parallel edges."""
+    g = Graph([1, 2, 3], [(1,2), (1,2), (2,3)])
+    dist, path = g.shortest_path([10.0, 1.0, 5.0], 1, 3)
+    assert dist == 6.0  # via edge 1 (weight 1.0) + edge 2 (weight 5.0)
+
+def test_edge_count_with_parallel():
+    """edge_count includes all parallel edges."""
+    g = Graph([1, 2], [(1,2), (1,2), (1,2)])
+    assert g.edge_count == 3
+```
+
+**C changes**: None expected. If any algorithm incorrectly deduplicates or crashes
+with parallel edges, fix as a bug.
+
+**Migration path**: Purely additive. Existing users see no change.
+
+#### Phase 6b: Node-Masked Views
+
+**Goal**: Exclude nodes (and all their incident edges) from a graph view without
+copying the graph.
+
+**Why general**: Subgraph extraction, iterative pruning ("remove all leaves"), node
+failure analysis ("what if node X goes down"). The node-mask counterpart to Phase 5's
+edge masks.
+
+**C changes** (`_core.c`):
+
+1. All CSR-traversing functions gain an optional `uint8_t *node_mask` parameter
+   (alongside the existing `edge_mask`). Convention: `node_mask[v] = 1` means node
+   `v` is excluded.
+
+2. Inner loop modification:
+
+   ```c
+   // Current (with edge mask only):
+   for (int i = al->offset[u]; i < al->offset[u+1]; i++) {
+       if (mask && mask[al->eid[i]]) continue;
+       int v = al->adj[i];
+       // ...
+   }
+
+   // With node mask:
+   for (int i = al->offset[u]; i < al->offset[u+1]; i++) {
+       int v = al->adj[i];
+       if (node_mask && node_mask[v]) continue;      // skip excluded node
+       if (edge_mask && edge_mask[al->eid[i]]) continue;  // skip excluded edge
+       // ...
+   }
+   ```
+
+3. Outer loops (BFS queue, DFS start nodes, CC iteration) must also skip excluded
+   nodes:
+
+   ```c
+   // CC union-find:
+   for (int i = 0; i < n; i++) {
+       if (node_mask && node_mask[i]) continue;  // exclude from components
+   }
+
+   // BFS/DFS start:
+   if (node_mask && node_mask[source]) → error or empty result
+   ```
+
+4. Affected functions: same set as Phase 5a (CC, bridges, AP, BCC, BFS, Dijkstra,
+   SSSP, multi-source Dijkstra). Each gains a `node_mask` parameter.
+
+**Python changes** (`__init__.py`):
+
+```python
+class GraphView:
+    # Existing: _edge_mask
+    # New: _node_mask
+
+    def __init__(self, graph, excluded_edge_indices=None, excluded_node_ids=None):
+        self._base = graph
+        self._edge_mask = ...  # as before
+        self._node_mask = bytearray(graph.node_count) if excluded_node_ids else None
+        if excluded_node_ids:
+            for nid in excluded_node_ids:
+                idx = self._base._node_index(nid)
+                self._node_mask[idx] = 1
+
+# On Graph:
+def without_nodes(self, node_ids: Collection[int]) -> GraphView:
+    """View excluding specified nodes and all their incident edges."""
+
+# On GraphView (chainable):
+def without_nodes(self, node_ids: Collection[int]) -> GraphView:
+    """Further exclude nodes from this view."""
+```
+
+**API composition** — views are chainable:
+```python
+view = graph.without_edges([3, 7]).without_nodes([42])
+components = view.connected_components()
+```
+
+**Memory cost**: 1 byte per node. Negligible (1M nodes = 1 MB).
+
+**Tests**: Parallel structure to `test_graph_view.py`:
+- CC/bridges/BFS/Dijkstra with nodes excluded
+- Excluding source node in BFS/Dijkstra → error
+- Excluding all nodes → empty result
+- Combined edge + node masks
+- Multigraph + node masks
+
+#### Phase 6c: All-Edge-Paths Enumeration
+
+**Goal**: Find all paths from source to targets where each **edge** is traversed at
+most once. Nodes may be visited multiple times (important for multigraphs where
+multiple edges connect the same pair).
+
+**Why general**: This is the edge-disjoint path exploration problem. Applications:
+
+- **Network reliability**: How many independent routes exist between A and B?
+- **Routing with redundancy**: Find all ways to route through a network without
+  reusing any physical link.
+- **Switch configuration**: Find all switch-opening sequences that connect a source
+  to a target (the N-1 use case, but the algorithm is domain-free).
+
+**Algorithm**: Stack-based DFS with per-edge visit tracking.
+
+```
+visited_edges = bitset(edge_count)  // 1 bit per edge
+stack = [(source, iterator over source's CSR neighbors)]
+
+while stack not empty:
+    u, neighbors = stack.top()
+    edge = next(neighbors)
+    if edge is None:
+        stack.pop()
+        if stack not empty:
+            unmark last visited edge  // backtrack
+        continue
+    if visited_edges[edge.eid]:
+        continue
+    v = edge.adj
+    if v in targets:
+        yield path  // found a complete path
+    visited_edges[edge.eid] = 1
+    if len(stack) < cutoff:
+        stack.push((v, iterator over v's CSR neighbors))
+```
+
+**Key properties**:
+- Edge-uniqueness (not node-uniqueness): each edge index used at most once per path
+- Node revisits allowed: critical for multigraphs where u→v→u→w is valid if different
+  edges are used for each traversal
+- Cutoff: maximum path length (number of edges). Prevents combinatorial explosion.
+- Yields paths lazily (generator): caller can stop early
+
+**C implementation** (`_core.c`):
+
+```c
+typedef struct {
+    int source;
+    int *targets;        // sorted array for binary search
+    int n_targets;
+    int cutoff;
+    AdjList *al;
+    uint8_t *edge_mask;  // from GraphView (NULL if no mask)
+    uint8_t *node_mask;  // from GraphView (NULL if no mask)
+} EdgePathCtx;
+```
+
+Two implementation approaches:
+
+**Approach 1: Batch** — Enumerate all paths in C, return as list of lists.
+Simpler C code, but may use too much memory if path count is large.
+
+**Approach 2: Iterator** — Return a Python iterator backed by C state. Each
+`__next__` call resumes the DFS from where it left off. More complex C (must
+save/restore stack state), but memory-efficient.
+
+Decision: Start with Approach 1 (batch). If memory is a concern for large graphs,
+add Approach 2 as an optimization.
+
+**Python API**:
+
+```python
+# On Graph:
+def all_edge_paths(
+    self,
+    source: int,
+    targets: int | Collection[int],
+    cutoff: int | None = None,
+) -> list[list[int]]:
+    """Find all paths from source to targets using each edge at most once.
+
+    Returns a list of paths. Each path is a list of edge indices.
+    Nodes may appear multiple times in a path (relevant for multigraphs).
+
+    cutoff: maximum number of edges per path. None = no limit (use with
+            caution on dense graphs).
+    """
+
+# On GraphView (same signature, respects masks):
+def all_edge_paths(self, source, targets, cutoff=None) -> list[list[int]]:
+    """Same, but skips masked edges/nodes."""
+```
+
+**Return format**: `list[list[int]]` where each inner list contains **edge indices**
+(not node IDs). The caller can recover node sequences from edge indices if needed:
+
+```python
+g = Graph([1, 2, 3, 4], [(1,2), (2,3), (2,3), (3,4)])
+paths = g.all_edge_paths(source=1, targets=4, cutoff=3)
+# Example result: [[0, 1, 3], [0, 2, 3]]
+# Path 1: edge 0 (1→2), edge 1 (2→3), edge 3 (3→4)
+# Path 2: edge 0 (1→2), edge 2 (2→3), edge 3 (3→4)  — uses other parallel edge
+```
+
+**Interaction with masks**: Masked edges are never traversed. Masked nodes are never
+entered. This allows:
+```python
+view = graph.without_edges(faulty_edges)
+paths = view.all_edge_paths(source, targets, cutoff=5)
+```
+No need to rebuild the graph — just mask the faulty edges and enumerate paths.
+
+**Performance expectation**: The algorithm is inherently exponential in the worst case
+(all paths in a complete graph). The cutoff parameter bounds this. For sparse graphs
+with small cutoff (typical use case), the C implementation should be 10-50x faster
+than the equivalent Python DFS due to:
+- No Python object creation per edge traversal
+- Bitset for visited edges (vs Python set/list)
+- Direct CSR array access (vs `graph.edges(node, keys=True)` iterator)
+
+**Benchmarks**:
+```python
+def test_all_edge_paths_vs_networkx(exponent):
+    """Compare against nx.all_simple_edge_paths on simple graphs."""
+
+def test_all_edge_paths_multigraph_scaling(parallel_factor):
+    """Measure path count growth with increasing parallel edges."""
+
+def test_all_edge_paths_cutoff_effectiveness():
+    """Verify cutoff prevents combinatorial explosion."""
+```
+
+### Phase 6 Dependencies
+
+```
+Phase 5a (edge masks)     ── done
+Phase 5b (edge addition)  ── independent, deferred
+Phase 6a (multigraph)     ── no C changes, tests + docs only
+Phase 6b (node masks)     ── C changes, independent of 6a
+Phase 6c (all-edge-paths) ── C changes, benefits from 6a (parallel edges)
+                              and 6b (node masks in path enumeration)
+```
+
+6a can ship immediately (test + document existing behavior).
+6b and 6c are independent and can be developed in parallel.
+
+### Suggested Implementation Order
+
+1. **Phase 6a** — multigraph formalization (smallest effort, unblocks 6c testing)
+2. **Phase 6b** — node-masked views (moderate effort, reuses Phase 5a patterns)
+3. **Phase 6c** — all-edge-paths (largest effort, biggest performance impact)
+
+### What Remains Outside cgraph After Phase 6
+
+Two N-1 operations are too domain-specific for a generic graph library:
+
+1. **Edge contraction with nesting** (`concentrate_parallel_and_series_edges`):
+   Iteratively collapses parallel and series edges while building a recursive
+   NestedEdgeIds structure for path reconstruction. This is a domain-specific
+   graph simplification — the "nesting" semantics (parallel = OR, series = AND)
+   have no general graph-theory equivalent.
+
+2. **Node splitting with edge redistribution** (`_update_graph` / `_revert_graph`):
+   Replaces one node with two nodes and redistributes edges based on partition
+   membership. This is a graph mutation that conflicts with cgraph's immutable-view
+   philosophy.
+
+Both operations would be **significantly simpler to implement on top of cgraph** than
+on networkx, because the underlying primitives (CC, bridges, views) are faster and
+the edge-index model eliminates the need for manual bookkeeping. But the operations
+themselves are application-level logic, not library primitives.
+
 ## File Structure (target)
 
 ```
 src/cgraph/
 ├── __init__.py          # Public API — all user-facing symbols
-├── _core.c              # C primitives (union-find, BFS, Dijkstra, Tarjan)
+├── _core.c              # C primitives (union-find, BFS, Dijkstra, Tarjan,
+│                        #   edge-path enumeration, masked variants)
 ├── _paths.py            # Python tier: shortest_path, eccentricity
 ├── _composites.py       # Python tier: 2-edge-connected, simple paths
 ├── py.typed
+
+tests/
+├── unit_tests/
+│   ├── test_correctness.py
+│   ├── test_graph_class.py
+│   ├── test_graph_view.py       # Phase 5a edge-mask tests
+│   ├── test_multigraph.py       # Phase 6a parallel-edge tests
+│   ├── test_node_mask.py        # Phase 6b node-mask tests
+│   └── test_edge_paths.py       # Phase 6c all-edge-paths tests
+├── performance_tests/
+│   ├── test_masked_views.py     # Phase 5c benchmarks
+│   ├── test_edge_paths_perf.py  # Phase 6c benchmarks
+│   └── ...
 ```
