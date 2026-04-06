@@ -27,16 +27,17 @@ typedef struct {
     int n;
 } UF;
 
-static inline void uf_init(UF *uf, int n) {
+static inline int uf_init(UF *uf, int n) {
     uf->n = n;
-    uf->parent = (int *)malloc(n * sizeof(int));
-    uf->rank   = (int *)calloc(n, sizeof(int));
-    for (int i = 0; i < n; i++) uf->parent[i] = i;
+    uf->parent = (int *)malloc(2 * (size_t)n * sizeof(int));
+    if (!uf->parent) return -1;
+    uf->rank = uf->parent + n;
+    for (int i = 0; i < n; i++) { uf->parent[i] = i; uf->rank[i] = 0; }
+    return 0;
 }
 
 static inline void uf_free(UF *uf) {
-    free(uf->parent);
-    free(uf->rank);
+    free(uf->parent);  /* rank is part of same allocation */
 }
 
 static inline int uf_find(UF *uf, int x) {
@@ -549,26 +550,20 @@ typedef struct {
  */
 static int compute_components(int n, EdgeList *el, ComponentResult *cr) {
     UF uf;
-    uf_init(&uf, n);
+    if (uf_init(&uf, n) < 0) { PyErr_NoMemory(); return -1; }
     for (Py_ssize_t i = 0; i < el->m; i++)
         uf_union(&uf, EDGE_SRC(el, i), EDGE_DST(el, i));
 
-    cr->labels = (int *)malloc(n * sizeof(int));
-    if (!cr->labels) {
+    /* labels + root_to_id in one allocation */
+    int *buf = (int *)malloc(2 * (size_t)n * sizeof(int));
+    if (!buf) {
         uf_free(&uf);
         PyErr_NoMemory();
         return -1;
     }
-
-    /* Assign sequential component IDs using a root->id mapping */
-    int *root_to_id = (int *)malloc(n * sizeof(int));
-    if (!root_to_id) {
-        free(cr->labels);
-        uf_free(&uf);
-        PyErr_NoMemory();
-        return -1;
-    }
-    memset(root_to_id, -1, n * sizeof(int));
+    cr->labels = buf;
+    int *root_to_id = buf + n;
+    memset(root_to_id, -1, (size_t)n * sizeof(int));
 
     int num_comp = 0;
     for (int i = 0; i < n; i++) {
@@ -579,7 +574,6 @@ static int compute_components(int n, EdgeList *el, ComponentResult *cr) {
     }
     cr->num_comp = num_comp;
 
-    free(root_to_id);
     uf_free(&uf);
     return 0;
 }
@@ -601,40 +595,34 @@ static PyObject *py_connected_components(PyObject *self, PyObject *args) {
     }
     free_edges(&el);
 
-    int num_comp = cr.num_comp;
+    int nc = cr.num_comp;
 
-    /* Bucket nodes by component */
-    int *sizes  = (int *)calloc(num_comp, sizeof(int));
-    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
+    /* Build sets directly — no intermediate bucketing */
+    PyObject *result = PyList_New(nc);
+    if (!result) { free(cr.labels); return NULL; }
 
-    int **buckets = (int **)malloc(num_comp * sizeof(int *));
-    int *offsets  = (int *)calloc(num_comp, sizeof(int));
-    for (int c = 0; c < num_comp; c++)
-        buckets[c] = (int *)malloc(sizes[c] * sizeof(int));
-    for (int i = 0; i < n; i++) {
-        int c = cr.labels[i];
-        buckets[c][offsets[c]++] = i;
-    }
-
-    /* Build Python list of sets */
-    PyObject *result = PyList_New(num_comp);
-    if (!result) goto cleanup;
-
-    for (int c = 0; c < num_comp; c++) {
-        PyObject *s = PySet_New(NULL);
-        if (!s) { Py_DECREF(result); result = NULL; goto cleanup; }
-        for (int j = 0; j < sizes[c]; j++) {
-            PyObject *val = PyLong_FromLong(buckets[c][j]);
-            PySet_Add(s, val);
-            Py_DECREF(val);
+    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
+    if (!sets) { free(cr.labels); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
+    for (int c = 0; c < nc; c++) {
+        sets[c] = PySet_New(NULL);
+        if (!sets[c]) {
+            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
+            free(sets); free(cr.labels); Py_DECREF(result);
+            return NULL;
         }
-        PyList_SET_ITEM(result, c, s);
     }
 
-cleanup:
-    free(cr.labels); free(sizes); free(offsets);
-    for (int c = 0; c < num_comp; c++) free(buckets[c]);
-    free(buckets);
+    for (int i = 0; i < n; i++) {
+        PyObject *val = PyLong_FromLong(i);
+        PySet_Add(sets[cr.labels[i]], val);
+        Py_DECREF(val);
+    }
+
+    for (int c = 0; c < nc; c++)
+        PyList_SET_ITEM(result, c, sets[c]);
+
+    free(sets);
+    free(cr.labels);
     return result;
 }
 
@@ -1741,26 +1729,30 @@ static PyObject *py_cc_nid(PyObject *self, PyObject *args) {
     if (compute_components(n, &ctx.el, &cr) < 0) { nid_free(&ctx); return NULL; }
 
     int nc = cr.num_comp;
-    int *sizes  = (int *)calloc(nc, sizeof(int));
-    int **bkt   = (int **)malloc(nc * sizeof(int *));
-    int *off    = (int *)calloc(nc, sizeof(int));
-    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
-    for (int c = 0; c < nc; c++) bkt[c] = (int *)malloc(sizes[c] * sizeof(int));
-    for (int i = 0; i < n; i++) { int c = cr.labels[i]; bkt[c][off[c]++] = i; }
 
+    /* Build sets directly — no intermediate bucketing */
     PyObject *result = PyList_New(nc);
-    if (result) {
-        for (int c = 0; c < nc; c++) {
-            PyObject *s = PySet_New(NULL);
-            for (int j = 0; j < sizes[c]; j++)
-                PySet_Add(s, ctx.nid_items[bkt[c][j]]);
-            PyList_SET_ITEM(result, c, s);
+    if (!result) { free(cr.labels); nid_free(&ctx); return NULL; }
+
+    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
+    if (!sets) { free(cr.labels); Py_DECREF(result); nid_free(&ctx); PyErr_NoMemory(); return NULL; }
+    for (int c = 0; c < nc; c++) {
+        sets[c] = PySet_New(NULL);
+        if (!sets[c]) {
+            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
+            free(sets); free(cr.labels); Py_DECREF(result); nid_free(&ctx);
+            return NULL;
         }
     }
 
-    free(cr.labels); free(sizes); free(off);
-    for (int c = 0; c < nc; c++) free(bkt[c]);
-    free(bkt);
+    for (int i = 0; i < n; i++)
+        PySet_Add(sets[cr.labels[i]], ctx.nid_items[i]);
+
+    for (int c = 0; c < nc; c++)
+        PyList_SET_ITEM(result, c, sets[c]);
+
+    free(sets);
+    free(cr.labels);
     nid_free(&ctx);
     return result;
 }
@@ -1780,26 +1772,32 @@ static PyObject *py_cc_nid_split(PyObject *self, PyObject *args) {
     if (compute_components(n, &ctx.el, &cr) < 0) { nid_free(&ctx); return NULL; }
 
     int nc = cr.num_comp;
-    int *sizes  = (int *)calloc(nc, sizeof(int));
-    int **bkt   = (int **)malloc(nc * sizeof(int *));
-    int *off    = (int *)calloc(nc, sizeof(int));
-    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
-    for (int c = 0; c < nc; c++) bkt[c] = (int *)malloc(sizes[c] * sizeof(int));
-    for (int i = 0; i < n; i++) { int c = cr.labels[i]; bkt[c][off[c]++] = i; }
 
+    /* Build sets directly — no intermediate bucketing */
     PyObject *result = PyList_New(nc);
-    if (result) {
-        for (int c = 0; c < nc; c++) {
-            PyObject *s = PySet_New(NULL);
-            for (int j = 0; j < sizes[c]; j++)
-                PySet_Add(s, ctx.nid_items[bkt[c][j]]);
-            PyList_SET_ITEM(result, c, s);
+    if (!result) { free(cr.labels); nid_free(&ctx); return NULL; }
+
+    /* Create all sets upfront */
+    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
+    if (!sets) { free(cr.labels); Py_DECREF(result); nid_free(&ctx); PyErr_NoMemory(); return NULL; }
+    for (int c = 0; c < nc; c++) {
+        sets[c] = PySet_New(NULL);
+        if (!sets[c]) {
+            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
+            free(sets); free(cr.labels); Py_DECREF(result); nid_free(&ctx);
+            return NULL;
         }
     }
 
-    free(cr.labels); free(sizes); free(off);
-    for (int c = 0; c < nc; c++) free(bkt[c]);
-    free(bkt);
+    /* Single pass: add each node to its component set */
+    for (int i = 0; i < n; i++)
+        PySet_Add(sets[cr.labels[i]], ctx.nid_items[i]);
+
+    for (int c = 0; c < nc; c++)
+        PyList_SET_ITEM(result, c, sets[c]);
+
+    free(sets);
+    free(cr.labels);
     nid_free(&ctx);
     return result;
 }
