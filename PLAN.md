@@ -93,6 +93,65 @@ def test_<algorithm>_memory(exponent):
     """Peak memory must be O(V + E)."""
 ```
 
+## Phase 4: Pre-indexed Edge Insertion API
+
+### Problem
+
+Every cgraph algorithm call currently pays the cost of:
+1. **Node-ID → index mapping**: Building an IntMap hash table from node_ids
+2. **Edge translation**: Looking up both endpoints per edge in the hash map
+3. **CSR construction**: Building the adjacency list from translated edges
+
+For users who already have indexed data (node IDs are contiguous 0..n-1, edges
+reference these indices), steps 1-2 are pure overhead. This is common when data
+comes from graph databases with contiguous IDs, or when running multiple
+algorithms on the same graph.
+
+### Proposed: Graph class
+
+```python
+class Graph:
+    """Pre-indexed graph for repeated algorithm calls.
+
+    Skips hash map construction and edge translation entirely.
+    """
+
+    def __init__(self, n: int, edges: np.ndarray):
+        """
+        n : Number of nodes (IDs in [0, n)).
+        edges : (m, 2) int32 array of index-based edges.
+        """
+
+    def connected_components(self) -> list[set[int]]: ...
+    def bridges(self) -> list[tuple[int, int]]: ...
+    def bfs(self, source: int) -> list[int]: ...
+    def shortest_path(self, weights, source, target) -> list[int]: ...
+    def shortest_path_lengths(self, weights, source, cutoff=None) -> dict: ...
+    # etc — wraps existing _core index-based functions
+```
+
+The existing `_core` C functions (connected_components, bridges, etc.) already
+accept `(n, edges)` directly — `Graph` just wraps them without the nid_parse
+overhead.
+
+### Implementation phases
+
+**Phase 4a**: Expose Graph class wrapping existing index-based C functions.
+Small effort. Expected speedup for tuple input at 1M: ~2-3x for CC/BFS, ~1.1-1.2x
+for heavier algorithms where algo time dominates.
+
+**Phase 4b**: Pre-built CSR reuse. New `_core.build_adj_handle()` returning
+PyCapsule with CSR data. Algorithm functions accept optional pre-built handle.
+Eliminates CSR rebuild on repeated calls (~0.02s at 1M).
+
+**Phase 4c**: MappedGraph — wrapper that maps node IDs once at construction,
+then delegates to Graph. `MappedGraph(node_ids, edges)` pays mapping cost once;
+all subsequent algorithm calls run at pre-indexed speed.
+
+### Migration path
+
+Existing API stays unchanged. Graph/MappedGraph are opt-in for power users.
+
 ## File Structure (target)
 
 ```

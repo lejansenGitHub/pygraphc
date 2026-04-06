@@ -1,0 +1,40 @@
+
+=== End-to-end (IDs: contiguous) ===
+algorithm                             n       tuples        numpy
+------------------------------------------------------------------
+connected_components             100000     0.007568     0.059765
+bridges                          100000     0.007936     0.063005
+articulation_points              100000     0.008210     0.062432
+biconnected_components           100000     0.016116     0.071611
+bfs                              100000     0.004773     0.058978
+shortest_path                    100000     0.009489     0.063645
+sssp_lengths                     100000     0.023159     0.081194
+
+connected_components            1000000     0.089431     0.670708
+bridges                         1000000     0.290542     0.888690
+articulation_points             1000000     0.281442     0.889681
+biconnected_components          1000000     0.517866     1.115137
+bfs                             1000000     0.105802     0.701655
+shortest_path                   1000000     0.292877     0.863295
+sssp_lengths                    1000000     0.547982     1.135974
+
+
+=== End-to-end (IDs: non-contiguous) ===
+algorithm                             n       tuples        numpy
+------------------------------------------------------------------
+connected_components             100000     0.006835     0.061385
+bridges                          100000     0.008248     0.062950
+articulation_points              100000     0.007874     0.062620
+biconnected_components           100000     0.015504     0.071453
+bfs                              100000     0.005313     0.059484
+shortest_path                    100000     0.009835     0.062706
+sssp_lengths                     100000     0.020689     0.075879
+
+connected_components            1000000     0.195916     0.776770
+bridges                         1000000     0.402298     0.977820
+articulation_points             1000000     0.389972     0.972817
+biconnected_components          1000000     0.621752     1.207594
+bfs                             1000000     0.214232     0.784509
+shortest_path                   1000000     0.413026     0.972910
+sssp_lengths                    1000000     0.672166     1.218622
+
