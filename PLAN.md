@@ -502,7 +502,7 @@ mask parameter that defaults to NULL, preserving the current fast path.
 3. **Phase 5d** — composite `for_each_edge_excluded` helper
 4. **Phase 5b** — edge-addition views (lower priority, implement on demand)
 
-## Phase 6: MultiGraph, Node Masks, and Edge-Path Enumeration
+## Phase 6: MultiGraph, Node Masks, and Edge-Path Enumeration ✅ DONE
 
 ### Motivation
 

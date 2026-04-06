@@ -49,6 +49,16 @@ jobs:
 
   performance:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        suite:
+          - name: graph-algorithms
+            files: test_performance.py test_bfs_perf.py
+          - name: bridges-dijkstra
+            files: test_bridges_perf.py test_dijkstra_perf.py
+          - name: masked-views
+            files: test_masked_views.py
+    name: performance (${{ matrix.suite.name }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -57,7 +67,9 @@ jobs:
       - name: Install
         run: pip install -e ".[dev,benchmark]" vendor/blueprint_linters-*.whl
       - name: Performance tests
-        run: pytest tests/performance_tests/ -v -s
+        run: |
+          cd tests/performance_tests
+          pytest ${{ matrix.suite.files }} -v -s
 
   coverage:
     runs-on: ubuntu-latest
