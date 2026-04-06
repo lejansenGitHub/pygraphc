@@ -128,7 +128,18 @@ End-to-end from `Branch` objects using split lists. Connected components at 1M n
 | Random sparse (avg degree 3) | 54,266 | 35ms | 74ms | 109ms |
 | 1M isolated (0 edges) | 1,000,000 | 0ms | 212ms | 212ms |
 
-Few large components are cheap — union-find and bulk `PySet_Add` are efficient. Many small components are expensive because each `PySet_New()` allocates a Python set object. The gather cost scales with edge count, not component count.
+The cgraph call splits into union-find algorithm and Python set construction:
+
+| Scenario | Components | Union-find | Set construction | Set % of cgraph |
+|----------|-----------:|-----------:|-----------------:|----------------:|
+| 1 component (all connected) | 1 | 4ms | 24ms | 86% |
+| 10 components (100K each) | 10 | 4ms | 26ms | 87% |
+| 1K components (1K each) | 1,000 | 4ms | 20ms | 84% |
+| 1 dominant + 100K isolated | 100,001 | 4ms | 41ms | 92% |
+| Random sparse (avg degree 3) | 54,266 | 11ms | 50ms | 82% |
+| 1M isolated (0 edges) | 1,000,000 | 2ms | 160ms | 99% |
+
+The union-find algorithm is 2-11ms — already near-optimal. **82-99% of the cgraph time is Python set construction** (`PySet_New` + `PySet_Add`), which is the CPython floor for building hash-based sets. Many small components are expensive because each `PySet_New()` allocates a Python set object. Gather cost scales with edge count, not component count.
 
 ### Calling conventions
 
