@@ -105,15 +105,30 @@ class Branch:
 
 | Phase | Tuples | Split lists | numpy (m,2) |
 |-------|-------:|------------:|------------:|
-| 1. Gather (Python loop over objects) | 68ms | **24ms** | 72ms |
-| 2. Parse (hash map + edge translation) | 29ms | 25ms | **10ms** |
-| 3. C algorithm (union-find + results) | 61ms | 61ms | 61ms |
-| **Total** | **158ms** | **110ms** | **143ms** |
-| vs tuples | baseline | **1.43x** | 1.11x |
+| 1. Gather (Python loop over objects) | 71ms | **35ms** | 91ms |
+| 2. Parse (hash map + edge translation) | 23ms | 22ms | **5ms** |
+| 3. C algorithm (union-find + results) | 62ms | 62ms | 62ms |
+| **Total** | **156ms** | **119ms** | **159ms** |
+| vs tuples | baseline | **1.31x** | ~same |
 
-- **Gather** is pure Python — extracting `node_a`/`node_b` from your objects. cgraph can't optimize this, but the interface choice affects it (tuples cost 68ms, split lists cost 24ms).
+- **Gather** is pure Python — extracting `node_a`/`node_b` from your objects. cgraph can't optimize this, but the interface choice affects it (tuples cost 71ms, split lists cost 35ms).
 - **Parse** is the C-side input handling — building the node-ID hash map and translating edges to internal indices. Numpy skips per-element Python unpacking via buffer reads.
-- **C algorithm** is the actual computation. Fixed cost, identical across all interfaces.
+- **C algorithm** is the actual computation (union-find + building Python `set` results). Fixed cost, identical across all interfaces. The `set` construction via `PySet_Add` accounts for ~50ms of the 62ms — this is the CPython floor for creating hash-based sets of 1M elements.
+
+### C algorithm across graph topologies
+
+The C algorithm cost depends heavily on graph structure. Connected components at 1M nodes:
+
+| Scenario | Components | Time |
+|----------|-----------:|-----:|
+| 1 component (all connected) | 1 | 28ms |
+| 10 components (100K each) | 10 | 28ms |
+| 1K components (1K each) | 1,000 | 22ms |
+| 1 dominant (900K) + 100K isolated | 100,001 | 48ms |
+| Random sparse (avg degree 3) | 54,266 | 57ms |
+| 1M isolated (0 edges) | 1,000,000 | 168ms |
+
+Many small components are expensive because each `PySet_New()` call allocates a Python set object. Few large components are cheap — the union-find and bulk `PySet_Add` are efficient.
 
 ### Calling conventions
 
@@ -125,7 +140,7 @@ edges = [(b.node_a, b.node_b) for b in branches]
 connected_components(node_ids, edges)
 ```
 
-**Split lists** — **1.43x faster** end-to-end:
+**Split lists** — **1.3x faster** end-to-end:
 ```python
 src = [b.node_a for b in branches]
 dst = [b.node_b for b in branches]
@@ -158,7 +173,7 @@ End-to-end from `Branch` objects using split lists (gather + algorithm). Sparse 
 pip install -e ".[benchmark]"
 pip install networkx
 pytest tests/performance_tests/ -v -s -k speedup
-python benchmarks/bench_all.py  # structured cost breakdown
+python benchmarks/bench_all.py  # structured cost breakdown + topology scenarios
 ```
 
 ## Tests

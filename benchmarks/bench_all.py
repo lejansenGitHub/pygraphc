@@ -3,9 +3,9 @@ Structured benchmark: measures the 3 cost phases separately for connected_compon
 
 Phase 1 - Gather: extracting edges from domain objects (Branch instances)
 Phase 2 - Parse: cgraph hash map build + edge translation (nid_parse)
-Phase 3 - C algo: union-find + result construction
+Phase 3 - C algo: union-find + result set construction
 
-Tests across interfaces: tuples, split lists, numpy (m,2), split numpy 1D.
+Tests across interfaces and graph topologies.
 """
 
 import random
@@ -53,12 +53,25 @@ def bench(func, rounds=7, warmup=3):
     return median(times)
 
 
-def run_benchmark(n):
+def make_chain_edges(components):
+    """Build chain edges for given (start, end) ranges."""
+    src, dst = [], []
+    for s, e in components:
+        for i in range(s, e - 1):
+            src.append(i)
+            dst.append(i + 1)
+    if not src:
+        return np.zeros((0, 2), dtype=np.int32)
+    return np.column_stack([np.array(src, dtype=np.int32),
+                            np.array(dst, dtype=np.int32)])
+
+
+def run_phase_breakdown(n):
+    """3-phase cost breakdown across interfaces."""
     node_ids = list(range(n))
     branches = generate_branches(n)
     m = len(branches)
 
-    # Pre-build all edge formats
     edges_tuples = [(b.node_a, b.node_b) for b in branches]
     src_list = [b.node_a for b in branches]
     dst_list = [b.node_b for b in branches]
@@ -66,7 +79,7 @@ def run_benchmark(n):
     dst_np = np.array(dst_list, dtype=np.int32)
     edges_np = np.column_stack([src_np, dst_np])
 
-    # Phase 3: pure C algo (index-based + numpy, no nid_parse)
+    # Phase 3: pure C algo
     t_algo = bench(lambda: _cc_index(n, edges_np))
 
     # Total cgraph call per interface
@@ -75,13 +88,11 @@ def run_benchmark(n):
     t_nid_np2d = bench(lambda: list(connected_components(node_ids, edges_np)))
     t_split_np = bench(lambda: list(connected_components(node_ids, src_np, dst_np)))
 
-    # Phase 2: parse = total cgraph - algo
     p_tuples = t_nid_tuples - t_algo
     p_split_list = t_split_list - t_algo
     p_np2d = t_nid_np2d - t_algo
     p_split_np = t_split_np - t_algo
 
-    # Phase 1: gather from Branch objects
     g_tuples = bench(lambda: [(b.node_a, b.node_b) for b in branches])
     g_split = bench(lambda: ([b.node_a for b in branches], [b.node_b for b in branches]))
 
@@ -96,7 +107,6 @@ def run_benchmark(n):
                 np.array([b.node_b for b in branches], dtype=np.int32))
     g_split_np = bench(gather_split_np)
 
-    # Print results
     print(f"\n  n={n:,}  m={m:,}")
     print(f"  {'phase':<25} {'tuples':>9} {'split list':>11} {'np (m,2)':>10} {'split np1d':>11}")
     print(f"  {'-' * 70}")
@@ -119,16 +129,58 @@ def run_benchmark(n):
           f" {totals[0] / totals[2]:>9.2f}x {totals[0] / totals[3]:>10.2f}x")
 
 
+def run_topology_scenarios(n):
+    """C algo across different graph topologies."""
+    print(f"\n  C algo only (index + numpy), n={n:,}")
+    print(f"  {'scenario':<50} {'comps':>8} {'time':>8}")
+    print(f"  {'-' * 68}")
+
+    scenarios = [
+        ("A) 1 component (all connected chain)",
+         make_chain_edges([(0, n)])),
+        ("B) 1K equal components (1K nodes each)",
+         make_chain_edges([(i * 1000, (i + 1) * 1000) for i in range(1000)])),
+        ("C) 1 dominant (900K) + 100K isolated",
+         make_chain_edges([(0, 900_000)])),
+        ("D) 10 components (100K each)",
+         make_chain_edges([(i * 100_000, (i + 1) * 100_000) for i in range(10)])),
+        ("E) 1M isolated (0 edges)",
+         np.zeros((0, 2), dtype=np.int32)),
+    ]
+
+    # F) Random sparse
+    rng = random.Random(42)
+    m = (n * 3) // 2
+    s, d = [], []
+    for _ in range(m):
+        a, b = rng.randint(0, n - 1), rng.randint(0, n - 1)
+        if a != b:
+            s.append(a)
+            d.append(b)
+    e_rand = np.column_stack([np.array(s, dtype=np.int32), np.array(d, dtype=np.int32)])
+    scenarios.append(("F) Random sparse (avg degree 3)", e_rand))
+
+    for name, edges in scenarios:
+        r = _cc_index(n, edges)
+        nc = len(r)
+        t = bench(lambda: _cc_index(n, edges))
+        print(f"  {name:<50} {nc:>8,} {t * 1000:>7.1f}ms")
+
+
 def main():
     print("=" * 80)
-    print("Connected Components: 3-phase cost breakdown")
-    print("  1. gather = extracting edges from Branch objects (Python)")
-    print("  2. parse  = nid hash map + edge translation (C input handling)")
-    print("  3. C algo = union-find + result set construction")
+    print("Part 1: 3-phase cost breakdown (gather, parse, C algo)")
     print("=" * 80)
 
     for exp in [4, 5, 6]:
-        run_benchmark(10 ** exp)
+        run_phase_breakdown(10 ** exp)
+
+    print()
+    print("=" * 80)
+    print("Part 2: C algo across graph topologies")
+    print("=" * 80)
+
+    run_topology_scenarios(1_000_000)
 
 
 if __name__ == "__main__":
