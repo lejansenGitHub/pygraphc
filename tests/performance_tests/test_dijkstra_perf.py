@@ -11,7 +11,9 @@ pytestmark = pytest.mark.performance
 
 
 def generate_weighted_graph(
-    n: int, avg_degree: int = 3, seed: int = 42,
+    n: int,
+    avg_degree: int = 3,
+    seed: int = 42,
 ) -> tuple[list[tuple[int, int]], list[float]]:
     rng = random.Random(seed)
     m = (n * avg_degree) // 2
@@ -73,7 +75,10 @@ def test_multi_source_dijkstra_performance(exponent: int, time_limit_seconds: fl
 
     start = time.perf_counter()
     result = multi_source_shortest_path_lengths(
-        node_ids, edges, weights, [0, n // 2, n - 1],
+        node_ids,
+        edges,
+        weights,
+        [0, n // 2, n - 1],
     )
     elapsed = time.perf_counter() - start
 

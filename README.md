@@ -119,6 +119,47 @@ Split-list constructor is also supported: `Graph(node_ids, src, dst)`.
 
 On a 100K-node graph, running 3 algorithms via `Graph` is ~2x faster than 3 separate free-function calls, since input parsing and adjacency-list construction happen only once.
 
+### Edge-masked views (exclude edges without rebuilding)
+
+Create lightweight views that exclude edges from the graph without rebuilding the CSR. The base graph is never mutated — views overlay a byte mask on the shared adjacency structure.
+
+```python
+from cgraph import Graph, GraphView, for_each_edge_excluded
+
+g = Graph(node_ids, edges)
+
+# Exclude edges by index (position in the original edge list)
+view = g.without_edges([3])          # exclude edge at index 3
+list(view.connected_components())    # runs on the masked graph
+view.bridges()
+view.bfs(0)
+view.shortest_path(weights, source=0, target=5)
+
+# Look up edge indices by node pair
+idx = g.edge_indices(2, 3)           # -> [3]  (list, for multigraph support)
+view = g.without_edges(idx)
+
+# Run an algorithm for each edge excluded, one at a time
+for edge_idx, components in for_each_edge_excluded(g, "connected_components"):
+    print(f"Without edge {edge_idx}: {len(components)} components")
+```
+
+**Mask overhead** is 2–8% vs an unmasked `Graph` call — negligible in absolute terms. The check compiles to a single byte load + branch per edge, trivially predicted. When no mask is used (`Graph` methods), the `NULL` pointer check is predicted away at zero cost.
+
+Sparse random graph, 100K nodes (~3 edges per node), best of 20 runs:
+
+| Algorithm | No mask | With mask | Overhead |
+|-----------|--------:|----------:|---------:|
+| Connected Components | 1.4ms | 1.5ms | +3% |
+| Bridges | 1.5ms | 1.6ms | +7% |
+| Articulation Points | 1.6ms | 1.7ms | +8% |
+| Biconnected Components | 9.9ms | 10.6ms | +7% |
+| BFS | 2.3ms | 2.5ms | +8% |
+| Dijkstra (single pair) | 6.9ms | 7.3ms | +7% |
+| SSSP lengths | 13.6ms | 13.8ms | +2% |
+
+The key win is avoiding O(V + E) graph rebuild per edge modification.
+
 Parallel edges are supported — each edge is tracked by ID, so two edges between the same pair of nodes are handled correctly (e.g. for bridges, Dijkstra weight selection).
 
 ## Performance
