@@ -533,3 +533,156 @@ def test_mask_large_node_ids():
     comps = sorted(view.connected_components(), key=min)
     assert comps == [{1000, 2000}, {3000, 4000}]
     assert view.bfs(1000) == [1000, 2000]
+
+
+# ── Phase 5b: Edge-Addition Views ──
+
+
+class TestWithEdgesBasic:
+    """Tests for Graph.with_edges() and GraphView.with_edges()."""
+
+    def test_with_edges_returns_view(self, bridge_graph):
+        view = bridge_graph.with_edges([(10, 20)])
+        assert isinstance(view, GraphView)
+
+    def test_with_edges_adds_connectivity(self):
+        """Two disconnected nodes — adding an edge connects them."""
+        g = Graph([0, 1], [])
+        view = g.with_edges([(0, 1)])
+        comps = list(view.connected_components())
+        assert len(comps) == 1
+        assert comps[0] == {0, 1}
+
+    def test_with_edges_introduces_new_node(self):
+        """Added edge references a node not in the base graph."""
+        g = Graph([0, 1], [(0, 1)])
+        view = g.with_edges([(1, 2)])
+        comps = list(view.connected_components())
+        assert len(comps) == 1
+        assert comps[0] == {0, 1, 2}
+
+    def test_with_edges_preserves_base(self):
+        """Base graph remains unchanged after creating a with_edges view."""
+        g = Graph([0, 1], [])
+        _ = g.with_edges([(0, 1)])
+        comps = sorted(g.connected_components(), key=min)
+        assert comps == [{0}, {1}]
+
+    def test_with_edges_multiple(self):
+        """Add multiple edges at once."""
+        g = Graph([0, 1, 2, 3], [])
+        view = g.with_edges([(0, 1), (2, 3)])
+        comps = sorted(view.connected_components(), key=min)
+        assert comps == [{0, 1}, {2, 3}]
+
+    def test_with_edges_bridges(self):
+        """Added edge creates a bridge in the new view."""
+        g = Graph([0, 1, 2], [(0, 1)])
+        view = g.with_edges([(1, 2)])
+        bridge_list = view.bridges()
+        normed = {(min(u, v), max(u, v)) for u, v in bridge_list}
+        assert (0, 1) in normed
+        assert (1, 2) in normed
+
+    def test_with_edges_bfs(self):
+        """BFS traverses added edges."""
+        g = Graph([0, 1, 2], [(0, 1)])
+        view = g.with_edges([(1, 2)])
+        visited = set(view.bfs(0))
+        assert visited == {0, 1, 2}
+
+    def test_with_edges_shortest_path(self):
+        """Shortest path uses added edge."""
+        g = Graph([0, 1, 2], [(0, 1)])
+        view = g.with_edges([(1, 2)])
+        # 3 edges in rebuilt graph: (0,1), (1,2)
+        w = [1.0, 1.0]
+        path = view.shortest_path(w, 0, 2)
+        assert path == [0, 1, 2]
+
+    def test_with_edges_empty_additions(self):
+        """Adding no edges returns a view equivalent to the base graph."""
+        g = Graph([0, 1], [(0, 1)])
+        view = g.with_edges([])
+        comps = list(view.connected_components())
+        assert len(comps) == 1
+
+
+class TestWithEdgesFromView:
+    """Tests for chaining: GraphView.with_edges()."""
+
+    def test_without_then_with(self):
+        """Exclude an edge, then add a different one."""
+        # Triangle 0-1-2
+        g = Graph([0, 1, 2], [(0, 1), (1, 2), (2, 0)])
+        view = g.without_edges([2])  # remove (2,0)
+        view2 = view.with_edges([(0, 3)])  # add edge to new node
+        comps = list(view2.connected_components())
+        assert len(comps) == 1
+        assert {0, 1, 2, 3} == comps[0]
+
+    def test_with_edges_on_addition_view(self):
+        """Chaining with_edges on an already-added view."""
+        g = Graph([0, 1], [])
+        v1 = g.with_edges([(0, 1)])
+        v2 = v1.with_edges([(1, 2)])
+        comps = list(v2.connected_components())
+        assert len(comps) == 1
+        assert comps[0] == {0, 1, 2}
+
+
+class TestWithEdgesEdgeCases:
+    """Edge cases for edge-addition views."""
+
+    def test_with_edges_empty_graph(self):
+        """Start with empty graph, add edges."""
+        g = Graph([], [])
+        view = g.with_edges([(0, 1)])
+        comps = list(view.connected_components())
+        assert len(comps) == 1
+        assert comps[0] == {0, 1}
+
+    def test_with_edges_self_loop(self):
+        """Adding a self-loop."""
+        g = Graph([0, 1], [(0, 1)])
+        view = g.with_edges([(0, 0)])
+        comps = list(view.connected_components())
+        assert len(comps) == 1
+
+    def test_with_edges_parallel(self):
+        """Adding a parallel edge (duplicate)."""
+        g = Graph([0, 1], [(0, 1)])
+        view = g.with_edges([(0, 1)])
+        comps = list(view.connected_components())
+        assert len(comps) == 1
+        # Parallel edges: no bridges
+        assert view.bridges() == []
+
+    def test_with_edges_large_node_ids(self):
+        """Non-contiguous large node IDs."""
+        g = Graph([1000, 2000], [(1000, 2000)])
+        view = g.with_edges([(2000, 3000)])
+        comps = list(view.connected_components())
+        assert len(comps) == 1
+        assert comps[0] == {1000, 2000, 3000}
+
+    def test_with_edges_articulation_points(self):
+        """Added edge eliminates an articulation point."""
+        # Chain: 0-1-2 — node 1 is AP
+        g = Graph([0, 1, 2], [(0, 1), (1, 2)])
+        assert 1 in g.articulation_points()
+        # Add shortcut 0-2 — no more AP
+        view = g.with_edges([(0, 2)])
+        assert view.articulation_points() == set()
+
+    def test_with_edges_biconnected_components(self):
+        """Added edge merges biconnected components."""
+        # Chain 0-1-2: three separate BCCs (each edge is one)
+        g = Graph([0, 1, 2], [(0, 1), (1, 2)])
+        blocks = list(g.biconnected_components())
+        assert len(blocks) == 2
+        # Add 0-2: entire graph becomes one BCC
+        view = g.with_edges([(0, 2)])
+        blocks2 = list(view.biconnected_components())
+        assert len(blocks2) == 1
+        assert blocks2[0] == {0, 1, 2}

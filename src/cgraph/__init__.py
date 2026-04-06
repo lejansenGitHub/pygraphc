@@ -376,6 +376,19 @@ class Graph:
         """Create a lightweight view with the given edges excluded."""
         return GraphView(self, edge_indices)
 
+    def with_edges(
+        self,
+        added_edges: list[tuple[NodeId, NodeId]],
+    ) -> "GraphView":
+        """Create a view with extra edges added (rebuilds CSR internally).
+
+        The base graph is not modified. The returned view merges the
+        base graph's edges with ``added_edges`` and builds a new
+        internal ``Graph`` to back the view.  New nodes referenced in
+        ``added_edges`` are automatically included.
+        """
+        return GraphView._with_additions(self, added_edges=added_edges)
+
     def connected_components(self) -> Generator[set[NodeId], None, None]:
         """Yield each connected component as a set of original node IDs."""
         yield from _cc_ctx(self._ctx)
@@ -494,7 +507,7 @@ class GraphView:
     (the order in which they were passed to ``Graph()``).
     """
 
-    __slots__ = ("_graph", "_mask")
+    __slots__ = ("_graph", "_mask", "_added_graph")
 
     def __init__(
         self,
@@ -505,6 +518,7 @@ class GraphView:
         self._mask = bytearray(graph.edge_count)
         for idx in excluded_edge_indices:
             self._mask[idx] = 1
+        self._added_graph: Graph | None = None
 
     @classmethod
     def _from_mask(cls, graph: Graph, mask: bytearray) -> "GraphView":
@@ -512,7 +526,69 @@ class GraphView:
         view = object.__new__(cls)
         view._graph = graph
         view._mask = mask
+        view._added_graph = None
         return view
+
+    @classmethod
+    def _with_additions(
+        cls,
+        base: Graph,
+        *,
+        excluded_edge_indices: Collection[int] | None = None,
+        added_edges: list[tuple[NodeId, NodeId]] | None = None,
+    ) -> "GraphView":
+        """Create a view that merges base edges (minus excluded) with added edges.
+
+        Rebuilds the CSR from the merged edge list.  The base graph's
+        node list is extended with any new nodes from ``added_edges``.
+        """
+        base_edges = base._edges or []
+        excluded: set[int] = set(excluded_edge_indices) if excluded_edge_indices else set()
+
+        merged_edges: list[tuple[NodeId, NodeId]] = [
+            e for i, e in enumerate(base_edges) if i not in excluded
+        ]
+        if added_edges:
+            merged_edges.extend(added_edges)
+
+        # Collect all node IDs (base + any new nodes from added edges)
+        node_set: set[NodeId] = set(base._node_ids)
+        if added_edges:
+            for u, v in added_edges:
+                node_set.add(u)
+                node_set.add(v)
+        merged_nodes = sorted(node_set)
+
+        rebuilt = Graph(merged_nodes, merged_edges)
+
+        view = object.__new__(cls)
+        view._graph = rebuilt
+        view._mask = bytearray(rebuilt.edge_count)  # no exclusions on rebuilt graph
+        view._added_graph = rebuilt  # prevent GC
+        return view
+
+    def with_edges(
+        self,
+        added_edges: list[tuple[NodeId, NodeId]],
+    ) -> "GraphView":
+        """Create a new view adding extra edges to this view.
+
+        If this view has exclusions, the excluded edges are removed
+        and the added edges are appended before rebuilding the CSR.
+        """
+        # Determine effective base and exclusions
+        if self._added_graph is not None:
+            # Already a rebuilt view — use its edges as the base
+            return GraphView._with_additions(
+                self._graph,
+                added_edges=added_edges,
+            )
+        excluded = [i for i, b in enumerate(self._mask) if b]
+        return GraphView._with_additions(
+            self._graph,
+            excluded_edge_indices=excluded,
+            added_edges=added_edges,
+        )
 
     def connected_components(self) -> Generator[set[NodeId], None, None]:
         """Yield each connected component as a set of original node IDs."""
