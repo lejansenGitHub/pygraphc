@@ -111,42 +111,42 @@ class Branch:
 | **Total** | **158ms** | **110ms** | **143ms** |
 | vs tuples | baseline | **1.43x** | 1.11x |
 
-- **Gather** is pure Python — extracting `node_a`/`node_b` from your objects. cgraph can't optimize this, but the interface choice affects it (tuples cost 68ms, flat lists cost 24ms).
+- **Gather** is pure Python — extracting `node_a`/`node_b` from your objects. cgraph can't optimize this, but the interface choice affects it (tuples cost 68ms, split lists cost 24ms).
 - **Parse** is the C-side input handling — building the node-ID hash map and translating edges to internal indices. Numpy skips per-element Python unpacking via buffer reads.
 - **C algorithm** is the actual computation. Fixed cost, identical across all interfaces.
 
-### Data gathering strategies
+### Calling conventions
 
-Two calling conventions — both accept Python lists or numpy arrays:
+Two ways to pass edges — both accept Python lists or numpy arrays:
 
-**Strategy A** (tuples) — simplest:
+**Tuples** — simplest:
 ```python
 edges = [(b.node_a, b.node_b) for b in branches]
 connected_components(node_ids, edges)
 ```
 
-**Strategy B** (two flat lists) — **1.43x faster** end-to-end:
+**Split lists** — **1.43x faster** end-to-end:
 ```python
 src = [b.node_a for b in branches]
 dst = [b.node_b for b in branches]
 connected_components(node_ids, src, dst)
 ```
 
-Strategy B is faster because building two flat lists avoids creating 1.5M tuple objects. The C parsing cost is similar — `PyLong_AsLong` per element dominates regardless of container shape.
+Split lists is faster because building two flat lists avoids creating 1.5M tuple objects. The C parsing cost is similar — `PyLong_AsLong` per element dominates regardless of container shape.
 
 ### Benchmarks vs networkx
 
-End-to-end from `Branch` objects (gather + algorithm). Sparse random graphs, ~3 edges per node.
+End-to-end from `Branch` objects using split lists (gather + algorithm). Sparse random graphs, ~3 edges per node.
 
 - **networkx**: `add_nodes_from` + `add_edges_from` + algorithm
-- **cgraph**: gather edges from objects + algorithm
+- **cgraph**: gather split lists from objects + algorithm
 
 | Algorithm | Nodes | cgraph | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
-| Connected Components | 1K | 0.0001s | 0.001s | **13x** |
-| Connected Components | 10K | 0.001s | 0.013s | **14x** |
-| Connected Components | 100K | 0.015s | 0.349s | **23x** |
-| Connected Components | 1M | 0.157s | 6.81s | **43x** |
+| Connected Components | 1K | 0.0001s | 0.001s | **17x** |
+| Connected Components | 10K | 0.001s | 0.011s | **21x** |
+| Connected Components | 100K | 0.011s | 0.313s | **29x** |
+| Connected Components | 1M | 0.150s | 6.83s | **46x** |
 | Bridges | 1M | 0.401s | 21.42s | **53x** |
 | Articulation Points | 1M | 0.350s | 8.97s | **26x** |
 | BFS | 1M | 0.165s | 13.62s | **82x** |
