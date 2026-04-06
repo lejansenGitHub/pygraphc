@@ -162,6 +162,68 @@ The key win is avoiding O(V + E) graph rebuild per edge modification.
 
 Parallel edges are supported — each edge is tracked by ID, so two edges between the same pair of nodes are handled correctly (e.g. for bridges, Dijkstra weight selection).
 
+### MultiGraph support
+
+cgraph natively supports parallel edges (multigraphs). Each duplicate edge gets a unique index — no deduplication. All algorithms handle them correctly:
+
+```python
+from cgraph import Graph
+
+g = Graph([1, 2, 3], [(1, 2), (1, 2), (2, 3)])
+
+g.is_multigraph                  # True
+g.edge_count                     # 3
+g.edge_indices(1, 2)             # [0, 1] — both parallel edges
+
+# Bridges: (1,2) is NOT a bridge because a parallel edge exists
+g.bridges()                      # [(2, 3)]
+
+# Masking one parallel edge keeps the other active
+view = g.without_edges([0])
+list(view.connected_components())  # [{1, 2, 3}] — still connected via edge 1
+```
+
+### Node-masked views (exclude nodes without rebuilding)
+
+Exclude nodes and all their incident edges without rebuilding the CSR. Chainable with edge masks.
+
+```python
+g = Graph([0, 1, 2, 3, 4], [(0, 1), (1, 2), (2, 3), (3, 4)])
+
+# Exclude node 2 — edges (1,2) and (2,3) are also excluded
+view = g.without_nodes([2])
+list(view.connected_components())  # [{0, 1}, {3, 4}]
+
+# Chain with edge masks
+view = g.without_edges([0]).without_nodes([3])
+view.bfs(1)                        # [1, 2]
+
+# BFS/Dijkstra raise ValueError if source is excluded
+view = g.without_nodes([0])
+view.bfs(0)                        # ValueError: source node is excluded
+```
+
+### Edge-path enumeration (edge-disjoint paths)
+
+Find all paths from source to targets where each edge is used at most once. Returns paths as lists of edge indices. Nodes may be revisited (critical for multigraphs).
+
+```python
+g = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (0, 2), (2, 3)])
+
+# All edge-disjoint paths from 0 to 3
+paths = g.all_edge_paths(source=0, targets=3)
+# [[0, 1, 3], [2, 3]] — two paths using different edges
+
+# With cutoff (max edges per path)
+paths = g.all_edge_paths(source=0, targets=3, cutoff=2)
+# [[2, 3]] — only paths with ≤2 edges
+
+# Works with masks — respects excluded edges and nodes
+view = g.without_edges([2])
+paths = view.all_edge_paths(source=0, targets=3)
+# [[0, 1, 3]] — only the path through edges 0→1→3
+```
+
 ## Performance
 
 ### Cost breakdown
