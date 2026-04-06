@@ -597,31 +597,62 @@ static PyObject *py_connected_components(PyObject *self, PyObject *args) {
 
     int nc = cr.num_comp;
 
-    /* Build sets directly — no intermediate bucketing */
-    PyObject *result = PyList_New(nc);
-    if (!result) { free(cr.labels); return NULL; }
-
-    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
-    if (!sets) { free(cr.labels); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
-    for (int c = 0; c < nc; c++) {
-        sets[c] = PySet_New(NULL);
-        if (!sets[c]) {
-            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
-            free(sets); free(cr.labels); Py_DECREF(result);
-            return NULL;
-        }
+    /* Bucket into flat array, build pre-sized lists, convert to sets */
+    int *sizes = (int *)calloc((size_t)nc, sizeof(int));
+    int *flat  = (int *)malloc((size_t)n * sizeof(int));
+    int *off   = (int *)malloc((size_t)nc * sizeof(int));
+    if (!sizes || !flat || !off) {
+        free(sizes); free(flat); free(off); free(cr.labels);
+        PyErr_NoMemory(); return NULL;
     }
 
+    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
+    off[0] = 0;
+    for (int c = 1; c < nc; c++) off[c] = off[c-1] + sizes[c-1];
+    int *pos = sizes;
+    memset(pos, 0, (size_t)nc * sizeof(int));
     for (int i = 0; i < n; i++) {
-        PyObject *val = PyLong_FromLong(i);
-        PySet_Add(sets[cr.labels[i]], val);
-        Py_DECREF(val);
+        int c = cr.labels[i];
+        flat[off[c] + pos[c]++] = i;
     }
 
-    for (int c = 0; c < nc; c++)
-        PyList_SET_ITEM(result, c, sets[c]);
+    PyObject *result = PyList_New(nc);
+    if (!result) { free(sizes); free(flat); free(off); free(cr.labels); return NULL; }
 
-    free(sets);
+    #define SET_PRESIZED_THRESHOLD 64
+    for (int c = 0; c < nc; c++) {
+        int sz = pos[c];
+        int base = off[c];
+        PyObject *s;
+        if (sz >= SET_PRESIZED_THRESHOLD) {
+            PyObject *lst = PyList_New(sz);
+            if (!lst) {
+                free(sizes); free(flat); free(off); free(cr.labels);
+                Py_DECREF(result); return NULL;
+            }
+            for (int j = 0; j < sz; j++)
+                PyList_SET_ITEM(lst, j, PyLong_FromLong(flat[base + j]));
+            s = PySet_New(lst);
+            Py_DECREF(lst);
+        } else {
+            s = PySet_New(NULL);
+            if (s) {
+                for (int j = 0; j < sz; j++) {
+                    PyObject *val = PyLong_FromLong(flat[base + j]);
+                    PySet_Add(s, val);
+                    Py_DECREF(val);
+                }
+            }
+        }
+        if (!s) {
+            free(sizes); free(flat); free(off); free(cr.labels);
+            Py_DECREF(result); return NULL;
+        }
+        PyList_SET_ITEM(result, c, s);
+    }
+    #undef SET_PRESIZED_THRESHOLD
+
+    free(sizes); free(flat); free(off);
     free(cr.labels);
     return result;
 }
@@ -1730,28 +1761,68 @@ static PyObject *py_cc_nid(PyObject *self, PyObject *args) {
 
     int nc = cr.num_comp;
 
-    /* Build sets directly — no intermediate bucketing */
-    PyObject *result = PyList_New(nc);
-    if (!result) { free(cr.labels); nid_free(&ctx); return NULL; }
-
-    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
-    if (!sets) { free(cr.labels); Py_DECREF(result); nid_free(&ctx); PyErr_NoMemory(); return NULL; }
-    for (int c = 0; c < nc; c++) {
-        sets[c] = PySet_New(NULL);
-        if (!sets[c]) {
-            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
-            free(sets); free(cr.labels); Py_DECREF(result); nid_free(&ctx);
-            return NULL;
-        }
+    /* Bucket into flat array, then build pre-sized sets via PySet_New(list) */
+    int *sizes = (int *)calloc((size_t)nc, sizeof(int));
+    int *flat  = (int *)malloc((size_t)n * sizeof(int));
+    int *off   = (int *)malloc((size_t)nc * sizeof(int));
+    if (!sizes || !flat || !off) {
+        free(sizes); free(flat); free(off);
+        free(cr.labels); nid_free(&ctx);
+        PyErr_NoMemory(); return NULL;
     }
 
-    for (int i = 0; i < n; i++)
-        PySet_Add(sets[cr.labels[i]], ctx.nid_items[i]);
+    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
+    /* prefix sum for offsets */
+    off[0] = 0;
+    for (int c = 1; c < nc; c++) off[c] = off[c-1] + sizes[c-1];
+    /* reset sizes as fill counters */
+    int *pos = sizes;  /* reuse sizes array */
+    memset(pos, 0, (size_t)nc * sizeof(int));
+    for (int i = 0; i < n; i++) {
+        int c = cr.labels[i];
+        flat[off[c] + pos[c]++] = i;
+    }
 
-    for (int c = 0; c < nc; c++)
-        PyList_SET_ITEM(result, c, sets[c]);
+    /* Build result: for each component, make a PyList then PySet_New(list) */
+    PyObject *result = PyList_New(nc);
+    if (!result) { free(sizes); free(flat); free(off); free(cr.labels); nid_free(&ctx); return NULL; }
 
-    free(sets);
+    /* For large components: build list then PySet_New(list) (pre-sized, no rehash).
+       For small components: PySet_New(NULL) + PySet_Add (avoids temp list overhead).
+       Threshold: ~64 elements — below this, set rehashing cost < list creation cost. */
+    #define SET_PRESIZED_THRESHOLD 64
+    for (int c = 0; c < nc; c++) {
+        int sz = pos[c];
+        int base = off[c];
+        PyObject *s;
+        if (sz >= SET_PRESIZED_THRESHOLD) {
+            PyObject *lst = PyList_New(sz);
+            if (!lst) {
+                free(sizes); free(flat); free(off); free(cr.labels);
+                Py_DECREF(result); nid_free(&ctx); return NULL;
+            }
+            for (int j = 0; j < sz; j++) {
+                Py_INCREF(ctx.nid_items[flat[base + j]]);
+                PyList_SET_ITEM(lst, j, ctx.nid_items[flat[base + j]]);
+            }
+            s = PySet_New(lst);
+            Py_DECREF(lst);
+        } else {
+            s = PySet_New(NULL);
+            if (s) {
+                for (int j = 0; j < sz; j++)
+                    PySet_Add(s, ctx.nid_items[flat[base + j]]);
+            }
+        }
+        if (!s) {
+            free(sizes); free(flat); free(off); free(cr.labels);
+            Py_DECREF(result); nid_free(&ctx); return NULL;
+        }
+        PyList_SET_ITEM(result, c, s);
+    }
+    #undef SET_PRESIZED_THRESHOLD
+
+    free(sizes); free(flat); free(off);
     free(cr.labels);
     nid_free(&ctx);
     return result;
@@ -1773,30 +1844,61 @@ static PyObject *py_cc_nid_split(PyObject *self, PyObject *args) {
 
     int nc = cr.num_comp;
 
-    /* Build sets directly — no intermediate bucketing */
-    PyObject *result = PyList_New(nc);
-    if (!result) { free(cr.labels); nid_free(&ctx); return NULL; }
-
-    /* Create all sets upfront */
-    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
-    if (!sets) { free(cr.labels); Py_DECREF(result); nid_free(&ctx); PyErr_NoMemory(); return NULL; }
-    for (int c = 0; c < nc; c++) {
-        sets[c] = PySet_New(NULL);
-        if (!sets[c]) {
-            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
-            free(sets); free(cr.labels); Py_DECREF(result); nid_free(&ctx);
-            return NULL;
-        }
+    int *sizes = (int *)calloc((size_t)nc, sizeof(int));
+    int *flat  = (int *)malloc((size_t)n * sizeof(int));
+    int *off   = (int *)malloc((size_t)nc * sizeof(int));
+    if (!sizes || !flat || !off) {
+        free(sizes); free(flat); free(off);
+        free(cr.labels); nid_free(&ctx);
+        PyErr_NoMemory(); return NULL;
     }
 
-    /* Single pass: add each node to its component set */
-    for (int i = 0; i < n; i++)
-        PySet_Add(sets[cr.labels[i]], ctx.nid_items[i]);
+    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
+    off[0] = 0;
+    for (int c = 1; c < nc; c++) off[c] = off[c-1] + sizes[c-1];
+    int *pos = sizes;
+    memset(pos, 0, (size_t)nc * sizeof(int));
+    for (int i = 0; i < n; i++) {
+        int c = cr.labels[i];
+        flat[off[c] + pos[c]++] = i;
+    }
 
-    for (int c = 0; c < nc; c++)
-        PyList_SET_ITEM(result, c, sets[c]);
+    PyObject *result = PyList_New(nc);
+    if (!result) { free(sizes); free(flat); free(off); free(cr.labels); nid_free(&ctx); return NULL; }
 
-    free(sets);
+    #define SET_PRESIZED_THRESHOLD 64
+    for (int c = 0; c < nc; c++) {
+        int sz = pos[c];
+        int base = off[c];
+        PyObject *s;
+        if (sz >= SET_PRESIZED_THRESHOLD) {
+            PyObject *lst = PyList_New(sz);
+            if (!lst) {
+                free(sizes); free(flat); free(off); free(cr.labels);
+                Py_DECREF(result); nid_free(&ctx); return NULL;
+            }
+            for (int j = 0; j < sz; j++) {
+                Py_INCREF(ctx.nid_items[flat[base + j]]);
+                PyList_SET_ITEM(lst, j, ctx.nid_items[flat[base + j]]);
+            }
+            s = PySet_New(lst);
+            Py_DECREF(lst);
+        } else {
+            s = PySet_New(NULL);
+            if (s) {
+                for (int j = 0; j < sz; j++)
+                    PySet_Add(s, ctx.nid_items[flat[base + j]]);
+            }
+        }
+        if (!s) {
+            free(sizes); free(flat); free(off); free(cr.labels);
+            Py_DECREF(result); nid_free(&ctx); return NULL;
+        }
+        PyList_SET_ITEM(result, c, s);
+    }
+    #undef SET_PRESIZED_THRESHOLD
+
+    free(sizes); free(flat); free(off);
     free(cr.labels);
     nid_free(&ctx);
     return result;
