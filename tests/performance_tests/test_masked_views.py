@@ -135,8 +135,7 @@ def test_mask_overhead_vs_no_mask(exponent: int, algorithm: str) -> None:
 
     overhead = (mask_time - no_mask_time) / no_mask_time if no_mask_time > 0 else 0
     assert overhead < 0.15, (
-        f"{algorithm}: mask overhead {overhead:.1%} "
-        f"(no-mask {no_mask_time:.4f}s, mask {mask_time:.4f}s)"
+        f"{algorithm}: mask overhead {overhead:.1%} (no-mask {no_mask_time:.4f}s, mask {mask_time:.4f}s)"
     )
 
 

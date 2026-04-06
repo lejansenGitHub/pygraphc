@@ -545,9 +545,7 @@ class GraphView:
         base_edges = base._edges or []
         excluded: set[int] = set(excluded_edge_indices) if excluded_edge_indices else set()
 
-        merged_edges: list[tuple[NodeId, NodeId]] = [
-            e for i, e in enumerate(base_edges) if i not in excluded
-        ]
+        merged_edges: list[tuple[NodeId, NodeId]] = [e for i, e in enumerate(base_edges) if i not in excluded]
         if added_edges:
             merged_edges.extend(added_edges)
 
