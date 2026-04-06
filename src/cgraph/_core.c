@@ -1,8 +1,23 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+
+/* ── Buffer-format helpers ── */
+
+static inline int is_int32_fmt(const char *fmt, Py_ssize_t itemsize) {
+    if (itemsize != 4 || !fmt) return 0;
+    while (*fmt == '<' || *fmt == '>' || *fmt == '=' || *fmt == '!') fmt++;
+    return *fmt == 'i';
+}
+
+static inline int is_int64_fmt(const char *fmt, Py_ssize_t itemsize) {
+    if (itemsize != 8 || !fmt) return 0;
+    while (*fmt == '<' || *fmt == '>' || *fmt == '=' || *fmt == '!') fmt++;
+    return *fmt == 'l' || *fmt == 'q';
+}
 
 /* ── Union-Find with path compression + union by rank ── */
 
@@ -206,7 +221,69 @@ static inline int intmap_get(IntMap *m, long key) {
 /* ── Edge parsing with node-ID translation via C hash map ── */
 
 static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
-    PyObject *fast = PySequence_Fast(edges_obj, "edges must be a sequence");
+    /* Fast path: buffer protocol (numpy int32/int64 array with shape (m,2)) */
+    Py_buffer buf;
+    if (PyObject_GetBuffer(edges_obj, &buf, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
+        int is_i32 = is_int32_fmt(buf.format, buf.itemsize);
+        int is_i64 = is_int64_fmt(buf.format, buf.itemsize);
+
+        if ((is_i32 || is_i64) && buf.ndim == 2 && buf.shape[1] == 2) {
+            Py_ssize_t m = buf.shape[0];
+            el->m = m;
+            el->owns_memory = 1;
+            if (m == 0) {
+                el->src = NULL; el->dst = NULL;
+                PyBuffer_Release(&buf);
+                return 0;
+            }
+            el->src = (int *)malloc((size_t)m * sizeof(int));
+            el->dst = (int *)malloc((size_t)m * sizeof(int));
+            if (!el->src || !el->dst) {
+                free(el->src); free(el->dst);
+                PyBuffer_Release(&buf);
+                PyErr_NoMemory();
+                return -1;
+            }
+            if (is_i32) {
+                int *data = (int *)buf.buf;
+                for (Py_ssize_t i = 0; i < m; i++) {
+                    int u_idx = intmap_get(im, (long)data[i * 2]);
+                    int v_idx = intmap_get(im, (long)data[i * 2 + 1]);
+                    if (u_idx < 0 || v_idx < 0) {
+                        free(el->src); free(el->dst);
+                        PyBuffer_Release(&buf);
+                        PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
+                        return -1;
+                    }
+                    el->src[i] = u_idx;
+                    el->dst[i] = v_idx;
+                }
+            } else {  /* int64 */
+                long long *data = (long long *)buf.buf;
+                for (Py_ssize_t i = 0; i < m; i++) {
+                    int u_idx = intmap_get(im, (long)data[i * 2]);
+                    int v_idx = intmap_get(im, (long)data[i * 2 + 1]);
+                    if (u_idx < 0 || v_idx < 0) {
+                        free(el->src); free(el->dst);
+                        PyBuffer_Release(&buf);
+                        PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
+                        return -1;
+                    }
+                    el->src[i] = u_idx;
+                    el->dst[i] = v_idx;
+                }
+            }
+            PyBuffer_Release(&buf);
+            return 0;
+        }
+        PyBuffer_Release(&buf);
+        /* Fall through to slow path */
+    } else {
+        PyErr_Clear();
+    }
+
+    /* Slow path: list of tuples */
+    PyObject *fast = PySequence_Fast(edges_obj, "edges must be a sequence or numpy array");
     if (!fast) return -1;
 
     Py_ssize_t m = PySequence_Fast_GET_SIZE(fast);
@@ -746,18 +823,14 @@ static PyObject *py_bridges(PyObject *self, PyObject *args) {
         free_edges(&el); Py_DECREF(result); return NULL;
     }
 
-    int *disc = (int *)malloc((size_t)n * sizeof(int));
-    int *low  = (int *)malloc((size_t)n * sizeof(int));
-    int *stk  = (int *)malloc((size_t)n * sizeof(int));
-    int *sidx = (int *)malloc((size_t)n * sizeof(int));
-    int *peid = (int *)malloc((size_t)n * sizeof(int));
-
-    if (!disc || !low || !stk || !sidx || !peid) {
-        free(disc); free(low); free(stk); free(sidx); free(peid);
+    int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
+    if (!buf5) {
         free_adj(&al); free_edges(&el); Py_DECREF(result);
         PyErr_NoMemory();
         return NULL;
     }
+    int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
+    int *sidx = buf5 + 3*n, *peid = buf5 + 4*n;
     memset(disc, -1, (size_t)n * sizeof(int));
 
     int timer = 0;
@@ -794,8 +867,7 @@ static PyObject *py_bridges(PyObject *self, PyObject *args) {
                         PyObject *tup = Py_BuildValue(
                             "(ii)", EDGE_SRC(&el, eid), EDGE_DST(&el, eid));
                         if (!tup) {
-                            free(disc); free(low); free(stk);
-                            free(sidx); free(peid);
+                            free(buf5);
                             free_adj(&al); free_edges(&el);
                             Py_DECREF(result);
                             return NULL;
@@ -809,7 +881,7 @@ static PyObject *py_bridges(PyObject *self, PyObject *args) {
         }
     }
 
-    free(disc); free(low); free(stk); free(sidx); free(peid);
+    free(buf5);
     free_adj(&al); free_edges(&el);
     return result;
 }
@@ -834,21 +906,16 @@ static PyObject *py_articulation_points(PyObject *self, PyObject *args) {
     }
     free_edges(&el);
 
-    int *disc     = (int *)malloc((size_t)n * sizeof(int));
-    int *low      = (int *)malloc((size_t)n * sizeof(int));
-    int *stk      = (int *)malloc((size_t)n * sizeof(int));
-    int *sidx     = (int *)malloc((size_t)n * sizeof(int));
-    int *peid     = (int *)malloc((size_t)n * sizeof(int));
-    int *children = (int *)calloc((size_t)n, sizeof(int));
-
-    if (!disc || !low || !stk || !sidx || !peid || !children) {
-        free(disc); free(low); free(stk); free(sidx);
-        free(peid); free(children);
+    int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
+    if (!buf6) {
         free_adj(&al); Py_DECREF(result);
         PyErr_NoMemory();
         return NULL;
     }
+    int *disc = buf6, *low = buf6 + n, *stk = buf6 + 2*n;
+    int *sidx = buf6 + 3*n, *peid = buf6 + 4*n, *children = buf6 + 5*n;
     memset(disc, -1, (size_t)n * sizeof(int));
+    memset(children, 0, (size_t)n * sizeof(int));
 
     int timer = 0;
     for (int start = 0; start < n; start++) {
@@ -901,8 +968,7 @@ static PyObject *py_articulation_points(PyObject *self, PyObject *args) {
         }
     }
 
-    free(disc); free(low); free(stk); free(sidx);
-    free(peid); free(children);
+    free(buf6);
     free_adj(&al);
     return result;
 }
@@ -929,21 +995,17 @@ static PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
     }
     free_edges(&el);
 
-    int *disc = (int *)malloc((size_t)n * sizeof(int));
-    int *low  = (int *)malloc((size_t)n * sizeof(int));
-    int *stk  = (int *)malloc((size_t)n * sizeof(int));
-    int *sidx = (int *)malloc((size_t)n * sizeof(int));
-    int *peid = (int *)malloc((size_t)n * sizeof(int));
-    int *esu  = (int *)malloc((size_t)m * sizeof(int));
-    int *esv  = (int *)malloc((size_t)m * sizeof(int));
-
-    if (!disc || !low || !stk || !sidx || !peid || !esu || !esv) {
-        free(disc); free(low); free(stk); free(sidx);
-        free(peid); free(esu); free(esv);
+    int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
+    int *esbuf = (int *)malloc(2 * (size_t)m * sizeof(int));
+    if (!buf5 || !esbuf) {
+        free(buf5); free(esbuf);
         free_adj(&al); Py_DECREF(result);
         PyErr_NoMemory();
         return NULL;
     }
+    int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
+    int *sidx = buf5 + 3*n, *peid = buf5 + 4*n;
+    int *esu = esbuf, *esv = esbuf + m;
     memset(disc, -1, (size_t)n * sizeof(int));
 
     int timer = 0;
@@ -985,8 +1047,7 @@ static PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
                         /* Pop edges to form biconnected component */
                         PyObject *comp = PySet_New(NULL);
                         if (!comp) {
-                            free(disc); free(low); free(stk); free(sidx);
-                            free(peid); free(esu); free(esv);
+                            free(buf5); free(esbuf);
                             free_adj(&al); Py_DECREF(result);
                             return NULL;
                         }
@@ -1009,8 +1070,7 @@ static PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
         }
     }
 
-    free(disc); free(low); free(stk); free(sidx);
-    free(peid); free(esu); free(esv);
+    free(buf5); free(esbuf);
     free_adj(&al);
     return result;
 }
@@ -1087,9 +1147,12 @@ static inline void mh_swap(MinHeap *h, int i, int j) {
     h->pos[ni] = j; h->pos[nj] = i;
 }
 
+/* 4-ary heap: shallower tree = fewer cache misses in sift_down */
+#define MH_ARITY 4
+
 static inline void mh_sift_up(MinHeap *h, int i) {
     while (i > 0) {
-        int p = (i - 1) / 2;
+        int p = (i - 1) / MH_ARITY;
         if (h->dist[h->heap[i]] < h->dist[h->heap[p]]) {
             mh_swap(h, i, p);
             i = p;
@@ -1099,9 +1162,16 @@ static inline void mh_sift_up(MinHeap *h, int i) {
 
 static inline void mh_sift_down(MinHeap *h, int i) {
     while (1) {
-        int s = i, l = 2 * i + 1, r = 2 * i + 2;
-        if (l < h->size && h->dist[h->heap[l]] < h->dist[h->heap[s]]) s = l;
-        if (r < h->size && h->dist[h->heap[r]] < h->dist[h->heap[s]]) s = r;
+        int first = MH_ARITY * i + 1;
+        if (first >= h->size) break;
+        int last = first + MH_ARITY;
+        if (last > h->size) last = h->size;
+        int s = i;
+        double sd = h->dist[h->heap[s]];
+        for (int c = first; c < last; c++) {
+            double cd = h->dist[h->heap[c]];
+            if (cd < sd) { s = c; sd = cd; }
+        }
         if (s != i) { mh_swap(h, i, s); i = s; }
         else break;
     }
@@ -1565,14 +1635,13 @@ static PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
     AdjList al;
     if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
 
-    int *disc = malloc(n * sizeof(int)), *low = malloc(n * sizeof(int));
-    int *stk = malloc(n * sizeof(int)), *sidx = malloc(n * sizeof(int));
-    int *peid = malloc(n * sizeof(int));
-    if (!disc||!low||!stk||!sidx||!peid) {
-        free(disc);free(low);free(stk);free(sidx);free(peid);
+    int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
+    if (!buf5) {
         free_adj(&al); nid_free(&ctx); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
+    int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
+    int *sidx = buf5 + 3*n, *peid = buf5 + 4*n;
     memset(disc, -1, n * sizeof(int));
     int timer = 0;
 
@@ -1610,7 +1679,7 @@ static PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
         }
     }
 
-    free(disc);free(low);free(stk);free(sidx);free(peid);
+    free(buf5);
     free_adj(&al); nid_free(&ctx);
     return result;
 }
@@ -1631,15 +1700,15 @@ static PyObject *py_ap_nid(PyObject *self, PyObject *args) {
     AdjList al;
     if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
 
-    int *disc=malloc(n*sizeof(int)), *low=malloc(n*sizeof(int));
-    int *stk=malloc(n*sizeof(int)), *sidx=malloc(n*sizeof(int));
-    int *peid=malloc(n*sizeof(int)), *ch=calloc(n, sizeof(int));
-    if (!disc||!low||!stk||!sidx||!peid||!ch) {
-        free(disc);free(low);free(stk);free(sidx);free(peid);free(ch);
+    int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
+    if (!buf6) {
         free_adj(&al); nid_free(&ctx); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
+    int *disc = buf6, *low = buf6 + n, *stk = buf6 + 2*n;
+    int *sidx = buf6 + 3*n, *peid = buf6 + 4*n, *ch = buf6 + 5*n;
     memset(disc, -1, n * sizeof(int));
+    memset(ch, 0, n * sizeof(int));
     int timer = 0;
 
     for (int start = 0; start < n; start++) {
@@ -1671,7 +1740,7 @@ static PyObject *py_ap_nid(PyObject *self, PyObject *args) {
             PySet_Add(result, ctx.nid_items[start]);
     }
 
-    free(disc);free(low);free(stk);free(sidx);free(peid);free(ch);
+    free(buf6);
     free_adj(&al); nid_free(&ctx);
     return result;
 }
@@ -1693,15 +1762,16 @@ static PyObject *py_bcc_nid(PyObject *self, PyObject *args) {
     AdjList al;
     if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
 
-    int *disc=malloc(n*sizeof(int)), *low=malloc(n*sizeof(int));
-    int *stk=malloc(n*sizeof(int)), *sidx=malloc(n*sizeof(int));
-    int *peid=malloc(n*sizeof(int));
-    int *esu=malloc(m*sizeof(int)), *esv=malloc(m*sizeof(int));
-    if (!disc||!low||!stk||!sidx||!peid||!esu||!esv) {
-        free(disc);free(low);free(stk);free(sidx);free(peid);free(esu);free(esv);
+    int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
+    int *esbuf = (int *)malloc(2 * (size_t)m * sizeof(int));
+    if (!buf5 || !esbuf) {
+        free(buf5); free(esbuf);
         free_adj(&al); nid_free(&ctx); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
+    int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
+    int *sidx = buf5 + 3*n, *peid = buf5 + 4*n;
+    int *esu = esbuf, *esv = esbuf + m;
     memset(disc, -1, n * sizeof(int));
     int timer = 0, esp = 0;
 
@@ -1744,7 +1814,7 @@ static PyObject *py_bcc_nid(PyObject *self, PyObject *args) {
         }
     }
 
-    free(disc);free(low);free(stk);free(sidx);free(peid);free(esu);free(esv);
+    free(buf5); free(esbuf);
     free_adj(&al); nid_free(&ctx);
     return result;
 }
