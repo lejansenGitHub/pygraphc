@@ -28,7 +28,7 @@ dev = [
     "pytest-mock>=3.0",
     "pytest-cov>=6.0",
     "diff-cover>=9.0",
-    "ruff>=0.9",
+    "ruff>=0.15",
     "mypy>=1.14",
     "pre-commit>=4.0",
     # blueprint-linters: installed separately from vendor/ wheel (not on PyPI)
