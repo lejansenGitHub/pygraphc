@@ -1,5 +1,5 @@
 [project]
-name = "cgraph"
+name = "graphkit-c"
 version = "0.1.0"
 description = "Fast graph algorithms with C kernels — connected components via union-find"
 readme = "README.md"
