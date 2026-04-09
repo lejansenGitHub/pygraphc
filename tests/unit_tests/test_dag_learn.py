@@ -253,17 +253,18 @@ class TestHillClimbK2:
     def test_strong_dependency(self) -> None:
         """
         Variable 1 is a deterministic copy of variable 0.
-        Both implementations should find one edge (direction may vary).
+        Both implementations should find one edge. Direction may differ
+        because the K2 score is symmetric for perfectly correlated binary
+        variables — both (0→1) and (1→0) are equally good.
         """
         data = [[0, 0]] * 100 + [[1, 1]] * 100
         cards = [2, 2]
 
         cgraph_edges = set(hill_climb_k2(data, cards))
-        df = _make_dataframe(data, 2)
-        pgmpy_edges = _pgmpy_hill_climb(df, cards)
 
-        assert cgraph_edges == pgmpy_edges
         assert len(cgraph_edges) == 1
+        edge = next(iter(cgraph_edges))
+        assert set(edge) == {0, 1}
 
     def test_chain_dependency(self) -> None:
         """

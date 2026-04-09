@@ -721,6 +721,124 @@ static PyObject *py_k2_local_score(PyObject *self, PyObject *args) {
     return PyFloat_FromDouble(score);
 }
 
+/*
+ * Estimate CPDs (Conditional Probability Distributions) for all nodes
+ * given a DAG structure and dataset. Uses Laplace (add-1) smoothing.
+ *
+ * Returns a dict: { child_var: list[list[float]] }
+ * where the outer list is indexed by parent_config and the inner by child_value.
+ * Each inner list sums to 1.0.
+ *
+ * This replaces pgmpy's BayesianEstimator.estimate_cpd which uses pandas.
+ */
+static PyObject *py_estimate_cpds(PyObject *self, PyObject *args) {
+    PyObject *data_obj, *card_obj, *edges_obj;
+
+    if (!PyArg_ParseTuple(args, "OOO", &data_obj, &card_obj, &edges_obj))
+        return NULL;
+
+    Py_ssize_t n_samples = PySequence_Size(data_obj);
+    Py_ssize_t n_vars = PySequence_Size(card_obj);
+
+    if (n_samples <= 0 || n_vars <= 0) {
+        return PyDict_New();
+    }
+
+    /* Parse dataset */
+    int *values = (int *)malloc(n_samples * n_vars * sizeof(int));
+    int *cardinalities = (int *)malloc(n_vars * sizeof(int));
+    if (!values || !cardinalities) {
+        free(values); free(cardinalities);
+        return PyErr_NoMemory();
+    }
+
+    for (Py_ssize_t j = 0; j < n_vars; j++) {
+        PyObject *c = PySequence_GetItem(card_obj, j);
+        cardinalities[j] = (int)PyLong_AsLong(c);
+        Py_DECREF(c);
+    }
+    for (Py_ssize_t i = 0; i < n_samples; i++) {
+        PyObject *row = PySequence_GetItem(data_obj, i);
+        for (Py_ssize_t j = 0; j < n_vars; j++) {
+            PyObject *val = PySequence_GetItem(row, j);
+            values[i * n_vars + j] = (int)PyLong_AsLong(val);
+            Py_DECREF(val);
+        }
+        Py_DECREF(row);
+    }
+
+    Dataset ds;
+    ds.values = values;
+    ds.n_samples = (int)n_samples;
+    ds.n_vars = (int)n_vars;
+    ds.cardinalities = cardinalities;
+
+    /* Parse edges into parent lists */
+    Py_ssize_t n_edges = PySequence_Size(edges_obj);
+    int *parent_count = (int *)calloc(n_vars, sizeof(int));
+    /* max_indegree is at most n_vars; allocate generously */
+    int **parent_lists = (int **)calloc(n_vars, sizeof(int *));
+    for (Py_ssize_t j = 0; j < n_vars; j++) {
+        parent_lists[j] = (int *)malloc(n_vars * sizeof(int));
+    }
+
+    for (Py_ssize_t e = 0; e < n_edges; e++) {
+        PyObject *edge = PySequence_GetItem(edges_obj, e);
+        PyObject *py_u = PySequence_GetItem(edge, 0);
+        PyObject *py_v = PySequence_GetItem(edge, 1);
+        int u = (int)PyLong_AsLong(py_u);
+        int v = (int)PyLong_AsLong(py_v);
+        Py_DECREF(py_u); Py_DECREF(py_v); Py_DECREF(edge);
+        parent_lists[v][parent_count[v]++] = u;
+    }
+
+    /* Build CPDs for all variables */
+    PyObject *result = PyDict_New();
+
+    for (int v = 0; v < (int)n_vars; v++) {
+        int n_parent_configs;
+        int *counts = compute_state_counts(
+            &ds, v, parent_lists[v], parent_count[v], &n_parent_configs
+        );
+        if (!counts) continue;
+
+        int child_card = cardinalities[v];
+
+        /* Build Python list of lists with Laplace smoothing */
+        PyObject *cpd_list = PyList_New(n_parent_configs);
+        for (int j = 0; j < n_parent_configs; j++) {
+            /* Compute total count + smoothing for this parent config */
+            double total = (double)child_card; /* Laplace: add 1 per state */
+            for (int k = 0; k < child_card; k++) {
+                total += (double)counts[j * child_card + k];
+            }
+
+            PyObject *probs = PyList_New(child_card);
+            for (int k = 0; k < child_card; k++) {
+                double prob = ((double)counts[j * child_card + k] + 1.0) / total;
+                PyList_SET_ITEM(probs, k, PyFloat_FromDouble(prob));
+            }
+            PyList_SET_ITEM(cpd_list, j, probs);
+        }
+
+        free(counts);
+
+        PyObject *key = PyLong_FromLong(v);
+        PyDict_SetItem(result, key, cpd_list);
+        Py_DECREF(key);
+        Py_DECREF(cpd_list);
+    }
+
+    /* Cleanup */
+    for (Py_ssize_t j = 0; j < n_vars; j++) free(parent_lists[j]);
+    free(parent_lists);
+    free(parent_count);
+    free(values);
+    free(cardinalities);
+
+    return result;
+}
+
 /* ── Module definition ── */
 
 static PyMethodDef dag_learn_methods[] = {
@@ -734,6 +852,10 @@ static PyMethodDef dag_learn_methods[] = {
     {"k2_local_score", py_k2_local_score, METH_VARARGS,
      "k2_local_score(data, cardinalities, child, parents) -> float\n\n"
      "Compute K2 local score for a variable given its parents."},
+    {"estimate_cpds", py_estimate_cpds, METH_VARARGS,
+     "estimate_cpds(data, cardinalities, edges) -> dict[int, list[list[float]]]\n\n"
+     "Estimate CPDs for all variables given DAG edges and data.\n"
+     "Uses Laplace (add-1) smoothing. Returns {var: [[prob_per_child_value] per parent_config]}."},
     {NULL, NULL, 0, NULL},
 };
 

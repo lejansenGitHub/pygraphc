@@ -26,6 +26,7 @@ from cgraph._core import msdijk_nid as _msdijk_nid
 from cgraph._core import parse_graph as _parse_graph
 from cgraph._core import sssp_ctx as _sssp_ctx
 from cgraph._core import sssp_nid as _sssp_nid
+from cgraph._dag_learn import estimate_cpds as _estimate_cpds
 from cgraph._dag_learn import hill_climb_k2 as _hill_climb_k2
 from cgraph._dag_learn import k2_local_score as _k2_local_score
 
@@ -47,6 +48,7 @@ __all__ = [
     "shortest_path",
     "shortest_path_lengths",
     "two_edge_connected_components",
+    "estimate_cpds",
     "hill_climb_k2",
     "k2_local_score",
 ]
@@ -866,6 +868,29 @@ def hill_climb_k2(
     result: list[tuple[int, int]] = _hill_climb_k2(
         data, cardinalities, max_indegree, tabu_length, epsilon, max_iter,
     )
+    return result
+
+
+def estimate_cpds(
+    data: list[list[int]],
+    cardinalities: list[int],
+    edges: list[tuple[int, int]],
+) -> dict[int, list[list[float]]]:
+    """Estimate CPDs for all variables given DAG edges and data.
+
+    Uses Laplace (add-1) smoothing. Each CPD is a list of probability
+    distributions, one per parent configuration. Each distribution sums to 1.0.
+
+    Args:
+        data: Dataset as list of rows (n_samples x n_vars).
+        cardinalities: Number of possible values per variable.
+        edges: List of (parent, child) edge tuples from the learned DAG.
+
+    Returns:
+        Dict mapping variable index to its CPD:
+        ``{var: [[p(var=0|pa_config), p(var=1|pa_config), ...] for each pa_config]}``
+    """
+    result: dict[int, list[list[float]]] = _estimate_cpds(data, cardinalities, edges)
     return result
 
 
