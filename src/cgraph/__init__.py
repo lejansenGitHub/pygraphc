@@ -26,6 +26,8 @@ from cgraph._core import msdijk_nid as _msdijk_nid
 from cgraph._core import parse_graph as _parse_graph
 from cgraph._core import sssp_ctx as _sssp_ctx
 from cgraph._core import sssp_nid as _sssp_nid
+from cgraph._dag_learn import hill_climb_k2 as _hill_climb_k2
+from cgraph._dag_learn import k2_local_score as _k2_local_score
 
 __all__ = [
     "BranchId",
@@ -45,6 +47,8 @@ __all__ = [
     "shortest_path",
     "shortest_path_lengths",
     "two_edge_connected_components",
+    "hill_climb_k2",
+    "k2_local_score",
 ]
 
 NodeId = int
@@ -827,3 +831,60 @@ def for_each_edge_excluded(
             result = list(result)
         yield idx, result
         mask[idx] = 0
+
+
+# ── DAG structure learning ──
+
+
+def hill_climb_k2(
+    data: list[list[int]],
+    cardinalities: list[int],
+    *,
+    max_indegree: int = 1,
+    tabu_length: int = 100,
+    epsilon: float = 1e-4,
+    max_iter: int = 1_000_000,
+) -> list[tuple[int, int]]:
+    """Learn DAG structure via greedy hill-climb with K2 scoring.
+
+    Finds the directed acyclic graph that best explains the data according
+    to the K2 Bayesian scoring function, using a greedy search over single-edge
+    add/remove/flip operations.
+
+    Args:
+        data: Dataset as list of rows. Each row is a list of int values
+              in range ``[0, cardinality)``. Shape: ``(n_samples, n_vars)``.
+        cardinalities: Number of possible values per variable.
+        max_indegree: Maximum number of parents per node. Default 1.
+        tabu_length: Number of recent operations to forbid (prevents cycling).
+        epsilon: Minimum score improvement to continue searching.
+        max_iter: Maximum number of hill-climb iterations.
+
+    Returns:
+        List of ``(parent, child)`` edge tuples representing the learned DAG.
+    """
+    result: list[tuple[int, int]] = _hill_climb_k2(
+        data, cardinalities, max_indegree, tabu_length, epsilon, max_iter,
+    )
+    return result
+
+
+def k2_local_score(
+    data: list[list[int]],
+    cardinalities: list[int],
+    child: int,
+    parents: list[int],
+) -> float:
+    """Compute K2 local score for a variable given its parents.
+
+    Args:
+        data: Dataset as list of rows (n_samples x n_vars).
+        cardinalities: Number of possible values per variable.
+        child: Index of the target variable.
+        parents: List of parent variable indices.
+
+    Returns:
+        K2 score (higher is better).
+    """
+    result: float = _k2_local_score(data, cardinalities, child, parents)
+    return result
