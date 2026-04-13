@@ -112,28 +112,27 @@ for nodes, branches in connected_components_with_branch_ids(node_ids, edges, bra
 # {300, 400} {902}
 ```
 
-Also available on `Graph` and `GraphView`:
+Also available on `Graph` and `GraphView`. Pass `branch_ids` at construction, then exclude by domain ID:
 
 ```python
-g = Graph([1, 2, 3], [(1, 2), (2, 3)])
-list(g.connected_components_with_branch_ids([100, 200]))
+g = Graph([1, 2, 3], [(1, 2), (2, 3)], branch_ids=[100, 200])
+list(g.connected_components_with_branch_ids())
 # [({1, 2, 3}, {100, 200})]
 
-# With edge exclusion — excluded edges drop from connectivity and branch sets
-view = g.without_edges([1])  # exclude edge (2,3)
-list(view.connected_components_with_branch_ids([100, 200]))
+# Exclude branches by ID — dropped from connectivity and branch sets
+view = g.without_branches([200])  # exclude branch 200 (edge 2--3)
+list(view.connected_components_with_branch_ids())
 # [({1, 2}, {100}), ({3}, set())]
 
-# With node exclusion — excluded nodes are removed from output node sets
-# but their edges STILL contribute to connectivity and branch sets
+# Exclude nodes by ID — removed from output but edges still connect
 view = g.without_nodes([2])
-list(view.connected_components_with_branch_ids([100, 200]))
+list(view.connected_components_with_branch_ids())
 # [({1, 3}, {100, 200})]  — node 2 gone, but edges still connect 1 and 3
 
-# Exclude both nodes — empty node set, branches preserved
-view = Graph([1, 2], [(1, 2)]).without_nodes([1, 2])
-list(view.connected_components_with_branch_ids([100]))
-# [(set(), {100})]
+# Combine both — exclude branches and nodes by their domain IDs
+view = g.without_branches([200]).without_nodes([1])
+list(view.connected_components_with_branch_ids())
+# [({2}, {100}), ({3}, set())]
 ```
 
 ### Weighted algorithms

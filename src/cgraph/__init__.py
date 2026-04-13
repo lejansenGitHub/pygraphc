@@ -352,26 +352,56 @@ class Graph:
     Duplicate edges between the same node pair are allowed (multigraph support).
 
     Two calling conventions:
-        Graph(node_ids, edges)          — edges as pairs of node IDs
-        Graph(node_ids, src, dst)       — two flat lists of node IDs
+        Graph(node_ids, edges)                          — edges as pairs of node IDs
+        Graph(node_ids, src, dst)                       — two flat lists of node IDs
+        Graph(node_ids, edges, branch_ids=branch_ids)   — with branch IDs for exclusion
     """
 
-    __slots__ = ("_ctx", "_node_ids", "_edges")
+    __slots__ = (
+        "_ctx",
+        "_node_ids",
+        "_edges",
+        "_branch_ids",
+        "_branch_id_to_edge_idx",
+        "_node_id_to_idx",
+    )
 
     _edges: list[tuple[int, int]] | None
+    _branch_ids: list[BranchId] | None
+    _branch_id_to_edge_idx: dict[BranchId, int] | None
+    _node_id_to_idx: dict[NodeId, int] | None
 
     def __init__(
         self,
         node_ids: list[NodeId],
         edges_or_src: list[tuple[int, int]] | list[int],
         dst: list[int] | None = None,
+        *,
+        branch_ids: list[BranchId] | None = None,
     ) -> None:
         self._node_ids = node_ids
         self._edges = edges_or_src if dst is None else None  # type: ignore[assignment]
+        self._branch_ids = branch_ids
+        self._branch_id_to_edge_idx = None
+        self._node_id_to_idx = None
         if dst is not None:
             self._ctx = _parse_graph(node_ids, edges_or_src, dst)
         else:
             self._ctx = _parse_graph(node_ids, edges_or_src)
+
+    def _get_node_id_to_idx(self) -> dict[NodeId, int]:
+        """Lazily build and cache the node_id → internal index mapping."""
+        if self._node_id_to_idx is None:
+            self._node_id_to_idx = {nid: i for i, nid in enumerate(self._node_ids)}
+        return self._node_id_to_idx
+
+    def _get_branch_id_to_edge_idx(self) -> dict[BranchId, int]:
+        """Lazily build and cache the branch_id → edge index mapping."""
+        if self._branch_id_to_edge_idx is None:
+            if self._branch_ids is None:
+                raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
+            self._branch_id_to_edge_idx = {branch_id: edge_idx for edge_idx, branch_id in enumerate(self._branch_ids)}
+        return self._branch_id_to_edge_idx
 
     @property
     def edge_count(self) -> int:
@@ -430,6 +460,18 @@ class Graph:
         """
         return GraphView._with_additions(self, added_edges=added_edges)
 
+    def without_branches(
+        self,
+        branch_ids: Collection[BranchId],
+    ) -> "GraphView":
+        """Create a lightweight view with the given branches excluded by ID.
+
+        Requires the Graph to have been constructed with branch_ids.
+        """
+        mapping = self._get_branch_id_to_edge_idx()
+        edge_indices = [mapping[branch_id] for branch_id in branch_ids]
+        return GraphView(self, edge_indices)
+
     def without_nodes(
         self,
         node_ids: Collection[int],
@@ -467,12 +509,14 @@ class Graph:
         """Yield each connected component as a set of original node IDs."""
         yield from _cc_ctx(self._ctx)
 
-    def connected_components_with_branch_ids(
-        self,
-        branch_ids: list[BranchId],
-    ) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
-        """Yield (node_id_set, branch_id_set) for each connected component."""
-        yield from _cc_branches_ctx(self._ctx, branch_ids)
+    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
+        """Yield (node_id_set, branch_id_set) for each connected component.
+
+        Requires the Graph to have been constructed with branch_ids.
+        """
+        if self._branch_ids is None:
+            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
+        yield from _cc_branches_ctx(self._ctx, self._branch_ids)
 
     def bridges(self) -> list[tuple[NodeId, NodeId]]:
         """Return bridge edges as (node_id, node_id) pairs."""
@@ -618,10 +662,10 @@ class GraphView:
         excluded_node_ids: Collection[int],
     ) -> "GraphView":
         """Create a view excluding the given nodes (and their incident edges)."""
-        idx = {nid: i for i, nid in enumerate(graph._node_ids)}
+        node_id_to_idx = graph._get_node_id_to_idx()
         excluded_nodes = bytearray(graph.node_count)
         for nid in excluded_node_ids:
-            i = idx.get(nid)
+            i = node_id_to_idx.get(nid)
             if i is not None:
                 excluded_nodes[i] = 1
         view = object.__new__(cls)
@@ -696,10 +740,10 @@ class GraphView:
         node_ids: Collection[int],
     ) -> "GraphView":
         """Create a new view also excluding the given nodes."""
-        idx = {nid: i for i, nid in enumerate(self._graph._node_ids)}
+        node_id_to_idx = self._graph._get_node_id_to_idx()
         excluded_nodes = bytearray(self._excluded_nodes) if self._excluded_nodes else bytearray(self._graph.node_count)
         for nid in node_ids:
-            i = idx.get(nid)
+            i = node_id_to_idx.get(nid)
             if i is not None:
                 excluded_nodes[i] = 1
         view = object.__new__(GraphView)
@@ -708,6 +752,18 @@ class GraphView:
         view._added_graph = self._added_graph
         view._excluded_nodes = excluded_nodes
         return view
+
+    def without_branches(
+        self,
+        branch_ids: Collection[BranchId],
+    ) -> "GraphView":
+        """Create a new view also excluding the given branches by ID.
+
+        Requires the base Graph to have been constructed with branch_ids.
+        """
+        mapping = self._graph._get_branch_id_to_edge_idx()
+        edge_indices = [mapping[branch_id] for branch_id in branch_ids]
+        return self.without_edges(edge_indices)
 
     def without_edges(
         self,
@@ -756,19 +812,20 @@ class GraphView:
         """Yield each connected component as a set of original node IDs."""
         yield from _cc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
-    def connected_components_with_branch_ids(
-        self,
-        branch_ids: list[BranchId],
-    ) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
+    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
         """Yield (node_id_set, branch_id_set) for each connected component.
+
+        Requires the base Graph to have been constructed with branch_ids.
 
         Excluded edges are removed from connectivity and their branch IDs
         are dropped. Excluded nodes are removed from the output node sets
         but their edges still contribute to connectivity and branch ID sets.
         """
+        if self._graph._branch_ids is None:
+            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
         yield from _cc_branches_ctx(
             self._graph._ctx,
-            branch_ids,
+            self._graph._branch_ids,
             self._excluded_edges,
             self._excluded_nodes,
         )

@@ -76,19 +76,20 @@ def test_cc_vs_cc_with_branch_ids(exponent: int) -> None:
     number_of_nodes = 10**exponent
     nodes, edges = _sparse_graph(number_of_nodes)
     branch_ids = list(range(len(edges)))
-    graph = Graph(nodes, edges)
+    graph_plain = Graph(nodes, edges)
+    graph_branches = Graph(nodes, edges, branch_ids=branch_ids)
 
     runs = 20 if exponent <= 4 else 5
 
     # Warm up both paths
-    list(graph.connected_components())
-    list(graph.connected_components_with_branch_ids(branch_ids))
+    list(graph_plain.connected_components())
+    list(graph_branches.connected_components_with_branch_ids())
 
     # Plain CC — best of N
     cc_times = []
     for _ in range(runs):
         start = time.perf_counter()
-        list(graph.connected_components())
+        list(graph_plain.connected_components())
         cc_times.append(time.perf_counter() - start)
     cc_time = min(cc_times)
 
@@ -96,7 +97,7 @@ def test_cc_vs_cc_with_branch_ids(exponent: int) -> None:
     branch_times = []
     for _ in range(runs):
         start = time.perf_counter()
-        list(graph.connected_components_with_branch_ids(branch_ids))
+        list(graph_branches.connected_components_with_branch_ids())
         branch_times.append(time.perf_counter() - start)
     cc_branch_time = min(branch_times)
 
@@ -132,31 +133,29 @@ def test_cc_branch_ids_excluded_edges(exponent: int, exclusion_fraction: float) 
     number_of_nodes = 10**exponent
     nodes, edges = _sparse_graph(number_of_nodes)
     branch_ids = list(range(len(edges)))
-    graph = Graph(nodes, edges)
+    graph = Graph(nodes, edges, branch_ids=branch_ids)
     rng = random.Random(99)
 
     number_of_exclusions = max(1, int(len(edges) * exclusion_fraction))
-    excluded_indices = rng.sample(range(len(edges)), number_of_exclusions)
+    excluded_branch_ids = rng.sample(branch_ids, number_of_exclusions)
 
     runs = 3
 
     # Masked approach
     start = time.perf_counter()
     for _ in range(runs):
-        view = graph.without_edges(excluded_indices)
-        list(view.connected_components_with_branch_ids(branch_ids))
+        view = graph.without_branches(excluded_branch_ids)
+        list(view.connected_components_with_branch_ids())
     masked_time = (time.perf_counter() - start) / runs
 
     # Rebuild approach
-    excluded_set = set(excluded_indices)
+    excluded_set = set(excluded_branch_ids)
     start = time.perf_counter()
     for _ in range(runs):
-        filtered_edges = [edge for edge_index, edge in enumerate(edges) if edge_index not in excluded_set]
-        filtered_branch_ids = [
-            branch_id for edge_index, branch_id in enumerate(branch_ids) if edge_index not in excluded_set
-        ]
-        rebuilt_graph = Graph(nodes, filtered_edges)
-        list(rebuilt_graph.connected_components_with_branch_ids(filtered_branch_ids))
+        filtered_edges = [edge for edge_index, edge in enumerate(edges) if branch_ids[edge_index] not in excluded_set]
+        filtered_branch_ids = [branch_id for branch_id in branch_ids if branch_id not in excluded_set]
+        rebuilt_graph = Graph(nodes, filtered_edges, branch_ids=filtered_branch_ids)
+        list(rebuilt_graph.connected_components_with_branch_ids())
     rebuild_time = (time.perf_counter() - start) / runs
 
     speedup = rebuild_time / masked_time if masked_time > 0 else float("inf")
@@ -191,7 +190,7 @@ def test_cc_branch_ids_excluded_nodes(exponent: int, exclusion_fraction: float) 
     number_of_nodes = 10**exponent
     nodes, edges = _sparse_graph(number_of_nodes)
     branch_ids = list(range(len(edges)))
-    graph = Graph(nodes, edges)
+    graph = Graph(nodes, edges, branch_ids=branch_ids)
     rng = random.Random(99)
 
     number_of_exclusions = max(1, int(number_of_nodes * exclusion_fraction))
@@ -203,14 +202,14 @@ def test_cc_branch_ids_excluded_nodes(exponent: int, exclusion_fraction: float) 
     start = time.perf_counter()
     for _ in range(runs):
         view = graph.without_nodes(excluded_node_ids)
-        list(view.connected_components_with_branch_ids(branch_ids))
+        list(view.connected_components_with_branch_ids())
     masked_time = (time.perf_counter() - start) / runs
 
     # Python-level approach: run full CC then filter nodes from output
     excluded_set = set(excluded_node_ids)
     start = time.perf_counter()
     for _ in range(runs):
-        components = list(graph.connected_components_with_branch_ids(branch_ids))
+        components = list(graph.connected_components_with_branch_ids())
         [(node_set - excluded_set, branch_set) for node_set, branch_set in components]
     python_filter_time = (time.perf_counter() - start) / runs
 
@@ -248,12 +247,12 @@ def test_cc_branch_ids_combined_exclusions(exponent: int) -> None:
     number_of_nodes = 10**exponent
     nodes, edges = _sparse_graph(number_of_nodes)
     branch_ids = list(range(len(edges)))
-    graph = Graph(nodes, edges)
+    graph = Graph(nodes, edges, branch_ids=branch_ids)
     rng = random.Random(99)
 
-    excluded_edge_count = max(1, len(edges) // 10)
+    excluded_branch_count = max(1, len(edges) // 10)
     excluded_node_count = max(1, number_of_nodes // 10)
-    excluded_edge_indices = rng.sample(range(len(edges)), excluded_edge_count)
+    excluded_branch_ids = rng.sample(branch_ids, excluded_branch_count)
     excluded_node_ids = rng.sample(nodes, excluded_node_count)
 
     runs = 5
@@ -261,14 +260,14 @@ def test_cc_branch_ids_combined_exclusions(exponent: int) -> None:
     # No exclusions
     start = time.perf_counter()
     for _ in range(runs):
-        list(graph.connected_components_with_branch_ids(branch_ids))
+        list(graph.connected_components_with_branch_ids())
     base_time = (time.perf_counter() - start) / runs
 
     # Combined exclusions
     start = time.perf_counter()
     for _ in range(runs):
-        view = graph.without_edges(excluded_edge_indices).without_nodes(excluded_node_ids)
-        list(view.connected_components_with_branch_ids(branch_ids))
+        view = graph.without_branches(excluded_branch_ids).without_nodes(excluded_node_ids)
+        list(view.connected_components_with_branch_ids())
     combined_time = (time.perf_counter() - start) / runs
 
     overhead = (combined_time - base_time) / base_time if base_time > 0 else 0
@@ -321,8 +320,8 @@ def test_end_to_end_cc_vs_cc_with_branch_ids(exponent: int) -> None:
     def run_cc_branches() -> int:
         edges = [(branch.node_a, branch.node_b) for branch in branches]
         branch_ids = [branch.branch_id for branch in branches]
-        graph = Graph(node_ids, edges)
-        return len(list(graph.connected_components_with_branch_ids(branch_ids)))
+        graph = Graph(node_ids, edges, branch_ids=branch_ids)
+        return len(list(graph.connected_components_with_branch_ids()))
 
     run_cc_branches()
     branch_times = []
@@ -361,7 +360,8 @@ def test_end_to_end_with_exclusions(exponent: int) -> None:
     node_ids, branches = _generate_branches(number_of_nodes)
     rng = random.Random(99)
 
-    excluded_branch_indices = rng.sample(range(len(branches)), len(branches) // 10)
+    all_branch_ids = [branch.branch_id for branch in branches]
+    excluded_branch_ids = rng.sample(all_branch_ids, len(branches) // 10)
     excluded_node_ids = rng.sample(node_ids, number_of_nodes // 10)
 
     runs = 10
@@ -370,8 +370,8 @@ def test_end_to_end_with_exclusions(exponent: int) -> None:
     def run_no_exclusions() -> int:
         edges = [(branch.node_a, branch.node_b) for branch in branches]
         branch_ids = [branch.branch_id for branch in branches]
-        graph = Graph(node_ids, edges)
-        return len(list(graph.connected_components_with_branch_ids(branch_ids)))
+        graph = Graph(node_ids, edges, branch_ids=branch_ids)
+        return len(list(graph.connected_components_with_branch_ids()))
 
     run_no_exclusions()
     base_times = []
@@ -384,11 +384,11 @@ def test_end_to_end_with_exclusions(exponent: int) -> None:
     # End-to-end: with exclusions (reuse Graph, create view)
     edges = [(branch.node_a, branch.node_b) for branch in branches]
     branch_ids = [branch.branch_id for branch in branches]
-    graph = Graph(node_ids, edges)
+    graph = Graph(node_ids, edges, branch_ids=branch_ids)
 
     def run_with_exclusions() -> int:
-        view = graph.without_edges(excluded_branch_indices).without_nodes(excluded_node_ids)
-        return len(list(view.connected_components_with_branch_ids(branch_ids)))
+        view = graph.without_branches(excluded_branch_ids).without_nodes(excluded_node_ids)
+        return len(list(view.connected_components_with_branch_ids()))
 
     run_with_exclusions()
     excl_times = []
@@ -399,19 +399,15 @@ def test_end_to_end_with_exclusions(exponent: int) -> None:
     excl_time = min(excl_times)
 
     # Compare: view-based exclusion vs rebuild from scratch
-    excluded_branch_set = set(excluded_branch_indices)
+    excluded_branch_set = set(excluded_branch_ids)
 
     def run_rebuild() -> int:
         filtered_edges = [
-            (branch.node_a, branch.node_b)
-            for edge_index, branch in enumerate(branches)
-            if edge_index not in excluded_branch_set
+            (branch.node_a, branch.node_b) for branch in branches if branch.branch_id not in excluded_branch_set
         ]
-        filtered_branch_ids = [
-            branch.branch_id for edge_index, branch in enumerate(branches) if edge_index not in excluded_branch_set
-        ]
-        rebuilt_graph = Graph(node_ids, filtered_edges)
-        return len(list(rebuilt_graph.connected_components_with_branch_ids(filtered_branch_ids)))
+        filtered_branch_ids = [branch.branch_id for branch in branches if branch.branch_id not in excluded_branch_set]
+        rebuilt_graph = Graph(node_ids, filtered_edges, branch_ids=filtered_branch_ids)
+        return len(list(rebuilt_graph.connected_components_with_branch_ids()))
 
     run_rebuild()
     rebuild_times = []
