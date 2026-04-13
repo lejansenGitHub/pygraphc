@@ -131,7 +131,7 @@ module = ["pytest.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["cgraph._core", "scipy.*", "numpy.*"]
+module = ["cgraph._core", "cgraph._dag_learn", "scipy.*", "numpy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
