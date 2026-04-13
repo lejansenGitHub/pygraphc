@@ -1,22 +1,23 @@
 """Tests for Phase 6c: All-edge-paths enumeration."""
 
 import pytest
+
 from cgraph import Graph
 
 
-@pytest.fixture()
+@pytest.fixture
 def simple_chain():
     """1-2-3-4, edges: 0:(1,2), 1:(2,3), 2:(3,4)."""
     return Graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 4)])
 
 
-@pytest.fixture()
+@pytest.fixture
 def diamond():
     """Diamond: 0-1, 0-2, 1-3, 2-3. Edges 0-3."""
     return Graph([0, 1, 2, 3], [(0, 1), (0, 2), (1, 3), (2, 3)])
 
 
-@pytest.fixture()
+@pytest.fixture
 def parallel_edges():
     """Multigraph: 1-2 (e0), 2-3 (e1), 2-3 (e2), 3-4 (e3)."""
     return Graph([1, 2, 3, 4], [(1, 2), (2, 3), (2, 3), (3, 4)])

@@ -1,10 +1,11 @@
 """Tests for Phase 6a: MultiGraph support (parallel edges)."""
 
 import pytest
+
 from cgraph import Graph
 
 
-@pytest.fixture()
+@pytest.fixture
 def simple_multigraph():
     """Graph with parallel edges between 2-3: edges 1 and 2."""
     nodes = [1, 2, 3, 4]
@@ -12,7 +13,7 @@ def simple_multigraph():
     return Graph(nodes, edges)
 
 
-@pytest.fixture()
+@pytest.fixture
 def non_multigraph():
     """Simple graph with no parallel edges."""
     return Graph([1, 2, 3], [(1, 2), (2, 3), (1, 3)])

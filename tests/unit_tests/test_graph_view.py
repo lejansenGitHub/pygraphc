@@ -1,12 +1,13 @@
 """Tests for GraphView (edge-masked views) and for_each_edge_excluded."""
 
 import pytest
+
 from cgraph import Graph, GraphView, for_each_edge_excluded
 
 # ── Fixtures ──
 
 
-@pytest.fixture()
+@pytest.fixture
 def bridge_graph():
     """Graph: (0-1-2-0) --bridge(2,3)-- (3-4-5-3).
 
@@ -18,7 +19,7 @@ def bridge_graph():
     return Graph(nodes, edges)
 
 
-@pytest.fixture()
+@pytest.fixture
 def weighted_diamond():
     """Diamond: 0-1(1), 0-2(4), 1-3(2), 2-3(1). Edges indexed 0-3."""
     nodes = [0, 1, 2, 3]

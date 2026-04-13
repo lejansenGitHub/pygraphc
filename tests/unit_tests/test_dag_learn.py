@@ -12,9 +12,10 @@ import pytest
 pd = pytest.importorskip("pandas")
 pgmpy_estimators = pytest.importorskip("pgmpy.estimators")
 
-from cgraph import hill_climb_k2, k2_local_score  # noqa: E402 — after importorskip
 from pgmpy.estimators import K2, HillClimbSearch  # noqa: E402
 from pgmpy.estimators.ScoreCache import ScoreCache  # noqa: E402
+
+from cgraph import hill_climb_k2, k2_local_score  # noqa: E402 — after importorskip
 
 
 def _make_dataframe(data: list[list[int]], n_vars: int) -> pd.DataFrame:
@@ -22,9 +23,7 @@ def _make_dataframe(data: list[list[int]], n_vars: int) -> pd.DataFrame:
     return pd.DataFrame(data, columns=[str(i) for i in range(n_vars)])
 
 
-def _pgmpy_k2_score(
-    df: pd.DataFrame, child: int, parents: list[int]
-) -> float:
+def _pgmpy_k2_score(df: pd.DataFrame, child: int, parents: list[int]) -> float:
     """Compute K2 local score using pgmpy."""
     scorer = K2(df)
     return scorer.local_score(str(child), [str(p) for p in parents])
@@ -39,9 +38,7 @@ def _pgmpy_hill_climb(
 ) -> set[tuple[int, int]]:
     """Run pgmpy HillClimbSearch and return edges as (parent, child) int tuples."""
     hc = HillClimbSearch(df)
-    state_names = {
-        str(i): list(range(card)) for i, card in enumerate(cardinalities)
-    }
+    state_names = {str(i): list(range(card)) for i, card in enumerate(cardinalities)}
     dag = hc.estimate(
         scoring_method=ScoreCache(K2(df, state_names=state_names), df, max_size=1_000_000),
         show_progress=False,
@@ -94,9 +91,14 @@ class TestK2LocalScore:
     def test_one_parent_ternary(self) -> None:
         """Ternary child with binary parent."""
         data = [
-            [0, 0], [0, 1], [0, 2],
-            [1, 0], [1, 1], [1, 2],
-            [0, 0], [1, 2],
+            [0, 0],
+            [0, 1],
+            [0, 2],
+            [1, 0],
+            [1, 1],
+            [1, 2],
+            [0, 0],
+            [1, 2],
         ]
         cards = [2, 3]
         df = _make_dataframe(data, 2)
@@ -109,8 +111,14 @@ class TestK2LocalScore:
     def test_two_parents(self) -> None:
         """Three binary variables, score of variable 2 with parents [0, 1]."""
         data = [
-            [0, 0, 0], [0, 1, 1], [1, 0, 1], [1, 1, 0],
-            [0, 0, 1], [1, 1, 1], [0, 1, 0], [1, 0, 0],
+            [0, 0, 0],
+            [0, 1, 1],
+            [1, 0, 1],
+            [1, 1, 0],
+            [0, 0, 1],
+            [1, 1, 1],
+            [0, 1, 0],
+            [1, 0, 0],
         ]
         cards = [2, 2, 2]
         df = _make_dataframe(data, 3)
@@ -137,6 +145,7 @@ class TestK2LocalScore:
         # Correct K2: lgamma(2)*2 + [lgamma(10+1) - lgamma(10+2)] + [0 - lgamma(2)]
         # = lgamma(2) + lgamma(11) - lgamma(12)
         import math
+
         expected = 2 * math.lgamma(2) + math.lgamma(11) + math.lgamma(1) - math.lgamma(12) - math.lgamma(2)
         assert cgraph_score == pytest.approx(expected, abs=1e-10)
 
@@ -170,6 +179,7 @@ class TestK2LocalScore:
         cgraph_score = k2_local_score(data, cards, 0, [])
 
         import math
+
         # No parents, card=2, one sample with value=1:
         # lgamma(2) + lgamma(0+1) + lgamma(1+1) - lgamma(1+2) = lgamma(2) + 0 + lgamma(2) - lgamma(3)
         expected = math.lgamma(2) + math.lgamma(1) + math.lgamma(2) - math.lgamma(3)
@@ -196,10 +206,7 @@ class TestK2LocalScore:
         """Variables with different cardinalities."""
         rng = random.Random(123)
         cards = [2, 3, 4, 2]
-        data = [
-            [rng.randint(0, c - 1) for c in cards]
-            for _ in range(30)
-        ]
+        data = [[rng.randint(0, c - 1) for c in cards] for _ in range(30)]
         df = _make_dataframe(data, 4)
 
         cgraph_score = k2_local_score(data, cards, 2, [0, 1])
@@ -461,6 +468,4 @@ class TestHillClimbK2:
             for _u, v in edges:
                 parent_count[v] = parent_count.get(v, 0) + 1
             for node, count in parent_count.items():
-                assert count <= max_in, (
-                    f"Node {node} has {count} parents, max_indegree={max_in}"
-                )
+                assert count <= max_in, f"Node {node} has {count} parents, max_indegree={max_in}"

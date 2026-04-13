@@ -112,6 +112,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["TRY", "PLC0415"]
+"tests/performance_tests/**" = ["B903"]  # plain classes simulate domain objects in benchmarks
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "unittest.mock".msg = "Use pytest-mock instead."

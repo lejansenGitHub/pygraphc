@@ -767,7 +767,10 @@ class GraphView:
         but their edges still contribute to connectivity and branch ID sets.
         """
         yield from _cc_branches_ctx(
-            self._graph._ctx, branch_ids, self._excluded_edges, self._excluded_nodes,
+            self._graph._ctx,
+            branch_ids,
+            self._excluded_edges,
+            self._excluded_nodes,
         )
 
     def bridges(self) -> list[tuple[NodeId, NodeId]]:
@@ -905,7 +908,12 @@ def hill_climb_k2(
         List of ``(parent, child)`` edge tuples representing the learned DAG.
     """
     result: list[tuple[int, int]] = _hill_climb_k2(
-        data, cardinalities, max_indegree, tabu_length, epsilon, max_iter,
+        data,
+        cardinalities,
+        max_indegree,
+        tabu_length,
+        epsilon,
+        max_iter,
     )
     return result
 

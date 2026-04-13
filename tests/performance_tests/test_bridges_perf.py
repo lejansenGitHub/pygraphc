@@ -4,6 +4,7 @@ import random
 import time
 
 import pytest
+
 from cgraph import articulation_points, biconnected_components, bridges
 
 pytestmark = pytest.mark.performance

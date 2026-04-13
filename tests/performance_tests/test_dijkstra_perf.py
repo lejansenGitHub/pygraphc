@@ -4,6 +4,7 @@ import random
 import time
 
 import pytest
+
 from cgraph import multi_source_shortest_path_lengths, shortest_path, shortest_path_lengths
 
 pytestmark = pytest.mark.performance

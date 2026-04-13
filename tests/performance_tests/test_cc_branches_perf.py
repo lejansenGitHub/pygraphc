@@ -8,6 +8,7 @@ import random
 import time
 
 import pytest
+
 from cgraph import Graph
 
 pytestmark = pytest.mark.performance
@@ -102,9 +103,7 @@ def test_cc_vs_cc_with_branch_ids(exponent: int) -> None:
     overhead = (cc_branch_time - cc_time) / cc_time if cc_time > 0 else 0
 
     print(  # noqa: T201
-        f"\n  10^{exponent}:  cc={cc_time:.4f}s"
-        f"  | cc+branches={cc_branch_time:.4f}s"
-        f"  | overhead={overhead:.0%}",
+        f"\n  10^{exponent}:  cc={cc_time:.4f}s  | cc+branches={cc_branch_time:.4f}s  | overhead={overhead:.0%}",
     )
 
     # Branch tracking builds additional PySet per component plus iterates all
@@ -112,9 +111,7 @@ def test_cc_vs_cc_with_branch_ids(exponent: int) -> None:
     # At small sizes the overhead percentage is noisy (sub-millisecond).
     # At 1M+ the branch set construction (CPython hash-insert floor) dominates.
     # Up to 250% overhead is expected since it does strictly more work.
-    assert overhead < 2.5, (
-        f"branch overhead {overhead:.0%} (cc {cc_time:.4f}s, cc+branches {cc_branch_time:.4f}s)"
-    )
+    assert overhead < 2.5, f"branch overhead {overhead:.0%} (cc {cc_time:.4f}s, cc+branches {cc_branch_time:.4f}s)"
 
 
 # ── CC with branch IDs: excluded edges ──
@@ -170,9 +167,7 @@ def test_cc_branch_ids_excluded_edges(exponent: int, exclusion_fraction: float) 
         f"  | speedup={speedup:.1f}x",
     )
 
-    assert speedup > 1.2, (
-        f"masked {masked_time:.4f}s vs rebuild {rebuild_time:.4f}s (speedup {speedup:.1f}x)"
-    )
+    assert speedup > 1.2, f"masked {masked_time:.4f}s vs rebuild {rebuild_time:.4f}s (speedup {speedup:.1f}x)"
 
 
 # ── CC with branch IDs: excluded nodes ──
@@ -213,10 +208,7 @@ def test_cc_branch_ids_excluded_nodes(exponent: int, exclusion_fraction: float) 
     start = time.perf_counter()
     for _ in range(runs):
         components = list(graph.connected_components_with_branch_ids(branch_ids))
-        [
-            (node_set - excluded_set, branch_set)
-            for node_set, branch_set in components
-        ]
+        [(node_set - excluded_set, branch_set) for node_set, branch_set in components]
     python_filter_time = (time.perf_counter() - start) / runs
 
     overhead = (masked_time - python_filter_time) / python_filter_time if python_filter_time > 0 else 0
@@ -287,10 +279,7 @@ def test_cc_branch_ids_combined_exclusions(exponent: int) -> None:
     )
 
     # Exclusions should not regress more than 100% vs no exclusions
-    assert overhead < 1.0, (
-        f"combined overhead {overhead:.0%}"
-        f" (base {base_time:.4f}s, combined {combined_time:.4f}s)"
-    )
+    assert overhead < 1.0, f"combined overhead {overhead:.0%} (base {base_time:.4f}s, combined {combined_time:.4f}s)"
 
 
 # ── End-to-end: from Branch domain objects through gather + algorithm ──
@@ -352,10 +341,7 @@ def test_end_to_end_cc_vs_cc_with_branch_ids(exponent: int) -> None:
 
     # End-to-end overhead is lower than algorithm-only because gather + parse
     # costs are shared. At 1M nodes gather is ~35ms, algorithm delta is ~70ms.
-    assert overhead < 1.5, (
-        f"end-to-end overhead {overhead:.0%}"
-        f" (cc {cc_time:.4f}s, cc+branches {branch_time:.4f}s)"
-    )
+    assert overhead < 1.5, f"end-to-end overhead {overhead:.0%} (cc {cc_time:.4f}s, cc+branches {branch_time:.4f}s)"
 
 
 @pytest.mark.parametrize(
@@ -415,12 +401,12 @@ def test_end_to_end_with_exclusions(exponent: int) -> None:
 
     def run_rebuild() -> int:
         filtered_edges = [
-            (branch.node_a, branch.node_b) for edge_index, branch in enumerate(branches)
+            (branch.node_a, branch.node_b)
+            for edge_index, branch in enumerate(branches)
             if edge_index not in excluded_branch_set
         ]
         filtered_branch_ids = [
-            branch.branch_id for edge_index, branch in enumerate(branches)
-            if edge_index not in excluded_branch_set
+            branch.branch_id for edge_index, branch in enumerate(branches) if edge_index not in excluded_branch_set
         ]
         rebuilt_graph = Graph(node_ids, filtered_edges)
         return len(list(rebuilt_graph.connected_components_with_branch_ids(filtered_branch_ids)))
@@ -444,6 +430,5 @@ def test_end_to_end_with_exclusions(exponent: int) -> None:
     )
 
     assert speedup_vs_rebuild > 1.0, (
-        f"view {excl_time:.4f}s vs rebuild {rebuild_time:.4f}s"
-        f" (speedup {speedup_vs_rebuild:.1f}x)"
+        f"view {excl_time:.4f}s vs rebuild {rebuild_time:.4f}s (speedup {speedup_vs_rebuild:.1f}x)"
     )
