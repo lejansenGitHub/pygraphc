@@ -13,6 +13,34 @@ from cgraph import Graph
 pytestmark = pytest.mark.performance
 
 
+class Branch:
+    """Domain object simulating a real-world branch/edge with metadata."""
+
+    __slots__ = ("branch_id", "node_a", "node_b")
+
+    def __init__(self, branch_id: int, node_a: int, node_b: int) -> None:
+        self.branch_id = branch_id
+        self.node_a = node_a
+        self.node_b = node_b
+
+
+def _generate_branches(
+    number_of_nodes: int,
+    average_degree: int = 3,
+    seed: int = 42,
+) -> tuple[list[int], list[Branch]]:
+    rng = random.Random(seed)
+    number_of_edges = (number_of_nodes * average_degree) // 2
+    node_ids = list(range(number_of_nodes))
+    branches: list[Branch] = []
+    for branch_index in range(number_of_edges):
+        node_a = rng.randint(0, number_of_nodes - 1)
+        node_b = rng.randint(0, number_of_nodes - 1)
+        if node_a != node_b:
+            branches.append(Branch(branch_index, node_a, node_b))
+    return node_ids, branches
+
+
 def _sparse_graph(
     number_of_nodes: int,
     average_degree: int = 3,
@@ -262,4 +290,160 @@ def test_cc_branch_ids_combined_exclusions(exponent: int) -> None:
     assert overhead < 1.0, (
         f"combined overhead {overhead:.0%}"
         f" (base {base_time:.4f}s, combined {combined_time:.4f}s)"
+    )
+
+
+# ── End-to-end: from Branch domain objects through gather + algorithm ──
+
+
+@pytest.mark.parametrize(
+    "exponent",
+    [4, 5, 6],
+    ids=["10K", "100K", "1M"],
+)
+def test_end_to_end_cc_vs_cc_with_branch_ids(exponent: int) -> None:
+    """End-to-end from Branch objects: gather + Graph parse + algorithm.
+
+    Measures the full pipeline cost including extracting edges and branch IDs
+    from domain objects, not just the C algorithm.
+    """
+    number_of_nodes = 10**exponent
+    node_ids, branches = _generate_branches(number_of_nodes)
+    runs = 10 if exponent <= 5 else 3
+
+    # End-to-end: plain CC (gather edges + Graph + CC)
+    def run_cc() -> int:
+        edges = [(branch.node_a, branch.node_b) for branch in branches]
+        graph = Graph(node_ids, edges)
+        return len(list(graph.connected_components()))
+
+    # Warm up
+    run_cc()
+    cc_times = []
+    for _ in range(runs):
+        start = time.perf_counter()
+        run_cc()
+        cc_times.append(time.perf_counter() - start)
+    cc_time = min(cc_times)
+
+    # End-to-end: CC with branch IDs (gather edges + branch_ids + Graph + CC)
+    def run_cc_branches() -> int:
+        edges = [(branch.node_a, branch.node_b) for branch in branches]
+        branch_ids = [branch.branch_id for branch in branches]
+        graph = Graph(node_ids, edges)
+        return len(list(graph.connected_components_with_branch_ids(branch_ids)))
+
+    run_cc_branches()
+    branch_times = []
+    for _ in range(runs):
+        start = time.perf_counter()
+        run_cc_branches()
+        branch_times.append(time.perf_counter() - start)
+    branch_time = min(branch_times)
+
+    overhead = (branch_time - cc_time) / cc_time if cc_time > 0 else 0
+
+    print(  # noqa: T201
+        f"\n  10^{exponent} end-to-end:"
+        f"  cc={cc_time:.4f}s"
+        f"  | cc+branches={branch_time:.4f}s"
+        f"  | overhead={overhead:.0%}",
+    )
+
+    # End-to-end overhead is lower than algorithm-only because gather + parse
+    # costs are shared. At 1M nodes gather is ~35ms, algorithm delta is ~70ms.
+    assert overhead < 1.5, (
+        f"end-to-end overhead {overhead:.0%}"
+        f" (cc {cc_time:.4f}s, cc+branches {branch_time:.4f}s)"
+    )
+
+
+@pytest.mark.parametrize(
+    "exponent",
+    [4, 5],
+    ids=["10K", "100K"],
+)
+def test_end_to_end_with_exclusions(exponent: int) -> None:
+    """End-to-end from Branch objects with edge and node exclusions.
+
+    Full pipeline: gather from domain objects, build Graph, create view
+    with exclusions, run CC with branch IDs.
+    """
+    number_of_nodes = 10**exponent
+    node_ids, branches = _generate_branches(number_of_nodes)
+    rng = random.Random(99)
+
+    excluded_branch_indices = rng.sample(range(len(branches)), len(branches) // 10)
+    excluded_node_ids = rng.sample(node_ids, number_of_nodes // 10)
+
+    runs = 10
+
+    # End-to-end: no exclusions
+    def run_no_exclusions() -> int:
+        edges = [(branch.node_a, branch.node_b) for branch in branches]
+        branch_ids = [branch.branch_id for branch in branches]
+        graph = Graph(node_ids, edges)
+        return len(list(graph.connected_components_with_branch_ids(branch_ids)))
+
+    run_no_exclusions()
+    base_times = []
+    for _ in range(runs):
+        start = time.perf_counter()
+        run_no_exclusions()
+        base_times.append(time.perf_counter() - start)
+    base_time = min(base_times)
+
+    # End-to-end: with exclusions (reuse Graph, create view)
+    edges = [(branch.node_a, branch.node_b) for branch in branches]
+    branch_ids = [branch.branch_id for branch in branches]
+    graph = Graph(node_ids, edges)
+
+    def run_with_exclusions() -> int:
+        view = graph.without_edges(excluded_branch_indices).without_nodes(excluded_node_ids)
+        return len(list(view.connected_components_with_branch_ids(branch_ids)))
+
+    run_with_exclusions()
+    excl_times = []
+    for _ in range(runs):
+        start = time.perf_counter()
+        run_with_exclusions()
+        excl_times.append(time.perf_counter() - start)
+    excl_time = min(excl_times)
+
+    # Compare: view-based exclusion vs rebuild from scratch
+    excluded_branch_set = set(excluded_branch_indices)
+
+    def run_rebuild() -> int:
+        filtered_edges = [
+            (branch.node_a, branch.node_b) for edge_index, branch in enumerate(branches)
+            if edge_index not in excluded_branch_set
+        ]
+        filtered_branch_ids = [
+            branch.branch_id for edge_index, branch in enumerate(branches)
+            if edge_index not in excluded_branch_set
+        ]
+        rebuilt_graph = Graph(node_ids, filtered_edges)
+        return len(list(rebuilt_graph.connected_components_with_branch_ids(filtered_branch_ids)))
+
+    run_rebuild()
+    rebuild_times = []
+    for _ in range(runs):
+        start = time.perf_counter()
+        run_rebuild()
+        rebuild_times.append(time.perf_counter() - start)
+    rebuild_time = min(rebuild_times)
+
+    speedup_vs_rebuild = rebuild_time / excl_time if excl_time > 0 else float("inf")
+
+    print(  # noqa: T201
+        f"\n  10^{exponent} end-to-end with 10% exclusions:"
+        f"  no-excl={base_time:.4f}s"
+        f"  | view={excl_time:.4f}s"
+        f"  | rebuild={rebuild_time:.4f}s"
+        f"  | view vs rebuild={speedup_vs_rebuild:.1f}x",
+    )
+
+    assert speedup_vs_rebuild > 1.0, (
+        f"view {excl_time:.4f}s vs rebuild {rebuild_time:.4f}s"
+        f" (speedup {speedup_vs_rebuild:.1f}x)"
     )
