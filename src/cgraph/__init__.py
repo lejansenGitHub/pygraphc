@@ -44,16 +44,16 @@ __all__ = [
     "connected_components",
     "connected_components_with_branch_ids",
     "eccentricity",
+    "estimate_cpds",
     "for_each_edge_excluded",
+    "hill_climb_k2",
+    "k2_local_score",
     "multi_source_shortest_path_lengths",
     "nodes_on_simple_paths",
     "shortest_path",
     "shortest_path_lengths",
     "topological_sort",
     "two_edge_connected_components",
-    "estimate_cpds",
-    "hill_climb_k2",
-    "k2_local_score",
 ]
 
 NodeId = int
