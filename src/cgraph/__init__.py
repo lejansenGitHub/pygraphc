@@ -445,7 +445,7 @@ class Graph:
         edges = self._edges
         if edges is None:
             return []
-        return [i for i, (a, b) in enumerate(edges) if a == node_id or b == node_id]
+        return [i for i, (a, b) in enumerate(edges) if node_id in {a, b}]
 
     def neighbors(self, node_id: NodeId) -> set[NodeId]:
         """Return the set of neighbor node IDs (nodes connected by at least one edge)."""
@@ -473,7 +473,7 @@ class Graph:
         for a, b in edges:
             if a == node_id and b == node_id:
                 count += 2
-            elif a == node_id or b == node_id:
+            elif node_id in {a, b}:
                 count += 1
         return count
 
@@ -570,8 +570,10 @@ class Graph:
         bridge_list = self.bridges()
         result: list[tuple[NodeId, NodeId, BranchId]] = []
         for u, v in bridge_list:
-            for edge_idx in self.edge_indices(u, v):
-                result.append((u, v, self._branch_ids[edge_idx]))
+            result.extend(
+                (u, v, self._branch_ids[edge_idx])
+                for edge_idx in self.edge_indices(u, v)
+            )
         return result
 
     def articulation_points(self) -> set[NodeId]:
@@ -847,7 +849,7 @@ class GraphView:
         for i, (a, b) in enumerate(edges):
             if excluded_edges[i]:
                 continue
-            if a == node_id or b == node_id:
+            if node_id in {a, b}:
                 other = b if a == node_id else a
                 if excluded_nodes is not None:
                     other_idx = node_id_to_idx.get(other)
@@ -909,7 +911,7 @@ class GraphView:
                 if excluded_nodes is not None:
                     continue  # self-loop on excluded node already handled above
                 count += 2
-            elif a == node_id or b == node_id:
+            elif node_id in {a, b}:
                 other = b if a == node_id else a
                 if excluded_nodes is not None:
                     other_idx = node_id_to_idx.get(other)
@@ -928,9 +930,11 @@ class GraphView:
         bridge_list = self.bridges()
         result: list[tuple[NodeId, NodeId, BranchId]] = []
         for u, v in bridge_list:
-            for edge_idx in self._graph.edge_indices(u, v):
-                if not self._excluded_edges[edge_idx]:
-                    result.append((u, v, self._graph._branch_ids[edge_idx]))
+            result.extend(
+                (u, v, self._graph._branch_ids[edge_idx])
+                for edge_idx in self._graph.edge_indices(u, v)
+                if not self._excluded_edges[edge_idx]
+            )
         return result
 
     def all_edge_paths(

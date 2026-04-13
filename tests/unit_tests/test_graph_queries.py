@@ -2,8 +2,7 @@
 
 import pytest
 
-from cgraph import Graph, GraphView
-
+from cgraph import Graph
 
 # ── Fixtures ──
 
