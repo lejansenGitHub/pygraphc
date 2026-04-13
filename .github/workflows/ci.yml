@@ -19,6 +19,9 @@ jobs:
           python-version: "3.13"
       - name: Install
         run: pip install -e ".[dev]" vendor/blueprint_linters-*.whl
+      - name: Verify C extensions built
+        if: matrix.check == 'mypy'
+        run: python -c "from cgraph._core import cc_ctx; from cgraph._dag_learn import hill_climb_k2"
       - name: ruff check
         if: matrix.check == 'ruff'
         run: ruff check src/ tests/ && ruff format --check src/ tests/
