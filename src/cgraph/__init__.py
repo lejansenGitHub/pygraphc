@@ -502,12 +502,12 @@ class Graph:
         """
         edges = self._edges
         if edges is None:
-            raise ValueError("split_node requires edge-pair construction")
+            raise ValueError("split_node requires edge-pair construction")  # noqa: TRY003
         node_id_to_idx = self._get_node_id_to_idx()
         if node_id not in node_id_to_idx:
-            raise ValueError(f"node {node_id} is not in the graph")
+            raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003
         if new_node_id in node_id_to_idx:
-            raise ValueError(f"node {new_node_id} already exists in the graph")
+            raise ValueError(f"node {new_node_id} already exists in the graph")  # noqa: TRY003
         rerouted_edges: list[tuple[NodeId, NodeId]] = []
         for edge_idx in edge_indices_to_new_node:
             u, v = edges[edge_idx]
@@ -516,7 +516,7 @@ class Graph:
             elif v == node_id:
                 rerouted_edges.append((u, new_node_id))
             else:
-                raise ValueError(
+                raise ValueError(  # noqa: TRY003
                     f"edge {edge_idx} ({u}, {v}) is not incident to node {node_id}"
                 )
         return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges)
@@ -833,12 +833,12 @@ class GraphView:
         """
         edges = self._graph._edges
         if edges is None:
-            raise ValueError("split_node requires edge-pair construction")
+            raise ValueError("split_node requires edge-pair construction")  # noqa: TRY003
         node_id_to_idx = self._graph._get_node_id_to_idx()
         if node_id not in node_id_to_idx:
-            raise ValueError(f"node {node_id} is not in the graph")
+            raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003
         if new_node_id in node_id_to_idx:
-            raise ValueError(f"node {new_node_id} already exists in the graph")
+            raise ValueError(f"node {new_node_id} already exists in the graph")  # noqa: TRY003
         rerouted_edges: list[tuple[NodeId, NodeId]] = []
         for edge_idx in edge_indices_to_new_node:
             u, v = edges[edge_idx]
@@ -847,7 +847,7 @@ class GraphView:
             elif v == node_id:
                 rerouted_edges.append((u, new_node_id))
             else:
-                raise ValueError(
+                raise ValueError(  # noqa: TRY003
                     f"edge {edge_idx} ({u}, {v}) is not incident to node {node_id}"
                 )
         return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges)

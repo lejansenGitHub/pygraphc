@@ -4,7 +4,6 @@ import pytest
 
 from cgraph import Graph, GraphView
 
-
 # ── Basic split ──
 
 
@@ -215,7 +214,6 @@ def test_split_node_shortest_path():
     # --- Input ---
     # Diamond: 0-1(w=1), 0-2(w=10), 1-3(w=1), 2-3(w=1)
     graph = Graph([0, 1, 2, 3], [(0, 1), (0, 2), (1, 3), (2, 3)])
-    weights_before = [1.0, 10.0, 1.0, 1.0]
 
     # --- Split ---
     # Reroute edge 1 (0,2) to new node 99 → becomes (99,2)
