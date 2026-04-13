@@ -2425,6 +2425,138 @@ static PyObject *py_cc_ctx(PyObject *self, PyObject *args) {
     return result;
 }
 
+/* ── cc_branches_ctx(capsule, branch_ids[, excluded_edges, excluded_nodes])
+ *    -> list[tuple[set[NodeId], set[BranchId]]]
+ *
+ * Connected components with branch IDs from a cached graph context.
+ *
+ * excluded_edges: edges with excluded_edges[i] != 0 are removed from
+ *     connectivity and their branch IDs are dropped.
+ * excluded_nodes: removed from the output node sets but their edges
+ *     still contribute to connectivity and branch ID sets.
+ */
+static PyObject *py_cc_branches_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *branch_ids_obj, *emask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &branch_ids_obj, &emask_obj, &nmask_obj))
+        return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    PyObject *br_fast = PySequence_Fast(branch_ids_obj, "branch_ids must be a sequence");
+    if (!br_fast) return NULL;
+    Py_ssize_t br_len = PySequence_Fast_GET_SIZE(br_fast);
+
+    /* Parse excluded-edges mask */
+    const uint8_t *emask; Py_buffer embuf;
+    if (parse_mask(emask_obj, g->nid.el.m, &emask, &embuf) < 0) {
+        Py_DECREF(br_fast); return NULL;
+    }
+
+    /* Parse excluded-nodes mask (used only for output filtering) */
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) {
+        release_mask(&embuf); Py_DECREF(br_fast); return NULL;
+    }
+
+    /* Run union-find with edge exclusion only — excluded nodes still participate
+       in connectivity so we pass NULL for node_mask. */
+    ComponentResult cr;
+    if (compute_components_masked(n, &g->nid.el, emask, NULL, &cr) < 0) {
+        release_mask(&nmbuf); release_mask(&embuf); Py_DECREF(br_fast);
+        return NULL;
+    }
+    release_mask(&embuf);
+
+    int num_comp = cr.num_comp;
+
+    /* Bucket nodes by component */
+    int *sizes  = (int *)calloc(num_comp, sizeof(int));
+    int **buckets = (int **)malloc(num_comp * sizeof(int *));
+    int *offsets  = (int *)calloc(num_comp, sizeof(int));
+    if (!sizes || !buckets || !offsets) {
+        free(sizes); free(buckets); free(offsets);
+        free(cr.labels); release_mask(&nmbuf); Py_DECREF(br_fast);
+        PyErr_NoMemory(); return NULL;
+    }
+    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
+    for (int c = 0; c < num_comp; c++) {
+        buckets[c] = (int *)malloc(sizes[c] * sizeof(int));
+        if (!buckets[c]) {
+            for (int j = 0; j < c; j++) free(buckets[j]);
+            free(sizes); free(buckets); free(offsets);
+            free(cr.labels); release_mask(&nmbuf); Py_DECREF(br_fast);
+            PyErr_NoMemory(); return NULL;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        int c = cr.labels[i];
+        buckets[c][offsets[c]++] = i;
+    }
+
+    /* Build branch sets per component (skipping excluded edges) */
+    PyObject **branch_sets = (PyObject **)calloc(num_comp, sizeof(PyObject *));
+    if (!branch_sets) {
+        for (int c = 0; c < num_comp; c++) free(buckets[c]);
+        free(sizes); free(buckets); free(offsets);
+        free(cr.labels); release_mask(&nmbuf); Py_DECREF(br_fast);
+        PyErr_NoMemory(); return NULL;
+    }
+    for (int c = 0; c < num_comp; c++)
+        branch_sets[c] = PySet_New(NULL);
+
+    EdgeList *el = &g->nid.el;
+    Py_ssize_t edge_branch_count = el->m < br_len ? el->m : br_len;
+    PyObject **br_items = PySequence_Fast_ITEMS(br_fast);
+
+    /* Re-parse excluded-edges mask for branch assignment */
+    const uint8_t *emask2; Py_buffer embuf2;
+    if (parse_mask(emask_obj, el->m, &emask2, &embuf2) < 0) {
+        for (int c = 0; c < num_comp; c++) { free(buckets[c]); Py_DECREF(branch_sets[c]); }
+        free(sizes); free(buckets); free(offsets); free(branch_sets);
+        free(cr.labels); release_mask(&nmbuf); Py_DECREF(br_fast);
+        return NULL;
+    }
+
+    for (Py_ssize_t i = 0; i < edge_branch_count; i++) {
+        if (emask2 && emask2[i]) continue;
+        int c = cr.labels[EDGE_SRC(el, i)];
+        PySet_Add(branch_sets[c], br_items[i]);
+    }
+    release_mask(&embuf2);
+    Py_DECREF(br_fast);
+
+    /* Build result list with remapped node IDs, filtering excluded nodes */
+    PyObject *result = PyList_New(0);
+    if (!result) goto cleanup_bcctx;
+
+    for (int c = 0; c < num_comp; c++) {
+        PyObject *node_set = PySet_New(NULL);
+        for (int j = 0; j < sizes[c]; j++) {
+            int idx = buckets[c][j];
+            if (nmask && nmask[idx]) continue;
+            PySet_Add(node_set, g->nid.nid_items[idx]);
+        }
+        /* Include component if it has any nodes or any branches */
+        if (PySet_GET_SIZE(node_set) > 0 || PySet_GET_SIZE(branch_sets[c]) > 0) {
+            PyObject *tup = PyTuple_Pack(2, node_set, branch_sets[c]);
+            PyList_Append(result, tup);
+            Py_DECREF(tup);
+        }
+        Py_DECREF(node_set);
+    }
+
+cleanup_bcctx:
+    free(cr.labels); free(sizes); free(offsets);
+    for (int c = 0; c < num_comp; c++) {
+        free(buckets[c]);
+        Py_DECREF(branch_sets[c]);
+    }
+    free(buckets); free(branch_sets);
+    release_mask(&nmbuf);
+    return result;
+}
+
 static PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
@@ -3083,6 +3215,97 @@ error:
     return NULL;
 }
 
+/* ── Topological sort (Kahn's algorithm, directed edges) ── */
+
+/*
+ * Core: Kahn's algorithm on internal indices.
+ * Edges are directed: src[i] -> dst[i].
+ * Returns topological order in *out_order (caller must free).
+ * Returns number of nodes in order (== n if acyclic).
+ */
+static int toposort_core(int n, EdgeList *el, int **out_order) {
+    Py_ssize_t m = el->m;
+    int *in_deg = (int *)calloc(n, sizeof(int));
+    int *head   = (int *)calloc(n, sizeof(int));  /* per-node adjacency list head */
+    int *nxt    = m > 0 ? (int *)malloc((size_t)m * sizeof(int)) : NULL;
+    int *adj_dst = m > 0 ? (int *)malloc((size_t)m * sizeof(int)) : NULL;
+    int *queue  = (int *)malloc((size_t)n * sizeof(int));
+
+    if (!in_deg || !head || (m > 0 && (!nxt || !adj_dst)) || !queue) {
+        free(in_deg); free(head); free(nxt); free(adj_dst); free(queue);
+        PyErr_NoMemory();
+        return -1;
+    }
+
+    /* Initialize heads to -1 (empty list) */
+    for (int i = 0; i < n; i++) head[i] = -1;
+
+    /* Build directed adjacency list + compute in-degrees */
+    for (Py_ssize_t i = 0; i < m; i++) {
+        int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
+        in_deg[v]++;
+        adj_dst[i] = v;
+        nxt[i] = head[u];
+        head[u] = (int)i;
+    }
+
+    /* Seed queue with zero in-degree nodes */
+    int qh = 0, qt = 0;
+    for (int i = 0; i < n; i++) {
+        if (in_deg[i] == 0) queue[qt++] = i;
+    }
+
+    /* Process queue */
+    while (qh < qt) {
+        int u = queue[qh++];
+        for (int e = head[u]; e >= 0; e = nxt[e]) {
+            int v = adj_dst[e];
+            if (--in_deg[v] == 0) queue[qt++] = v;
+        }
+    }
+
+    free(in_deg); free(head); free(nxt); free(adj_dst);
+    *out_order = queue;
+    return qt;  /* number of nodes processed; < n means cycle */
+}
+
+static PyObject *py_toposort_nid(PyObject *self, PyObject *args) {
+    PyObject *nids, *edges;
+    if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
+
+    NidContext ctx;
+    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.n;
+
+    if (n == 0) {
+        nid_free(&ctx);
+        return PyList_New(0);
+    }
+
+    int *order;
+    int count = toposort_core(n, &ctx.el, &order);
+    if (count < 0) { nid_free(&ctx); return NULL; }
+
+    if (count < n) {
+        free(order); nid_free(&ctx);
+        PyErr_Format(PyExc_ValueError,
+            "Graph contains a cycle - topological sort is undefined "
+            "(%d of %d nodes processed)", count, n);
+        return NULL;
+    }
+
+    PyObject *result = PyList_New(n);
+    if (result) {
+        for (int i = 0; i < n; i++) {
+            Py_INCREF(ctx.nid_items[order[i]]);
+            PyList_SET_ITEM(result, i, ctx.nid_items[order[i]]);
+        }
+    }
+
+    free(order); nid_free(&ctx);
+    return result;
+}
+
 /* ── Module definition ── */
 
 static PyMethodDef methods[] = {
@@ -3161,6 +3384,11 @@ static PyMethodDef methods[] = {
     {"graph_node_count", py_graph_node_count, METH_VARARGS,
      "graph_node_count(capsule) -> int\n\nReturn node count from parsed graph."},
     {"cc_ctx", py_cc_ctx, METH_VARARGS, "Connected components from cached graph."},
+    {"cc_branches_ctx", py_cc_branches_ctx, METH_VARARGS,
+     "cc_branches_ctx(capsule, branch_ids[, excluded_edges, excluded_nodes])\n\n"
+     "Connected components with branch IDs from cached graph.\n"
+     "Excluded edges are dropped from connectivity and branch sets.\n"
+     "Excluded nodes are removed from output node sets but edges still connect."},
     {"bridges_ctx", py_bridges_ctx, METH_VARARGS, "Bridges from cached graph."},
     {"ap_ctx", py_ap_ctx, METH_VARARGS, "Articulation points from cached graph."},
     {"bcc_ctx", py_bcc_ctx, METH_VARARGS, "Biconnected components from cached graph."},
@@ -3168,6 +3396,10 @@ static PyMethodDef methods[] = {
     {"dijkstra_ctx", py_dijkstra_ctx, METH_VARARGS, "Dijkstra from cached graph."},
     {"sssp_ctx", py_sssp_ctx, METH_VARARGS, "SSSP lengths from cached graph."},
     {"msdijk_ctx", py_msdijk_ctx, METH_VARARGS, "Multi-source Dijkstra from cached graph."},
+    {"toposort_nid", py_toposort_nid, METH_VARARGS,
+     "toposort_nid(node_ids, nid_edges) -> list[NodeId]\n\n"
+     "Topological sort (Kahn's algorithm). Edges are directed: (u, v) means u -> v.\n"
+     "Raises ValueError if the graph contains a cycle."},
     {"all_edge_paths_ctx", py_all_edge_paths_ctx, METH_VARARGS,
      "all_edge_paths_ctx(capsule, source, targets[, cutoff, edge_mask, node_mask, node_simple]) -> list[list[int]]\n\n"
      "Find all paths from source to targets using each edge at most once.\n"

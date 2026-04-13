@@ -686,3 +686,293 @@ class TestWithEdgesEdgeCases:
         blocks2 = list(view.biconnected_components())
         assert len(blocks2) == 1
         assert blocks2[0] == {0, 1, 2}
+
+
+# ── Connected Components with Branch IDs ──
+
+
+def test_graph_cc_with_branch_ids_no_exclusions():
+    """Graph method: two components, branch IDs correctly assigned."""
+    # --- Input ---
+    node_ids = [1, 2, 3, 4]
+    edges = [(1, 2), (3, 4)]
+    branch_ids = [100, 200]
+    graph = Graph(node_ids, edges)
+
+    # --- Expected ---
+    # Two components: {1,2} with branch 100, {3,4} with branch 200
+    expected = {
+        frozenset({1, 2}): {100},
+        frozenset({3, 4}): {200},
+    }
+
+    # --- Execute ---
+    result = list(graph.connected_components_with_branch_ids(branch_ids))
+
+    # --- Assert ---
+    result_map = {frozenset(nodes): branches for nodes, branches in result}
+    assert result_map == expected
+
+
+def test_graph_cc_with_branch_ids_single_component():
+    """All nodes connected — single component gets all branch IDs."""
+    # --- Input ---
+    node_ids = [10, 20, 30]
+    edges = [(10, 20), (20, 30)]
+    branch_ids = [500, 600]
+    graph = Graph(node_ids, edges)
+
+    # --- Execute ---
+    result = list(graph.connected_components_with_branch_ids(branch_ids))
+
+    # --- Assert ---
+    assert len(result) == 1
+    nodes, branches = result[0]
+    assert nodes == {10, 20, 30}
+    assert branches == {500, 600}
+
+
+def test_view_cc_with_branch_ids_exclude_edge():
+    """Excluding an edge splits its component and drops its branch ID.
+
+    Graph: 1--2--3 with branch IDs [100, 200].
+    Excluding edge 1 (2--3) splits into {1,2} with {100} and {3} with {}.
+    """
+    # --- Input ---
+    graph = Graph([1, 2, 3], [(1, 2), (2, 3)])
+    branch_ids = [100, 200]
+    view = graph.without_edges([1])
+
+    # --- Expected ---
+    expected = {
+        frozenset({1, 2}): {100},
+        frozenset({3}): set(),
+    }
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids(branch_ids))
+
+    # --- Assert ---
+    result_map = {frozenset(nodes): branches for nodes, branches in result}
+    assert result_map == expected
+
+
+def test_view_cc_with_branch_ids_exclude_one_node():
+    """Excluding a node removes it from output but edges still connect.
+
+    Graph: A(1)--B(2) with branch_id 100.
+    Excluding node 1: component has nodes={2}, branches={100}.
+    The edge still drives connectivity so there's one component.
+    """
+    # --- Input ---
+    graph = Graph([1, 2], [(1, 2)])
+    branch_ids = [100]
+    view = graph.without_nodes([1])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids(branch_ids))
+
+    # --- Assert ---
+    assert len(result) == 1
+    nodes, branches = result[0]
+    assert nodes == {2}
+    assert branches == {100}
+
+
+def test_view_cc_with_branch_ids_exclude_both_nodes():
+    """Excluding all nodes leaves a component with only the branch ID.
+
+    Graph: A(1)--B(2) with branch_id 100.
+    Excluding both nodes: component has nodes={}, branches={100}.
+    """
+    # --- Input ---
+    graph = Graph([1, 2], [(1, 2)])
+    branch_ids = [100]
+    view = graph.without_nodes([1, 2])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids(branch_ids))
+
+    # --- Assert ---
+    assert len(result) == 1
+    nodes, branches = result[0]
+    assert nodes == set()
+    assert branches == {100}
+
+
+def test_view_cc_with_branch_ids_exclude_edge_and_node():
+    """Combining edge and node exclusion.
+
+    Graph: 1--2--3--4 with branch IDs [100, 200, 300].
+    Exclude edge 1 (2--3), exclude node 1.
+    Edge exclusion splits connectivity: {1,2} and {3,4}.
+    Node exclusion removes node 1 from output.
+    Result: ({2}, {100}) and ({3, 4}, {300}).
+    """
+    # --- Input ---
+    graph = Graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 4)])
+    branch_ids = [100, 200, 300]
+    view = graph.without_edges([1]).without_nodes([1])
+
+    # --- Expected ---
+    expected = {
+        frozenset({2}): {100},
+        frozenset({3, 4}): {300},
+    }
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids(branch_ids))
+
+    # --- Assert ---
+    result_map = {frozenset(nodes): branches for nodes, branches in result}
+    assert result_map == expected
+
+
+def test_view_cc_with_branch_ids_excluded_node_bridges_components():
+    """Excluded node's edges still provide connectivity between components.
+
+    Graph: 1--2--3 with branch IDs [100, 200].
+    Exclude node 2: its edges (1-2, 2-3) still connect 1 and 3.
+    Result: single component ({1, 3}, {100, 200}).
+    """
+    # --- Input ---
+    graph = Graph([1, 2, 3], [(1, 2), (2, 3)])
+    branch_ids = [100, 200]
+    view = graph.without_nodes([2])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids(branch_ids))
+
+    # --- Assert ---
+    assert len(result) == 1
+    nodes, branches = result[0]
+    assert nodes == {1, 3}
+    assert branches == {100, 200}
+
+
+def test_view_cc_with_branch_ids_no_edges():
+    """Isolated nodes, no edges — each node is its own component."""
+    # --- Input ---
+    graph = Graph([1, 2, 3], [])
+    view = graph.without_nodes([2])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids([]))
+
+    # --- Assert ---
+    result_nodes = [nodes for nodes, _branches in result]
+    assert {1} in result_nodes
+    assert {3} in result_nodes
+
+
+def test_view_cc_with_branch_ids_large_node_ids():
+    """Non-contiguous large node IDs with exclusions."""
+    # --- Input ---
+    graph = Graph([1000, 2000, 3000, 4000], [(1000, 2000), (2000, 3000), (3000, 4000)])
+    branch_ids = [10, 20, 30]
+    view = graph.without_edges([1]).without_nodes([1000])
+
+    # --- Expected ---
+    # Edge 1 (2000--3000) excluded: splits into {1000,2000} and {3000,4000}
+    # Node 1000 excluded from output: {2000} and {3000,4000}
+    expected = {
+        frozenset({2000}): {10},
+        frozenset({3000, 4000}): {30},
+    }
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids(branch_ids))
+
+    # --- Assert ---
+    result_map = {frozenset(nodes): branches for nodes, branches in result}
+    assert result_map == expected
+
+
+def test_graph_cc_with_branch_ids_empty_graph():
+    """Empty graph — no components."""
+    # --- Input ---
+    graph = Graph([], [])
+
+    # --- Execute ---
+    result = list(graph.connected_components_with_branch_ids([]))
+
+    # --- Assert ---
+    assert result == []
+
+
+def test_view_cc_with_branch_ids_exclude_only_edge():
+    """Excluding the only edge gives two isolated nodes, no branches.
+
+    Graph: 1--2 with branch_id 100. Exclude edge 0.
+    Result: ({1}, {}) and ({2}, {}).
+    """
+    # --- Input ---
+    graph = Graph([1, 2], [(1, 2)])
+    view = graph.without_edges([0])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids([100]))
+
+    # --- Assert ---
+    result_map = {frozenset(nodes): branches for nodes, branches in result}
+    assert result_map == {frozenset({1}): set(), frozenset({2}): set()}
+
+
+def test_view_cc_with_branch_ids_exclude_all_edges():
+    """Excluding all edges gives isolated nodes, no branches.
+
+    Graph: 1--2--3 with branch IDs [100, 200]. Exclude both edges.
+    Result: three isolated components, all with empty branch sets.
+    """
+    # --- Input ---
+    graph = Graph([1, 2, 3], [(1, 2), (2, 3)])
+    view = graph.without_edges([0, 1])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids([100, 200]))
+
+    # --- Assert ---
+    assert len(result) == 3
+    for nodes, branches in result:
+        assert len(nodes) == 1
+        assert branches == set()
+
+
+def test_view_cc_with_branch_ids_parallel_edges():
+    """Multigraph: parallel edges between same nodes.
+
+    Graph: 1==2 (two parallel edges, branch IDs 100 and 200).
+    Exclude one edge: remaining edge still connects, one branch ID survives.
+    """
+    # --- Input ---
+    graph = Graph([1, 2], [(1, 2), (1, 2)])
+    view = graph.without_edges([0])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids([100, 200]))
+
+    # --- Assert ---
+    assert len(result) == 1
+    nodes, branches = result[0]
+    assert nodes == {1, 2}
+    assert branches == {200}
+
+
+def test_view_cc_with_branch_ids_exclude_node_isolated():
+    """Excluding an isolated node removes it entirely.
+
+    Graph: 1  2  3 (no edges). Exclude node 2.
+    Result: two components ({1}, {}) and ({3}, {}). Node 2 gone.
+    """
+    # --- Input ---
+    graph = Graph([1, 2, 3], [])
+    view = graph.without_nodes([2])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids([]))
+
+    # --- Assert ---
+    result_nodes = sorted([frozenset(nodes) for nodes, _branches in result])
+    assert frozenset({1}) in result_nodes
+    assert frozenset({3}) in result_nodes
+    assert frozenset({2}) not in result_nodes

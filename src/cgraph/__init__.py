@@ -13,6 +13,7 @@ from cgraph._core import bfs_ctx as _bfs_ctx
 from cgraph._core import bfs_nid as _bfs_nid
 from cgraph._core import bridges_ctx as _bridges_ctx
 from cgraph._core import bridges_nid as _bridges_nid
+from cgraph._core import cc_branches_ctx as _cc_branches_ctx
 from cgraph._core import cc_ctx as _cc_ctx
 from cgraph._core import cc_nid as _cc_nid
 from cgraph._core import cc_nid_split as _cc_nid_split
@@ -26,6 +27,7 @@ from cgraph._core import msdijk_nid as _msdijk_nid
 from cgraph._core import parse_graph as _parse_graph
 from cgraph._core import sssp_ctx as _sssp_ctx
 from cgraph._core import sssp_nid as _sssp_nid
+from cgraph._core import toposort_nid as _toposort_nid
 from cgraph._dag_learn import estimate_cpds as _estimate_cpds
 from cgraph._dag_learn import hill_climb_k2 as _hill_climb_k2
 from cgraph._dag_learn import k2_local_score as _k2_local_score
@@ -47,6 +49,7 @@ __all__ = [
     "nodes_on_simple_paths",
     "shortest_path",
     "shortest_path_lengths",
+    "topological_sort",
     "two_edge_connected_components",
     "estimate_cpds",
     "hill_climb_k2",
@@ -202,6 +205,22 @@ def two_edge_connected_components(
 
     non_bridge_edges = [(u, v) for u, v in edges if (min(u, v), max(u, v)) not in bridge_set]
     yield from connected_components(node_ids, non_bridge_edges)
+
+
+# ── Directed graph algorithms ──
+
+
+def topological_sort(
+    node_ids: list[NodeId],
+    edges: list[tuple[NodeId, NodeId]],
+) -> list[NodeId]:
+    """Return nodes in topological order (Kahn's algorithm, C implementation).
+
+    Edges are treated as directed: (u, v) means u → v.
+    Raises ValueError if the graph contains a cycle.
+    """
+    result: list[NodeId] = _toposort_nid(node_ids, edges)
+    return result
 
 
 def nodes_on_simple_paths(
@@ -448,6 +467,13 @@ class Graph:
         """Yield each connected component as a set of original node IDs."""
         yield from _cc_ctx(self._ctx)
 
+    def connected_components_with_branch_ids(
+        self,
+        branch_ids: list[BranchId],
+    ) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
+        """Yield (node_id_set, branch_id_set) for each connected component."""
+        yield from _cc_branches_ctx(self._ctx, branch_ids)
+
     def bridges(self) -> list[tuple[NodeId, NodeId]]:
         """Return bridge edges as (node_id, node_id) pairs."""
         result: list[tuple[NodeId, NodeId]] = _bridges_ctx(self._ctx)
@@ -555,13 +581,13 @@ class GraphView:
     """Lightweight view of a Graph with excluded edges and/or nodes.
 
     Shares the base graph's parsed data (IntMap, CSR). Holds a
-    bytearray edge mask and an optional bytearray node mask.
+    bytearray of excluded edges and an optional bytearray of excluded nodes.
 
     Edges are identified by their index in the original edge list
     (the order in which they were passed to ``Graph()``).
     """
 
-    __slots__ = ("_graph", "_mask", "_added_graph", "_node_mask")
+    __slots__ = ("_graph", "_excluded_edges", "_added_graph", "_excluded_nodes")
 
     def __init__(
         self,
@@ -569,20 +595,20 @@ class GraphView:
         excluded_edge_indices: Collection[int],
     ) -> None:
         self._graph = graph
-        self._mask = bytearray(graph.edge_count)
+        self._excluded_edges = bytearray(graph.edge_count)
         for idx in excluded_edge_indices:
-            self._mask[idx] = 1
+            self._excluded_edges[idx] = 1
         self._added_graph: Graph | None = None
-        self._node_mask: bytearray | None = None
+        self._excluded_nodes: bytearray | None = None
 
     @classmethod
-    def _from_mask(cls, graph: Graph, mask: bytearray) -> "GraphView":
-        """Create a view from an existing mask (no copy)."""
+    def _from_excluded_edges(cls, graph: Graph, excluded_edges: bytearray) -> "GraphView":
+        """Create a view from an existing excluded-edges bytearray (no copy)."""
         view = object.__new__(cls)
         view._graph = graph
-        view._mask = mask
+        view._excluded_edges = excluded_edges
         view._added_graph = None
-        view._node_mask = None
+        view._excluded_nodes = None
         return view
 
     @classmethod
@@ -593,16 +619,16 @@ class GraphView:
     ) -> "GraphView":
         """Create a view excluding the given nodes (and their incident edges)."""
         idx = {nid: i for i, nid in enumerate(graph._node_ids)}
-        nmask = bytearray(graph.node_count)
+        excluded_nodes = bytearray(graph.node_count)
         for nid in excluded_node_ids:
             i = idx.get(nid)
             if i is not None:
-                nmask[i] = 1
+                excluded_nodes[i] = 1
         view = object.__new__(cls)
         view._graph = graph
-        view._mask = bytearray(graph.edge_count)
+        view._excluded_edges = bytearray(graph.edge_count)
         view._added_graph = None
-        view._node_mask = nmask
+        view._excluded_nodes = excluded_nodes
         return view
 
     @classmethod
@@ -637,9 +663,9 @@ class GraphView:
 
         view = object.__new__(cls)
         view._graph = rebuilt
-        view._mask = bytearray(rebuilt.edge_count)  # no exclusions on rebuilt graph
+        view._excluded_edges = bytearray(rebuilt.edge_count)
         view._added_graph = rebuilt  # prevent GC
-        view._node_mask = None
+        view._excluded_nodes = None
         return view
 
     def with_edges(
@@ -658,7 +684,7 @@ class GraphView:
                 self._graph,
                 added_edges=added_edges,
             )
-        excluded = [i for i, b in enumerate(self._mask) if b]
+        excluded = [i for i, b in enumerate(self._excluded_edges) if b]
         return GraphView._with_additions(
             self._graph,
             excluded_edge_indices=excluded,
@@ -671,16 +697,16 @@ class GraphView:
     ) -> "GraphView":
         """Create a new view also excluding the given nodes."""
         idx = {nid: i for i, nid in enumerate(self._graph._node_ids)}
-        nmask = bytearray(self._node_mask) if self._node_mask else bytearray(self._graph.node_count)
+        excluded_nodes = bytearray(self._excluded_nodes) if self._excluded_nodes else bytearray(self._graph.node_count)
         for nid in node_ids:
             i = idx.get(nid)
             if i is not None:
-                nmask[i] = 1
+                excluded_nodes[i] = 1
         view = object.__new__(GraphView)
         view._graph = self._graph
-        view._mask = bytearray(self._mask)
+        view._excluded_edges = bytearray(self._excluded_edges)
         view._added_graph = self._added_graph
-        view._node_mask = nmask
+        view._excluded_nodes = excluded_nodes
         return view
 
     def without_edges(
@@ -688,14 +714,14 @@ class GraphView:
         edge_indices: Collection[int],
     ) -> "GraphView":
         """Create a new view also excluding the given edges."""
-        new_mask = bytearray(self._mask)
+        new_excluded_edges = bytearray(self._excluded_edges)
         for idx in edge_indices:
-            new_mask[idx] = 1
+            new_excluded_edges[idx] = 1
         view = object.__new__(GraphView)
         view._graph = self._graph
-        view._mask = new_mask
+        view._excluded_edges = new_excluded_edges
         view._added_graph = self._added_graph
-        view._node_mask = bytearray(self._node_mask) if self._node_mask else None
+        view._excluded_nodes = bytearray(self._excluded_nodes) if self._excluded_nodes else None
         return view
 
     def all_edge_paths(
@@ -709,7 +735,7 @@ class GraphView:
         """Find all paths from source to targets using each edge at most once.
 
         Returns a list of paths. Each path is a list of edge indices.
-        Respects both edge and node masks.
+        Respects both excluded edges and excluded nodes.
 
         node_simple: if True, each node may be visited at most once per path.
         """
@@ -720,33 +746,47 @@ class GraphView:
             source,
             tgt_list,
             c,
-            self._mask,
-            self._node_mask,
+            self._excluded_edges,
+            self._excluded_nodes,
             node_simple,
         )
         return result
 
     def connected_components(self) -> Generator[set[NodeId], None, None]:
         """Yield each connected component as a set of original node IDs."""
-        yield from _cc_ctx(self._graph._ctx, self._mask, self._node_mask)
+        yield from _cc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+
+    def connected_components_with_branch_ids(
+        self,
+        branch_ids: list[BranchId],
+    ) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
+        """Yield (node_id_set, branch_id_set) for each connected component.
+
+        Excluded edges are removed from connectivity and their branch IDs
+        are dropped. Excluded nodes are removed from the output node sets
+        but their edges still contribute to connectivity and branch ID sets.
+        """
+        yield from _cc_branches_ctx(
+            self._graph._ctx, branch_ids, self._excluded_edges, self._excluded_nodes,
+        )
 
     def bridges(self) -> list[tuple[NodeId, NodeId]]:
         """Return bridge edges as (node_id, node_id) pairs."""
-        result: list[tuple[NodeId, NodeId]] = _bridges_ctx(self._graph._ctx, self._mask, self._node_mask)
+        result: list[tuple[NodeId, NodeId]] = _bridges_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
         return result
 
     def articulation_points(self) -> set[NodeId]:
         """Return the set of articulation points."""
-        result: set[NodeId] = _ap_ctx(self._graph._ctx, self._mask, self._node_mask)
+        result: set[NodeId] = _ap_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
         return result
 
     def biconnected_components(self) -> Generator[set[NodeId], None, None]:
         """Yield each biconnected component as a set of node IDs."""
-        yield from _bcc_ctx(self._graph._ctx, self._mask, self._node_mask)
+        yield from _bcc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
     def bfs(self, source: NodeId) -> list[NodeId]:
         """Return nodes visited in BFS order from source."""
-        result: list[NodeId] = _bfs_ctx(self._graph._ctx, source, self._mask, self._node_mask)
+        result: list[NodeId] = _bfs_ctx(self._graph._ctx, source, self._excluded_edges, self._excluded_nodes)
         return result
 
     def shortest_path(
@@ -761,8 +801,8 @@ class GraphView:
             weights,
             source,
             target,
-            self._mask,
-            self._node_mask,
+            self._excluded_edges,
+            self._excluded_nodes,
         )
         result: list[NodeId] = path
         return result
@@ -780,8 +820,8 @@ class GraphView:
             weights,
             source,
             c,
-            self._mask,
-            self._node_mask,
+            self._excluded_edges,
+            self._excluded_nodes,
         )
         return result
 
@@ -798,8 +838,8 @@ class GraphView:
             weights,
             sources,
             c,
-            self._mask,
-            self._node_mask,
+            self._excluded_edges,
+            self._excluded_nodes,
         )
         return result
 
@@ -822,17 +862,16 @@ def for_each_edge_excluded(
     Reuses a single mask bytearray, toggling one bit per iteration.
     If edge_indices is None, iterates over all edges.
     """
-    mask = bytearray(graph.edge_count)
+    excluded_edges = bytearray(graph.edge_count)
     indices = edge_indices if edge_indices is not None else range(graph.edge_count)
     for idx in indices:
-        mask[idx] = 1
-        view = GraphView._from_mask(graph, mask)
+        excluded_edges[idx] = 1
+        view = GraphView._from_excluded_edges(graph, excluded_edges)
         result = getattr(view, algorithm)(**algorithm_kwargs)
-        # Materialize generators since the mask is shared and will be reset
         if isinstance(result, types.GeneratorType):
             result = list(result)
         yield idx, result
-        mask[idx] = 0
+        excluded_edges[idx] = 0
 
 
 # ── DAG structure learning ──
