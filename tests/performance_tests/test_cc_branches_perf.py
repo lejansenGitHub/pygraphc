@@ -167,8 +167,10 @@ def test_cc_branch_ids_excluded_edges(exponent: int, exclusion_fraction: float) 
         f"  | speedup={speedup:.1f}x",
     )
 
-    # Only assert at 100K+ — at 10K the absolute times are sub-ms and noisy
-    if exponent >= 5:
+    # Only assert at 100K+ with low exclusion fractions. At high fractions
+    # (50%) rebuild wins because it creates a smaller graph — the masked
+    # approach still iterates all edges.
+    if exponent >= 5 and exclusion_fraction <= 0.10:
         assert speedup > 1.2, f"masked {masked_time:.4f}s vs rebuild {rebuild_time:.4f}s (speedup {speedup:.1f}x)"
 
 
