@@ -570,10 +570,7 @@ class Graph:
         bridge_list = self.bridges()
         result: list[tuple[NodeId, NodeId, BranchId]] = []
         for u, v in bridge_list:
-            result.extend(
-                (u, v, self._branch_ids[edge_idx])
-                for edge_idx in self.edge_indices(u, v)
-            )
+            result.extend((u, v, self._branch_ids[edge_idx]) for edge_idx in self.edge_indices(u, v))
         return result
 
     def articulation_points(self) -> set[NodeId]:
