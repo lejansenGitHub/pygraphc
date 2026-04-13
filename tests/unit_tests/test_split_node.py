@@ -57,9 +57,7 @@ def test_split_node_reroute_all_edges():
     graph = Graph([0, 1, 2, 3], [(0, 1), (0, 2), (0, 3)])
 
     # --- Split ---
-    view = graph.split_node(
-        node_id=0, new_node_id=99, edge_indices_to_new_node=[0, 1, 2]
-    )
+    view = graph.split_node(node_id=0, new_node_id=99, edge_indices_to_new_node=[0, 1, 2])
 
     # --- Expected ---
     components = sorted(view.connected_components(), key=min)
