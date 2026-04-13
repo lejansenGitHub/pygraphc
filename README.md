@@ -4,6 +4,42 @@ Fast, general-purpose graph algorithm library implemented in C, callable from Py
 
 Edges use **original node IDs** — no manual index mapping needed. A C-side hash map translates IDs to internal indices automatically.
 
+## Benchmarks
+
+### vs networkx (graph algorithms)
+
+End-to-end from domain objects using split lists (gather + algorithm). Sparse random graphs, ~3 edges per node.
+
+| Algorithm | Nodes | cgraph | networkx | Speedup |
+|-----------|------:|-------:|---------:|--------:|
+| Connected Components | 1K | 0.0001s | 0.001s | **17x** |
+| Connected Components | 10K | 0.001s | 0.011s | **21x** |
+| Connected Components | 100K | 0.011s | 0.313s | **29x** |
+| Connected Components | 1M | 0.150s | 6.83s | **46x** |
+| Bridges | 1M | 0.401s | 21.42s | **53x** |
+| Articulation Points | 1M | 0.350s | 8.97s | **26x** |
+| BFS | 1M | 0.165s | 13.62s | **82x** |
+| Dijkstra | 1M | 0.390s | 11.11s | **29x** |
+| Edge paths (cutoff=5) | 80 | 0.00005s | 0.006s | **~100x** |
+
+### vs pgmpy (DAG structure learning)
+
+Hill-climb with K2 scoring on binary variables. Both produce identical DAGs.
+
+| Scenario | cgraph | pgmpy | Speedup |
+|----------|-------:|------:|--------:|
+| 5 vars, 100 samples | 0.00003s | 0.021s | **~700x** |
+| 5 vars, 1000 samples | 0.00007s | 0.012s | **~170x** |
+| 10 vars, 100 samples | 0.00005s | 0.044s | **~900x** |
+| 10 vars, 500 samples | 0.0001s | 0.045s | **~410x** |
+| 10 vars, 1000 samples | 0.0002s | 0.046s | **~220x** |
+| 15 vars, 500 samples | 0.0002s | 0.103s | **~430x** |
+| 15 vars, 1000 samples | 0.0004s | 0.104s | **~270x** |
+| 20 vars, 500 samples | 0.0005s | 0.192s | **~420x** |
+| 20 vars, 1000 samples | 0.0007s | 0.192s | **~290x** |
+
+**17x–900x faster** than the standard Python packages, with identical results.
+
 ## Installation
 
 ```bash
@@ -57,6 +93,46 @@ list(two_edge_connected_components(node_ids, edges))
 
 # Nodes on any simple path from source to targets (block-cut tree)
 nodes_on_simple_paths(node_ids, edges, source=100, targets=[400])
+```
+
+### Connected components with branch IDs
+
+Track which branch IDs belong to each connected component:
+
+```python
+from cgraph import connected_components_with_branch_ids
+
+node_ids = [100, 200, 300, 400]
+edges = [(100, 200), (300, 400)]
+branch_ids = [901, 902]  # one per edge
+
+for nodes, branches in connected_components_with_branch_ids(node_ids, edges, branch_ids):
+    print(nodes, branches)
+# {100, 200} {901}
+# {300, 400} {902}
+```
+
+Also available on `Graph` and `GraphView`. Pass `branch_ids` at construction, then exclude by domain ID:
+
+```python
+g = Graph([1, 2, 3], [(1, 2), (2, 3)], branch_ids=[100, 200])
+list(g.connected_components_with_branch_ids())
+# [({1, 2, 3}, {100, 200})]
+
+# Exclude branches by ID — dropped from connectivity and branch sets
+view = g.without_branches([200])  # exclude branch 200 (edge 2--3)
+list(view.connected_components_with_branch_ids())
+# [({1, 2}, {100}), ({3}, set())]
+
+# Exclude nodes by ID — removed from output but edges still connect
+view = g.without_nodes([2])
+list(view.connected_components_with_branch_ids())
+# [({1, 3}, {100, 200})]  — node 2 gone, but edges still connect 1 and 3
+
+# Combine both — exclude branches and nodes by their domain IDs
+view = g.without_branches([200]).without_nodes([1])
+list(view.connected_components_with_branch_ids())
+# [({2}, {100}), ({3}, set())]
 ```
 
 ### Weighted algorithms
@@ -203,6 +279,50 @@ view = g.without_nodes([0])
 view.bfs(0)                        # ValueError: source node is excluded
 ```
 
+### DAG structure learning (Bayesian networks)
+
+Learn directed acyclic graph (DAG) structures from discrete data using greedy hill-climb search with K2 Bayesian scoring. Implemented in C — drop-in replacement for pgmpy's `HillClimbSearch` with identical results and orders of magnitude faster.
+
+The algorithm:
+1. Start with an empty DAG (no edges)
+2. Each iteration, evaluate all legal single-edge operations (add, remove, flip) and pick the one with the highest K2 score improvement
+3. A tabu list prevents cycling by forbidding recently reversed operations
+4. Stop when no operation improves the score by more than `epsilon`
+
+```python
+from cgraph import hill_climb_k2, estimate_cpds, k2_local_score
+
+# Dataset: rows of discrete observations, values in [0, cardinality)
+data = [
+    [0, 0, 1],
+    [1, 1, 0],
+    [0, 1, 0],
+    [1, 0, 1],
+    [0, 0, 0],
+]
+cardinalities = [2, 2, 2]  # all binary
+
+# Learn DAG structure
+edges = hill_climb_k2(data, cardinalities, max_indegree=2)
+# e.g. [(0, 2), (1, 2)] — variable 2 depends on variables 0 and 1
+
+# Estimate conditional probability distributions (Laplace smoothing)
+cpds = estimate_cpds(data, cardinalities, edges)
+# {0: [[0.43, 0.57]], 2: [[0.75, 0.25], [0.25, 0.75], ...]}
+# cpds[var] = list of distributions, one per parent configuration
+
+# Compute K2 local score for a single variable given its parents
+score = k2_local_score(data, cardinalities, child=2, parents=[0, 1])
+```
+
+Parameters for `hill_climb_k2`:
+- `max_indegree` — maximum parents per node (default 1)
+- `tabu_length` — circular buffer size for forbidden operations (default 100)
+- `epsilon` — minimum score improvement to continue (default 1e-4)
+- `max_iter` — iteration cap (default 1,000,000)
+
+Complexity per iteration: O(n^2 * n_samples) where n = number of variables.
+
 ### Edge-path enumeration (edge-disjoint paths)
 
 Find all paths from source to targets where each edge is used at most once. Returns paths as lists of edge indices. By default, nodes may be revisited (critical for multigraphs). Use `node_simple=True` to restrict to node-simple paths where each node is visited at most once.
@@ -229,7 +349,7 @@ paths = view.all_edge_paths(source=0, targets=3)
 # [[0, 1, 3]] — only the path through edges 0→1→3
 ```
 
-## Performance
+## Performance details
 
 ### Cost breakdown
 
@@ -300,32 +420,14 @@ connected_components(node_ids, src, dst)
 
 Split lists is faster because building two flat lists avoids creating 1.5M tuple objects. The C parsing cost is similar — `PyLong_AsLong` per element dominates regardless of container shape.
 
-### Benchmarks vs networkx
-
-End-to-end from `Branch` objects using split lists (gather + algorithm). Sparse random graphs, ~3 edges per node.
-
-- **networkx**: `add_nodes_from` + `add_edges_from` + algorithm
-- **cgraph**: gather split lists from objects + algorithm
-
-| Algorithm | Nodes | cgraph | networkx | Speedup |
-|-----------|------:|-------:|---------:|--------:|
-| Connected Components | 1K | 0.0001s | 0.001s | **17x** |
-| Connected Components | 10K | 0.001s | 0.011s | **21x** |
-| Connected Components | 100K | 0.011s | 0.313s | **29x** |
-| Connected Components | 1M | 0.150s | 6.83s | **46x** |
-| Bridges | 1M | 0.401s | 21.42s | **53x** |
-| Articulation Points | 1M | 0.350s | 8.97s | **26x** |
-| BFS | 1M | 0.165s | 13.62s | **82x** |
-| Dijkstra | 1M | 0.390s | 11.11s | **29x** |
-| Edge paths (cutoff=5) | 80 | 0.00005s | 0.006s | **~100x** |
-
 ### Run benchmarks
 
 ```bash
 pip install -e ".[benchmark]"
-pip install networkx
+pip install networkx pgmpy
 pytest tests/performance_tests/ -v -s -k speedup
-python benchmarks/bench_all.py  # structured cost breakdown + topology scenarios
+python benchmarks/bench_all.py       # structured cost breakdown + topology scenarios
+python benchmarks/bench_dag_learn.py  # hill-climb K2: cgraph vs pgmpy
 ```
 
 ## Tests
