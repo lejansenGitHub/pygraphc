@@ -4,7 +4,6 @@ import random
 import time
 
 import pytest
-
 from cgraph import bfs
 
 pytestmark = pytest.mark.performance

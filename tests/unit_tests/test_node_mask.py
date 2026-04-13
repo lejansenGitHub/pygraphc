@@ -1,11 +1,10 @@
 """Tests for Phase 6b: Node-masked views."""
 
 import pytest
-
 from cgraph import Graph, GraphView
 
 
-@pytest.fixture
+@pytest.fixture()
 def chain():
     """Linear chain: 1-2-3-4-5."""
     nodes = [1, 2, 3, 4, 5]
@@ -13,7 +12,7 @@ def chain():
     return Graph(nodes, edges)
 
 
-@pytest.fixture
+@pytest.fixture()
 def diamond():
     """Diamond: 0-1, 0-2, 1-3, 2-3."""
     nodes = [0, 1, 2, 3]
@@ -22,7 +21,7 @@ def diamond():
     return Graph(nodes, edges), weights
 
 
-@pytest.fixture
+@pytest.fixture()
 def bridge_graph():
     """(0-1-2-0) --bridge(2,3)-- (3-4-5-3)."""
     nodes = [0, 1, 2, 3, 4, 5]

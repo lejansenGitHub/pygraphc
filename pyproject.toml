@@ -61,6 +61,7 @@ cgraph = ["py.typed"]
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+preview = true
 
 [tool.ruff.lint]
 select = [
@@ -101,12 +102,16 @@ ignore = [
     "UP008",    # super-call-with-parameters
     "UP015",    # redundant-open-modes -> writing it explicitly is more readable
     "PLR2004",  # magic values in comparisons — too noisy in tests
+    "PLR0904",  # too many public methods — Graph is intentionally a wide API surface
+    "PLR0913",  # too many arguments — some functions need many parameters
+    "PLR0914",  # too many local variables — benchmark tests need many timing vars
+    "PLR0917",  # too many positional args — internal helpers, not public API
+    "PLR6301",  # method could be function — test classes group related tests
     "PLW0108",  # unnecessary-lambda
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["TRY"]
-"tests/performance_tests/**" = ["PLC0415"]
+"tests/**" = ["TRY", "PLC0415"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "unittest.mock".msg = "Use pytest-mock instead."

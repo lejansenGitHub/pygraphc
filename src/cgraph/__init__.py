@@ -293,7 +293,7 @@ def _build_block_cut_tree(
     return node_blocks, tree_adj, ap_id
 
 
-def _collect_path_nodes(  # noqa: PLR0913
+def _collect_path_nodes(
     node_ids: list[NodeId],
     blocks: list[set[NodeId]],
     tree: tuple[dict[NodeId, list[int]], list[list[int]], dict[NodeId, int]],

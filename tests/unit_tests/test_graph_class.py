@@ -1,19 +1,18 @@
 """Tests for the Graph class — ensures parity with free-function API."""
 
 import pytest
-
 from cgraph import Graph
 
 # ── Shared fixtures ──
 
 
-@pytest.fixture
+@pytest.fixture()
 def triangle():
     """Simple triangle graph: 0-1-2-0."""
     return Graph([0, 1, 2], [(0, 1), (1, 2), (2, 0)])
 
 
-@pytest.fixture
+@pytest.fixture()
 def bridge_graph():
     """Graph with a bridge: (0-1-2) -- bridge(2,3) -- (3-4-5)."""
     nodes = [0, 1, 2, 3, 4, 5]
@@ -21,7 +20,7 @@ def bridge_graph():
     return Graph(nodes, edges)
 
 
-@pytest.fixture
+@pytest.fixture()
 def weighted_graph():
     """Weighted diamond: 0-1(1), 0-2(4), 1-3(2), 2-3(1)."""
     nodes = [0, 1, 2, 3]

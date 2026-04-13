@@ -9,7 +9,6 @@ import time
 
 import numpy as np
 import pytest
-
 from cgraph import connected_components
 
 pytestmark = pytest.mark.performance

@@ -60,6 +60,8 @@ jobs:
             files: test_masked_views.py
           - name: phase6
             files: test_phase6_perf.py
+          - name: cc-branches
+            files: test_cc_branches_perf.py
     name: performance (${{ matrix.suite.name }})
     steps:
       - uses: actions/checkout@v4

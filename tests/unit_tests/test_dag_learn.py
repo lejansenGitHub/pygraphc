@@ -7,13 +7,14 @@ produce the same results (scores within tolerance, same DAG structure).
 
 import random
 
-import pandas as pd
 import pytest
-from pgmpy.estimators import HillClimbSearch, K2
-from pgmpy.estimators.ScoreCache import ScoreCache
-from pgmpy.models import DiscreteBayesianNetwork
 
-from cgraph import hill_climb_k2, k2_local_score
+pd = pytest.importorskip("pandas")
+pgmpy_estimators = pytest.importorskip("pgmpy.estimators")
+
+from cgraph import hill_climb_k2, k2_local_score  # noqa: E402 — after importorskip
+from pgmpy.estimators import K2, HillClimbSearch  # noqa: E402
+from pgmpy.estimators.ScoreCache import ScoreCache  # noqa: E402
 
 
 def _make_dataframe(data: list[list[int]], n_vars: int) -> pd.DataFrame:
