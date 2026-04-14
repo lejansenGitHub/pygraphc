@@ -279,6 +279,28 @@ view = g.without_nodes([0])
 view.bfs(0)                        # ValueError: source node is excluded
 ```
 
+### Node splitting (reroute edges to a new node)
+
+Split a node into two by choosing which edges stay on the original and which move to a new node. Composes `without_edges` + `with_edges` internally — no new C code needed.
+
+```python
+g = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (1, 3)])
+# edges: 0:(0,1), 1:(1,2), 2:(1,3)
+
+# Split node 1: reroute edge 2 (1,3) to new node 99
+view = g.split_node(node_id=1, new_node_id=99, edge_indices_to_new_node=[2])
+# Result: edges (0,1), (1,2), (99,3) — node 1 keeps edges 0 and 1
+list(view.connected_components())  # [{0, 1, 2, 99, 3}] — still connected
+
+# Split the middle of a chain to disconnect
+g2 = Graph([0, 1, 2], [(0, 1), (1, 2)])
+view2 = g2.split_node(node_id=1, new_node_id=99, edge_indices_to_new_node=[1])
+sorted(view2.connected_components(), key=min)  # [{0, 1}, {2, 99}]
+
+# Works on views too (chainable)
+view3 = g.without_edges([0]).split_node(node_id=1, new_node_id=99, edge_indices_to_new_node=[2])
+```
+
 ### DAG structure learning (Bayesian networks)
 
 Learn directed acyclic graph (DAG) structures from discrete data using greedy hill-climb search with K2 Bayesian scoring. Implemented in C — drop-in replacement for pgmpy's `HillClimbSearch` with identical results and orders of magnitude faster.

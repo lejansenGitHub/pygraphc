@@ -519,6 +519,45 @@ class Graph:
         """
         return GraphView._from_node_exclusion(self, node_ids)
 
+    def split_node(
+        self,
+        node_id: NodeId,
+        new_node_id: NodeId,
+        edge_indices_to_new_node: Collection[int],
+    ) -> "GraphView":
+        """Split a node by rerouting specified edges to a new node.
+
+        Creates a view where the edges identified by ``edge_indices_to_new_node``
+        are detached from ``node_id`` and reattached to ``new_node_id``.
+        The remaining edges of ``node_id`` stay in place.
+
+        Equivalent to::
+
+            graph.without_edges(edge_indices_to_new_node).with_edges(rerouted)
+
+        where *rerouted* replaces ``node_id`` with ``new_node_id`` in each edge.
+        """
+        edges = self._edges
+        if edges is None:
+            raise ValueError("split_node requires edge-pair construction")  # noqa: TRY003
+        node_id_to_idx = self._get_node_id_to_idx()
+        if node_id not in node_id_to_idx:
+            raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003
+        if new_node_id in node_id_to_idx:
+            raise ValueError(f"node {new_node_id} already exists in the graph")  # noqa: TRY003
+        rerouted_edges: list[tuple[NodeId, NodeId]] = []
+        for edge_idx in edge_indices_to_new_node:
+            u, v = edges[edge_idx]
+            if u == node_id:
+                rerouted_edges.append((new_node_id, v))
+            elif v == node_id:
+                rerouted_edges.append((u, new_node_id))
+            else:
+                raise ValueError(  # noqa: TRY003
+                    f"edge {edge_idx} ({u}, {v}) is not incident to node {node_id}"
+                )
+        return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges)
+
     def all_edge_paths(
         self,
         source: NodeId,
@@ -933,6 +972,39 @@ class GraphView:
                 if not self._excluded_edges[edge_idx]
             )
         return result
+
+    def split_node(
+        self,
+        node_id: NodeId,
+        new_node_id: NodeId,
+        edge_indices_to_new_node: Collection[int],
+    ) -> "GraphView":
+        """Split a node by rerouting specified edges to a new node.
+
+        Creates a view where the edges identified by ``edge_indices_to_new_node``
+        are detached from ``node_id`` and reattached to ``new_node_id``.
+        The remaining edges of ``node_id`` stay in place.
+        """
+        edges = self._graph._edges
+        if edges is None:
+            raise ValueError("split_node requires edge-pair construction")  # noqa: TRY003
+        node_id_to_idx = self._graph._get_node_id_to_idx()
+        if node_id not in node_id_to_idx:
+            raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003
+        if new_node_id in node_id_to_idx:
+            raise ValueError(f"node {new_node_id} already exists in the graph")  # noqa: TRY003
+        rerouted_edges: list[tuple[NodeId, NodeId]] = []
+        for edge_idx in edge_indices_to_new_node:
+            u, v = edges[edge_idx]
+            if u == node_id:
+                rerouted_edges.append((new_node_id, v))
+            elif v == node_id:
+                rerouted_edges.append((u, new_node_id))
+            else:
+                raise ValueError(  # noqa: TRY003
+                    f"edge {edge_idx} ({u}, {v}) is not incident to node {node_id}"
+                )
+        return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges)
 
     def all_edge_paths(
         self,
