@@ -440,6 +440,43 @@ class Graph:
                 result.append(i)
         return result
 
+    def incident_edge_indices(self, node_id: NodeId) -> list[int]:
+        """Return indices of all edges incident to the given node."""
+        edges = self._edges
+        if edges is None:
+            return []
+        return [i for i, (a, b) in enumerate(edges) if node_id in {a, b}]
+
+    def neighbors(self, node_id: NodeId) -> set[NodeId]:
+        """Return the set of neighbor node IDs (nodes connected by at least one edge)."""
+        edges = self._edges
+        if edges is None:
+            return set()
+        result: set[NodeId] = set()
+        for a, b in edges:
+            if a == node_id:
+                result.add(b)
+            elif b == node_id:
+                result.add(a)
+        result.discard(node_id)
+        return result
+
+    def degree(self, node_id: NodeId) -> int:
+        """Return the number of edges incident to the node.
+
+        Self-loops are counted twice (consistent with undirected graph convention).
+        """
+        edges = self._edges
+        if edges is None:
+            return 0
+        count = 0
+        for a, b in edges:
+            if a == node_id and b == node_id:
+                count += 2
+            elif node_id in {a, b}:
+                count += 1
+        return count
+
     def without_edges(
         self,
         edge_indices: Collection[int],
@@ -560,6 +597,19 @@ class Graph:
     def bridges(self) -> list[tuple[NodeId, NodeId]]:
         """Return bridge edges as (node_id, node_id) pairs."""
         result: list[tuple[NodeId, NodeId]] = _bridges_ctx(self._ctx)
+        return result
+
+    def bridges_with_branch_ids(self) -> list[tuple[NodeId, NodeId, BranchId]]:
+        """Return bridge edges as (node_id, node_id, branch_id) triples.
+
+        Requires the Graph to have been constructed with branch_ids.
+        """
+        if self._branch_ids is None:
+            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
+        bridge_list = self.bridges()
+        result: list[tuple[NodeId, NodeId, BranchId]] = []
+        for u, v in bridge_list:
+            result.extend((u, v, self._branch_ids[edge_idx]) for edge_idx in self.edge_indices(u, v))
         return result
 
     def articulation_points(self) -> set[NodeId]:
@@ -818,6 +868,110 @@ class GraphView:
         view._added_graph = self._added_graph
         view._excluded_nodes = bytearray(self._excluded_nodes) if self._excluded_nodes else None
         return view
+
+    def incident_edge_indices(self, node_id: NodeId) -> list[int]:
+        """Return indices of all non-excluded edges incident to the given node."""
+        edges = self._graph._edges
+        if edges is None:
+            return []
+        excluded_edges = self._excluded_edges
+        excluded_nodes = self._excluded_nodes
+        node_id_to_idx = self._graph._get_node_id_to_idx()
+        if excluded_nodes is not None:
+            node_idx = node_id_to_idx.get(node_id)
+            if node_idx is not None and excluded_nodes[node_idx]:
+                return []
+        result: list[int] = []
+        for i, (a, b) in enumerate(edges):
+            if excluded_edges[i]:
+                continue
+            if node_id in {a, b}:
+                other = b if a == node_id else a
+                if excluded_nodes is not None:
+                    other_idx = node_id_to_idx.get(other)
+                    if other_idx is not None and excluded_nodes[other_idx]:
+                        continue
+                result.append(i)
+        return result
+
+    def neighbors(self, node_id: NodeId) -> set[NodeId]:
+        """Return the set of neighbor node IDs, respecting edge and node exclusions."""
+        edges = self._graph._edges
+        if edges is None:
+            return set()
+        excluded_edges = self._excluded_edges
+        excluded_nodes = self._excluded_nodes
+        node_id_to_idx = self._graph._get_node_id_to_idx()
+        if excluded_nodes is not None:
+            node_idx = node_id_to_idx.get(node_id)
+            if node_idx is not None and excluded_nodes[node_idx]:
+                return set()
+        result: set[NodeId] = set()
+        for i, (a, b) in enumerate(edges):
+            if excluded_edges[i]:
+                continue
+            if a == node_id:
+                neighbor = b
+            elif b == node_id:
+                neighbor = a
+            else:
+                continue
+            if excluded_nodes is not None:
+                neighbor_idx = node_id_to_idx.get(neighbor)
+                if neighbor_idx is not None and excluded_nodes[neighbor_idx]:
+                    continue
+            result.add(neighbor)
+        result.discard(node_id)
+        return result
+
+    def degree(self, node_id: NodeId) -> int:
+        """Return the number of non-excluded edges incident to the node.
+
+        Self-loops are counted twice (consistent with undirected graph convention).
+        """
+        edges = self._graph._edges
+        if edges is None:
+            return 0
+        excluded_edges = self._excluded_edges
+        excluded_nodes = self._excluded_nodes
+        node_id_to_idx = self._graph._get_node_id_to_idx()
+        if excluded_nodes is not None:
+            node_idx = node_id_to_idx.get(node_id)
+            if node_idx is not None and excluded_nodes[node_idx]:
+                return 0
+        count = 0
+        for i, (a, b) in enumerate(edges):
+            if excluded_edges[i]:
+                continue
+            if a == node_id and b == node_id:
+                if excluded_nodes is not None:
+                    continue  # self-loop on excluded node already handled above
+                count += 2
+            elif node_id in {a, b}:
+                other = b if a == node_id else a
+                if excluded_nodes is not None:
+                    other_idx = node_id_to_idx.get(other)
+                    if other_idx is not None and excluded_nodes[other_idx]:
+                        continue
+                count += 1
+        return count
+
+    def bridges_with_branch_ids(self) -> list[tuple[NodeId, NodeId, BranchId]]:
+        """Return bridge edges as (node_id, node_id, branch_id) triples.
+
+        Requires the base Graph to have been constructed with branch_ids.
+        """
+        if self._graph._branch_ids is None:
+            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
+        bridge_list = self.bridges()
+        result: list[tuple[NodeId, NodeId, BranchId]] = []
+        for u, v in bridge_list:
+            result.extend(
+                (u, v, self._graph._branch_ids[edge_idx])
+                for edge_idx in self._graph.edge_indices(u, v)
+                if not self._excluded_edges[edge_idx]
+            )
+        return result
 
     def split_node(
         self,

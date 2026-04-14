@@ -257,20 +257,29 @@ def test_cc_branch_ids_combined_exclusions(exponent: int) -> None:
     excluded_branch_ids = rng.sample(branch_ids, excluded_branch_count)
     excluded_node_ids = rng.sample(nodes, excluded_node_count)
 
-    runs = 5
+    runs = 10
 
-    # No exclusions
-    start = time.perf_counter()
+    # Warm-up
+    list(graph.connected_components_with_branch_ids())
+    view = graph.without_branches(excluded_branch_ids).without_nodes(excluded_node_ids)
+    list(view.connected_components_with_branch_ids())
+
+    # No exclusions — best of N
+    base_times = []
     for _ in range(runs):
+        start = time.perf_counter()
         list(graph.connected_components_with_branch_ids())
-    base_time = (time.perf_counter() - start) / runs
+        base_times.append(time.perf_counter() - start)
+    base_time = min(base_times)
 
-    # Combined exclusions
-    start = time.perf_counter()
+    # Combined exclusions — best of N
+    combined_times = []
     for _ in range(runs):
         view = graph.without_branches(excluded_branch_ids).without_nodes(excluded_node_ids)
+        start = time.perf_counter()
         list(view.connected_components_with_branch_ids())
-    combined_time = (time.perf_counter() - start) / runs
+        combined_times.append(time.perf_counter() - start)
+    combined_time = min(combined_times)
 
     overhead = (combined_time - base_time) / base_time if base_time > 0 else 0
 
