@@ -229,8 +229,7 @@ def test_cc_branch_ids_excluded_nodes(exponent: int, exclusion_fraction: float) 
     if exponent >= 5:
         max_overhead = 5.0 if exclusion_fraction >= 0.5 else 2.0
         assert overhead < max_overhead, (
-            f"C-level overhead {overhead:.0%} vs baseline"
-            f" (base {base_time:.4f}s, masked {masked_time:.4f}s)"
+            f"C-level overhead {overhead:.0%} vs baseline (base {base_time:.4f}s, masked {masked_time:.4f}s)"
         )
 
 
