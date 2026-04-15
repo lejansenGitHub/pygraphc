@@ -124,10 +124,11 @@ view = g.without_branches([200])  # exclude branch 200 (edge 2--3)
 list(view.connected_components_with_branch_ids())
 # [({1, 2}, {100}), ({3}, set())]
 
-# Exclude nodes by ID — removed from output but edges still connect
+# Exclude nodes by ID — breaks connectivity, but incident edge branch IDs
+# are still collected in the non-excluded endpoint's CC
 view = g.without_nodes([2])
 list(view.connected_components_with_branch_ids())
-# [({1, 3}, {100, 200})]  — node 2 gone, but edges still connect 1 and 3
+# [({1}, {100}), ({3}, {200})]  — node 2 breaks the chain
 
 # Combine both — exclude branches and nodes by their domain IDs
 view = g.without_branches([200]).without_nodes([1])
@@ -261,14 +262,20 @@ list(view.connected_components())  # [{1, 2, 3}] — still connected via edge 1
 
 ### Node-masked views (exclude nodes without rebuilding)
 
-Exclude nodes and all their incident edges without rebuilding the CSR. Chainable with edge masks.
+Exclude nodes without rebuilding the CSR. Traversal stops at excluded nodes — they break connectivity. For `connected_components_with_branch_ids`, incident edge branch IDs are still collected in the non-excluded endpoint's CC. Chainable with edge masks.
 
 ```python
 g = Graph([0, 1, 2, 3, 4], [(0, 1), (1, 2), (2, 3), (3, 4)])
 
-# Exclude node 2 — edges (1,2) and (2,3) are also excluded
+# Exclude node 2 — breaks connectivity at node 2
 view = g.without_nodes([2])
 list(view.connected_components())  # [{0, 1}, {3, 4}]
+
+# With branch IDs: incident edges tracked in non-excluded endpoint's CC
+g2 = Graph([1, 2, 3], [(1, 2), (2, 3)], branch_ids=[100, 200])
+view2 = g2.without_nodes([2])
+list(view2.connected_components_with_branch_ids())
+# [({1}, {100}), ({3}, {200})]  — connectivity broken, branch IDs preserved
 
 # Chain with edge masks
 view = g.without_edges([0]).without_nodes([3])
