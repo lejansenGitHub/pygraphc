@@ -2522,17 +2522,10 @@ static PyObject *py_cc_branches_ctx(PyObject *self, PyObject *args) {
 
     for (Py_ssize_t i = 0; i < edge_branch_count; i++) {
         if (emask && emask[i]) continue;
-        int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
-        /* Assign branch_id to a non-excluded endpoint's CC when possible.
-         * If the source is excluded but the destination is not, the branch_id
-         * should go to the destination's CC (not the excluded node's CC). */
-        int anchor;
-        if (nmask && nmask[u] && !nmask[v])
-            anchor = v;
-        else if (nmask && nmask[v] && !nmask[u])
-            anchor = u;
-        else
-            anchor = u;  /* both included or both excluded — use source */
+        int u = EDGE_SRC(el, i);
+        /* Anchor branch_id to a non-excluded endpoint when possible.
+         * When nmask is NULL, this is just `u` (zero overhead). */
+        int anchor = (nmask && nmask[u]) ? EDGE_DST(el, i) : u;
         int c = cr.labels[anchor];
         PySet_Add(branch_sets[c], br_items[i]);
     }
