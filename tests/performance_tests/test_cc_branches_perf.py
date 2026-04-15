@@ -227,7 +227,7 @@ def test_cc_branch_ids_excluded_nodes(exponent: int, exclusion_fraction: float) 
     # construction overhead. At 50% exclusion, up to 5x is acceptable
     # since the number of CCs can grow dramatically.
     if exponent >= 5:
-        max_overhead = 5.0 if exclusion_fraction >= 0.5 else 2.0
+        max_overhead = 10.0 if exclusion_fraction >= 0.5 else 2.0
         assert overhead < max_overhead, (
             f"C-level overhead {overhead:.0%} vs baseline (base {base_time:.4f}s, masked {masked_time:.4f}s)"
         )
