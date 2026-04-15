@@ -2459,10 +2459,11 @@ static PyObject *py_cc_branches_ctx(PyObject *self, PyObject *args) {
         release_mask(&embuf); Py_DECREF(br_fast); return NULL;
     }
 
-    /* Run union-find with edge exclusion only — excluded nodes still participate
-       in connectivity so we pass NULL for node_mask. */
+    /* Run union-find with both edge and node exclusion — excluded nodes do NOT
+       participate in connectivity (traversal stops at them). Their incident
+       edges still contribute branch IDs to the CC of the non-excluded endpoint. */
     ComponentResult cr;
-    if (compute_components_masked(n, &g->nid.el, emask, NULL, &cr) < 0) {
+    if (compute_components_masked(n, &g->nid.el, emask, nmask, &cr) < 0) {
         release_mask(&nmbuf); release_mask(&embuf); Py_DECREF(br_fast);
         return NULL;
     }
@@ -2521,7 +2522,11 @@ static PyObject *py_cc_branches_ctx(PyObject *self, PyObject *args) {
 
     for (Py_ssize_t i = 0; i < edge_branch_count; i++) {
         if (emask && emask[i]) continue;
-        int c = cr.labels[EDGE_SRC(el, i)];
+        int u = EDGE_SRC(el, i);
+        /* Anchor branch_id to a non-excluded endpoint when possible.
+         * When nmask is NULL, this is just `u` (zero overhead). */
+        int anchor = (nmask && nmask[u]) ? EDGE_DST(el, i) : u;
+        int c = cr.labels[anchor];
         PySet_Add(branch_sets[c], br_items[i]);
     }
     release_mask(&embuf);

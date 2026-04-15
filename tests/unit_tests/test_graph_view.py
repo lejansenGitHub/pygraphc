@@ -807,12 +807,14 @@ def test_view_cc_with_branch_ids_exclude_branch_and_node():
     assert result_map == expected
 
 
-def test_view_cc_with_branch_ids_excluded_node_bridges_components():
-    """Excluded node's edges still provide connectivity between components.
+def test_view_cc_with_branch_ids_excluded_node_breaks_connectivity():
+    """
+    Excluding a middle node breaks connectivity — traversal stops at it.
 
     Graph: 1--2--3 with branch IDs [100, 200].
-    Exclude node 2: its edges (1-2, 2-3) still connect 1 and 3.
-    Result: single component ({1, 3}, {100, 200}).
+    Exclude node 2: nodes 1 and 3 are in separate components because
+    traversal does not pass through excluded nodes. Each CC collects the
+    branch_id of its edge incident to the excluded node.
     """
     # --- Input ---
     graph = Graph([1, 2, 3], [(1, 2), (2, 3)], branch_ids=[100, 200])
@@ -822,10 +824,11 @@ def test_view_cc_with_branch_ids_excluded_node_bridges_components():
     result = list(view.connected_components_with_branch_ids())
 
     # --- Assert ---
-    assert len(result) == 1
-    nodes, branches = result[0]
-    assert nodes == {1, 3}
-    assert branches == {100, 200}
+    result_map = {frozenset(nodes): branches for nodes, branches in result}
+    assert frozenset({1}) in result_map
+    assert frozenset({3}) in result_map
+    assert result_map[frozenset({1})] == {100}
+    assert result_map[frozenset({3})] == {200}
 
 
 def test_view_cc_with_branch_ids_no_edges():
@@ -954,6 +957,64 @@ def test_view_cc_with_branch_ids_exclude_node_isolated():
     assert frozenset({1}) in result_nodes
     assert frozenset({3}) in result_nodes
     assert frozenset({2}) not in result_nodes
+
+
+def test_view_cc_with_branch_ids_hub_excluded_breaks_connectivity():
+    """
+    Excluding a hub node breaks connectivity — each leaf becomes its own CC.
+
+    Graph: hub(10) connects to leaf nodes 1, 2, 3.
+    Excluding hub(10): traversal does not pass through it, so each leaf
+    is isolated. Each leaf's CC collects the branch_id of its edge to
+    the hub.
+    """
+    # --- Input ---
+    graph = Graph(
+        [1, 2, 3, 10],
+        [(1, 10), (2, 10), (3, 10)],
+        branch_ids=[101, 102, 103],
+    )
+    view = graph.without_nodes([10])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids())
+
+    # --- Assert ---
+    result_map = {frozenset(nodes): branches for nodes, branches in result}
+    assert frozenset({1}) in result_map
+    assert frozenset({2}) in result_map
+    assert frozenset({3}) in result_map
+    assert result_map[frozenset({1})] == {101}
+    assert result_map[frozenset({2})] == {102}
+    assert result_map[frozenset({3})] == {103}
+
+
+def test_view_cc_with_branch_ids_excluded_node_triangle_keeps_alternate_path():
+    """
+    Excluding a node only breaks connectivity THROUGH that node.
+    Alternative paths that bypass the excluded node are unaffected.
+
+    Graph: 1--2--3, 1--3 (triangle). Branch IDs [100, 200, 300].
+    Exclude node 2: nodes 1 and 3 stay connected via edge 1--3 (branch 300).
+    Edges 100 (1-2) and 200 (2-3) are incident to non-excluded nodes
+    1 and 3, so their branch_ids are still collected in the CC.
+    """
+    # --- Input ---
+    graph = Graph(
+        [1, 2, 3],
+        [(1, 2), (2, 3), (1, 3)],
+        branch_ids=[100, 200, 300],
+    )
+    view = graph.without_nodes([2])
+
+    # --- Execute ---
+    result = list(view.connected_components_with_branch_ids())
+
+    # --- Assert ---
+    assert len(result) == 1
+    nodes, branches = result[0]
+    assert nodes == {1, 3}
+    assert branches == {100, 200, 300}
 
 
 def test_graph_cc_with_branch_ids_raises_without_branch_ids():
