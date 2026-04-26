@@ -25,10 +25,9 @@ from cgraph._core import graph_node_count as _graph_node_count
 from cgraph._core import msdijk_ctx as _msdijk_ctx
 from cgraph._core import msdijk_nid as _msdijk_nid
 from cgraph._core import parse_graph as _parse_graph
+from cgraph._core import scc_ctx as _scc_ctx
 from cgraph._core import sssp_ctx as _sssp_ctx
 from cgraph._core import sssp_nid as _sssp_nid
-from cgraph._core import graph_is_directed as _graph_is_directed
-from cgraph._core import scc_ctx as _scc_ctx
 from cgraph._core import toposort_ctx as _toposort_ctx
 from cgraph._core import toposort_nid as _toposort_nid
 from cgraph._dag_learn import estimate_cpds as _estimate_cpds
@@ -494,8 +493,7 @@ class Graph:
 
     def outgoing_edge_indices(self, node_id: NodeId) -> list[int]:
         """Return indices of all outgoing edges (src=node_id). Directed graphs only."""
-        if not self._directed:
-            raise TypeError("outgoing_edge_indices requires a directed graph")
+        self._require_directed("outgoing_edge_indices")
         edges = self._edges
         if edges is None:
             return []
@@ -503,8 +501,7 @@ class Graph:
 
     def incoming_edge_indices(self, node_id: NodeId) -> list[int]:
         """Return indices of all incoming edges (dst=node_id). Directed graphs only."""
-        if not self._directed:
-            raise TypeError("incoming_edge_indices requires a directed graph")
+        self._require_directed("incoming_edge_indices")
         edges = self._edges
         if edges is None:
             return []
@@ -535,14 +532,12 @@ class Graph:
 
     def successors(self, node_id: NodeId) -> set[NodeId]:
         """Return the set of successor node IDs (outgoing neighbors). Directed graphs only."""
-        if not self._directed:
-            raise TypeError("successors requires a directed graph")
+        self._require_directed("successors")
         return self.neighbors(node_id)
 
     def predecessors(self, node_id: NodeId) -> set[NodeId]:
         """Return the set of predecessor node IDs (incoming neighbors). Directed graphs only."""
-        if not self._directed:
-            raise TypeError("predecessors requires a directed graph")
+        self._require_directed("predecessors")
         edges = self._edges
         if edges is None:
             return set()
@@ -574,14 +569,12 @@ class Graph:
 
     def out_degree(self, node_id: NodeId) -> int:
         """Return the out-degree of the node. Directed graphs only."""
-        if not self._directed:
-            raise TypeError("out_degree requires a directed graph")
+        self._require_directed("out_degree")
         return self.degree(node_id)
 
     def in_degree(self, node_id: NodeId) -> int:
         """Return the in-degree of the node. Directed graphs only."""
-        if not self._directed:
-            raise TypeError("in_degree requires a directed graph")
+        self._require_directed("in_degree")
         edges = self._edges
         if edges is None:
             return 0
@@ -693,11 +686,11 @@ class Graph:
 
     def _require_undirected(self, method_name: str) -> None:
         if self._directed:
-            raise TypeError(f"{method_name} is not defined for directed graphs")
+            raise TypeError(f"{method_name} is not defined for directed graphs")  # noqa: TRY003
 
     def _require_directed(self, method_name: str) -> None:
         if not self._directed:
-            raise TypeError(f"{method_name} requires a directed graph")
+            raise TypeError(f"{method_name} requires a directed graph")  # noqa: TRY003
 
     def connected_components(self) -> Generator[set[NodeId], None, None]:
         """Yield each connected component as a set of original node IDs."""
@@ -1019,11 +1012,11 @@ class GraphView:
 
     def _require_undirected(self, method_name: str) -> None:
         if self._graph._directed:
-            raise TypeError(f"{method_name} is not defined for directed graphs")
+            raise TypeError(f"{method_name} is not defined for directed graphs")  # noqa: TRY003
 
     def _require_directed(self, method_name: str) -> None:
         if not self._graph._directed:
-            raise TypeError(f"{method_name} requires a directed graph")
+            raise TypeError(f"{method_name} requires a directed graph")  # noqa: TRY003
 
     def incident_edge_indices(self, node_id: NodeId) -> list[int]:
         """Return indices of all non-excluded edges incident to the given node.
@@ -1091,7 +1084,7 @@ class GraphView:
             result.append(i)
         return result
 
-    def neighbors(self, node_id: NodeId) -> set[NodeId]:
+    def neighbors(self, node_id: NodeId) -> set[NodeId]:  # noqa: PLR0912 — directed/undirected + mask handling
         """Return the set of neighbor node IDs, respecting edge and node exclusions.
 
         For directed graphs, returns successors (outgoing neighbors).
@@ -1116,13 +1109,12 @@ class GraphView:
                     neighbor = b
                 else:
                     continue
+            elif a == node_id:
+                neighbor = b
+            elif b == node_id:
+                neighbor = a
             else:
-                if a == node_id:
-                    neighbor = b
-                elif b == node_id:
-                    neighbor = a
-                else:
-                    continue
+                continue
             if excluded_nodes is not None:
                 neighbor_idx = node_id_to_idx.get(neighbor)
                 if neighbor_idx is not None and excluded_nodes[neighbor_idx]:
@@ -1162,7 +1154,7 @@ class GraphView:
         result.discard(node_id)
         return result
 
-    def degree(self, node_id: NodeId) -> int:
+    def degree(self, node_id: NodeId) -> int:  # noqa: PLR0912 — directed/undirected + mask handling
         """Return the number of non-excluded edges incident to the node.
 
         For undirected graphs, self-loops are counted twice.
@@ -1190,18 +1182,17 @@ class GraphView:
                         if dst_idx is not None and excluded_nodes[dst_idx]:
                             continue
                     count += 1
-            else:
-                if a == node_id and b == node_id:
-                    if excluded_nodes is not None:
+            elif a == node_id and b == node_id:
+                if excluded_nodes is not None:
+                    continue
+                count += 2
+            elif node_id in {a, b}:
+                other = b if a == node_id else a
+                if excluded_nodes is not None:
+                    other_idx = node_id_to_idx.get(other)
+                    if other_idx is not None and excluded_nodes[other_idx]:
                         continue
-                    count += 2
-                elif node_id in {a, b}:
-                    other = b if a == node_id else a
-                    if excluded_nodes is not None:
-                        other_idx = node_id_to_idx.get(other)
-                        if other_idx is not None and excluded_nodes[other_idx]:
-                            continue
-                    count += 1
+                count += 1
         return count
 
     def out_degree(self, node_id: NodeId) -> int:

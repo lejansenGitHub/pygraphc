@@ -1,12 +1,9 @@
 """Tests for directed graph support in cgraph."""
 
-import math
-
 import pytest
 
 import cgraph
-from cgraph import Graph, GraphView
-
+from cgraph import Graph
 
 # ── Construction ──
 
@@ -106,10 +103,14 @@ def test_directed_no_edges():
         pytest.param(
             [1, 2, 3, 4, 5, 6, 7, 8],
             [
-                (1, 2), (2, 3), (3, 1),  # SCC {1,2,3}
-                (4, 5), (5, 6), (6, 4),  # SCC {4,5,6}
-                (3, 4),                   # cross-SCC link
-                (7, 8),                   # DAG edge
+                (1, 2),
+                (2, 3),
+                (3, 1),  # SCC {1,2,3}
+                (4, 5),
+                (5, 6),
+                (6, 4),  # SCC {4,5,6}
+                (3, 4),  # cross-SCC link
+                (7, 8),  # DAG edge
             ],
             [{1, 2, 3}, {4, 5, 6}, {7}, {8}],
             id="classic_tarjan",
@@ -186,7 +187,7 @@ def test_wcc_free_function():
 class TestTypeGuardsOnDirectedGraph:
     """Undirected-only methods must raise TypeError on directed graphs."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def directed_graph(self):
         return Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
 
@@ -218,7 +219,7 @@ class TestTypeGuardsOnDirectedGraph:
 class TestTypeGuardsOnUndirectedGraph:
     """Directed-only methods must raise TypeError on undirected graphs."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def undirected_graph(self):
         return Graph([1, 2, 3], [(1, 2), (2, 3)])
 
@@ -336,7 +337,7 @@ def test_topological_sort_undirected_raises():
 
 
 class TestDirectedQueryMethods:
-    @pytest.fixture()
+    @pytest.fixture
     def graph(self):
         # 1 --> 2 --> 3, 3 --> 1
         return Graph([1, 2, 3], [(1, 2), (2, 3), (3, 1)], directed=True)
@@ -494,6 +495,72 @@ class TestGraphViewDirected:
         assert path == [1, 2, 3]
         path_reverse = view.shortest_path(weights=[1.0, 1.0], source=3, target=1)
         assert path_reverse == []
+
+
+class TestGraphViewDirectedWithNodeMask:
+    """Exercise GraphView directed code paths with node exclusion."""
+
+    def test_incident_edge_indices_with_node_mask(self):
+        # 1->2, 2->3. Exclude node 3.
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([3])
+        # Node 2 has outgoing edge to 3, but 3 is excluded
+        assert view.incident_edge_indices(2) == []
+        assert view.incident_edge_indices(1) == [0]
+
+    def test_outgoing_edge_indices_with_node_mask(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([3])
+        assert view.outgoing_edge_indices(2) == []
+
+    def test_incoming_edge_indices_with_node_mask(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([1])
+        assert view.incoming_edge_indices(2) == []  # 1 is excluded
+        assert view.incoming_edge_indices(3) == [1]  # 2->3 still active
+
+    def test_incoming_edge_indices_excluded_target(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([2])
+        assert view.incoming_edge_indices(2) == []  # node 2 itself excluded
+
+    def test_neighbors_with_node_mask(self):
+        # 1->2, 2->3. Exclude 3.
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([3])
+        assert view.neighbors(2) == set()  # 3 is excluded
+        assert view.neighbors(1) == {2}
+
+    def test_predecessors_with_node_mask(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([1])
+        assert view.predecessors(2) == set()  # 1 is excluded
+
+    def test_predecessors_excluded_node(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([2])
+        assert view.predecessors(2) == set()  # node itself excluded
+
+    def test_degree_with_node_mask(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([3])
+        assert view.degree(2) == 0  # outgoing to 3, but 3 excluded
+        assert view.degree(1) == 1  # outgoing to 2, not excluded
+
+    def test_degree_excluded_node(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([1])
+        assert view.degree(1) == 0  # node itself excluded
+
+    def test_in_degree_with_node_mask(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([1])
+        assert view.in_degree(2) == 0  # 1->2 but 1 excluded
+
+    def test_in_degree_excluded_node(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_nodes([2])
+        assert view.in_degree(2) == 0
 
 
 # ── Free-function tests ──

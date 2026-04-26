@@ -10,9 +10,7 @@ from cgraph import Graph
 pytestmark = pytest.mark.performance
 
 
-def generate_sparse_directed_graph(
-    n: int, avg_out_degree: int = 3, seed: int = 42
-) -> list[tuple[int, int]]:
+def generate_sparse_directed_graph(n: int, avg_out_degree: int = 3, seed: int = 42) -> list[tuple[int, int]]:
     """Generate random directed edges for n nodes."""
     rng = random.Random(seed)
     m = n * avg_out_degree
