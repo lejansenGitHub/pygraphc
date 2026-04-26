@@ -21,6 +21,9 @@ End-to-end from domain objects using split lists (gather + algorithm). Sparse ra
 | BFS | 1M | 0.165s | 13.62s | **82x** |
 | Dijkstra | 1M | 0.390s | 11.11s | **29x** |
 | Edge paths (cutoff=5) | 80 | 0.00005s | 0.006s | **~100x** |
+| SCC (directed) | 1M | 0.154s | 6.16s | **40x** |
+| WCC (directed) | 1M | 0.033s | 2.06s | **62x** |
+| Topological sort | 1M | 0.084s | 2.17s | **26x** |
 
 ### vs pgmpy (DAG structure learning)
 
@@ -38,7 +41,7 @@ Hill-climb with K2 scoring on binary variables. Both produce identical DAGs.
 | 20 vars, 500 samples | 0.0005s | 0.192s | **~420x** |
 | 20 vars, 1000 samples | 0.0007s | 0.192s | **~290x** |
 
-**17x–900x faster** than the standard Python packages, with identical results.
+**17x–900x faster** than the standard Python packages, with identical results. Zero construction overhead for directed graphs (forward + reverse CSR uses the same 2m memory as undirected).
 
 ## Installation
 
@@ -351,6 +354,78 @@ Parameters for `hill_climb_k2`:
 - `max_iter` — iteration cap (default 1,000,000)
 
 Complexity per iteration: O(n^2 * n_samples) where n = number of variables.
+
+### Directed graphs
+
+All graph algorithms support directed graphs via `directed=True`. Edges `(u, v)` are treated as `u -> v`. A forward and reverse CSR are built, using the same total memory as undirected (2m entries).
+
+```python
+from cgraph import Graph, strongly_connected_components, weakly_connected_components
+
+node_ids = [1, 2, 3, 4, 5]
+edges = [(1, 2), (2, 3), (3, 1), (4, 5)]  # 1->2->3->1 cycle, 4->5
+
+g = Graph(node_ids, edges, directed=True)
+
+# Strongly connected components (mutually reachable nodes)
+list(g.strongly_connected_components())
+# [{1, 2, 3}, {4}, {5}]
+
+# Weakly connected components (ignoring direction)
+list(g.weakly_connected_components())
+# [{1, 2, 3}, {4, 5}]
+
+# Topological sort (DAGs only — raises ValueError on cycles)
+dag = Graph([1, 2, 3, 4], [(1, 2), (1, 3), (3, 4)], directed=True)
+dag.topological_sort()  # [1, 3, 4, 2] (one valid ordering)
+
+# BFS follows outgoing edges only
+g.bfs(source=1)  # [1, 2, 3] — cannot reach 4 or 5
+
+# Dijkstra respects direction
+dag = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+dag.shortest_path(weights=[1.0, 2.0], source=1, target=3)  # [1, 2, 3]
+dag.shortest_path(weights=[1.0, 2.0], source=3, target=1)  # [] — no path
+
+# Free-function shorthand
+list(strongly_connected_components(node_ids, edges))
+list(weakly_connected_components(node_ids, edges))
+```
+
+**Query methods** on directed graphs:
+
+```python
+g = Graph([1, 2, 3], [(1, 2), (2, 3), (3, 1)], directed=True)
+
+g.neighbors(1)       # {2} — successors only
+g.successors(1)      # {2}
+g.predecessors(1)    # {3}
+g.degree(1)          # 1 (out-degree)
+g.out_degree(1)      # 1
+g.in_degree(1)       # 1
+g.edge_indices(1, 2) # [0] — direction matters: edge_indices(2, 1) == []
+```
+
+**GraphView masking** works identically on directed graphs:
+
+```python
+g = Graph([1, 2, 3], [(1, 2), (2, 3), (3, 1)], directed=True)
+view = g.without_edges([2])  # remove 3->1
+list(view.strongly_connected_components())  # [{1}, {2}, {3}]
+```
+
+**Method availability:**
+
+| Method | Undirected | Directed |
+|--------|:---------:|:--------:|
+| `connected_components` | yes | TypeError |
+| `strongly_connected_components` | TypeError | yes |
+| `weakly_connected_components` | TypeError | yes |
+| `topological_sort` | TypeError | yes |
+| `bridges` / `articulation_points` / `biconnected_components` | yes | TypeError |
+| `bfs` / `shortest_path` / `dijkstra` | yes | yes |
+| `all_edge_paths` | yes | yes |
+| `successors` / `predecessors` / `in_degree` / `out_degree` | TypeError | yes |
 
 ### Edge-path enumeration (edge-disjoint paths)
 
