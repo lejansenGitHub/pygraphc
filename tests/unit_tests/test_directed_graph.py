@@ -564,31 +564,40 @@ class TestGraphViewDirectedWithNodeMask:
 
 
 class TestDirectedSplitListConstruction:
-    """Cover edges-is-None branches when using split-list construction."""
+    """Split-list construction (src/dst) must produce the same results as tuple construction."""
 
     def test_outgoing_edge_indices_split_list(self):
         graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
-        assert graph.outgoing_edge_indices(1) == []
+        assert graph.outgoing_edge_indices(1) == [0]  # edge 0: 1->2
 
     def test_incoming_edge_indices_split_list(self):
         graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
-        assert graph.incoming_edge_indices(1) == []
+        assert graph.incoming_edge_indices(2) == [0]  # edge 0: 1->2
 
     def test_neighbors_split_list(self):
         graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
-        assert graph.neighbors(1) == set()
+        assert graph.neighbors(1) == {2}
 
     def test_predecessors_split_list(self):
         graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
-        assert graph.predecessors(1) == set()
+        assert graph.predecessors(2) == {1}
 
     def test_degree_split_list(self):
         graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
-        assert graph.degree(1) == 0
+        assert graph.degree(1) == 1  # one outgoing edge
 
     def test_in_degree_split_list(self):
         graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
-        assert graph.in_degree(1) == 0
+        assert graph.in_degree(2) == 1  # one incoming edge
+
+    def test_split_list_matches_tuple_construction(self):
+        """Verify split-list and tuple construction produce identical query results."""
+        split = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        tuples = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        for node_id in [1, 2, 3]:
+            assert split.neighbors(node_id) == tuples.neighbors(node_id)
+            assert split.degree(node_id) == tuples.degree(node_id)
+            assert split.incident_edge_indices(node_id) == tuples.incident_edge_indices(node_id)
 
 
 class TestGraphViewDirectedEdgeMask:
@@ -623,30 +632,30 @@ class TestGraphViewDirectedEdgeMask:
         assert view.degree(1) == 3  # self-loop counts 2, plus edge to 2
 
     def test_view_degree_undirected_self_loop_with_node_mask(self):
-        """Cover self-loop + node-mask continue branch in GraphView.degree."""
+        """Self-loop on node 1 still counts when node 2 is excluded."""
         graph = Graph([1, 2], [(1, 1), (1, 2)])
         view = graph.without_nodes([2])
-        # When node mask is present, self-loops are skipped (existing behavior)
-        assert view.degree(1) == 0
+        # Self-loop counts 2 (undirected convention), edge to excluded node 2 dropped
+        assert view.degree(1) == 2
 
 
 class TestGraphViewDirectedSplitList:
-    """Cover edges-is-None branches in GraphView directed methods."""
+    """Split-list GraphView queries must work correctly (use CSR, not edge list)."""
 
     def test_incoming_edge_indices_split_list(self):
         graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
         view = graph.without_edges([])
-        assert view.incoming_edge_indices(2) == []  # edges is None
+        assert view.incoming_edge_indices(2) == [0]  # edge 0: 1->2
 
     def test_predecessors_split_list(self):
         graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
         view = graph.without_edges([])
-        assert view.predecessors(2) == set()  # edges is None
+        assert view.predecessors(2) == {1}
 
     def test_in_degree_split_list(self):
         graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
         view = graph.without_edges([])
-        assert view.in_degree(2) == 0  # edges is None
+        assert view.in_degree(2) == 1  # edge 0: 1->2
 
 
 # ── Free-function tests ──
