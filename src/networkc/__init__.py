@@ -18,6 +18,8 @@ from networkc._core import cc_ctx as _cc_ctx
 from networkc._core import cc_nid as _cc_nid
 from networkc._core import cc_nid_split as _cc_nid_split
 from networkc._core import connected_components_with_branches_remapped as _cc_branches_remapped
+from networkc._core import cycle_basis_ctx as _cycle_basis_ctx
+from networkc._core import dag_longest_path_ctx as _dag_longest_path_ctx
 from networkc._core import dijkstra_ctx as _dijkstra_ctx
 from networkc._core import dijkstra_nid as _dijkstra_nid
 from networkc._core import graph_edge_count as _graph_edge_count
@@ -45,6 +47,8 @@ __all__ = [
     "bridges",
     "connected_components",
     "connected_components_with_branch_ids",
+    "cycle_basis",
+    "dag_longest_path",
     "eccentricity",
     "estimate_cpds",
     "for_each_edge_excluded",
@@ -99,6 +103,35 @@ def connected_components_with_branch_ids(
     idx = {nid: i for i, nid in enumerate(node_ids)}
     idx_edges = [(idx[u], idx[v]) for u, v in edges]
     yield from _cc_branches_remapped(node_ids, idx_edges, branch_ids)
+
+
+def cycle_basis(
+    node_ids: list[NodeId],
+    edges: list[tuple[NodeId, NodeId]],
+) -> list[list[NodeId]]:
+    """Return a fundamental cycle basis as a list of cycles.
+
+    Each cycle is a list of node IDs. The number of fundamental cycles
+    equals m - n + c (circuit rank), where c is the number of connected
+    components.
+    """
+    graph = Graph(node_ids, edges)
+    return graph.cycle_basis()
+
+
+def dag_longest_path(
+    node_ids: list[NodeId],
+    edges: list[tuple[NodeId, NodeId]],
+    weights: list[float] | None = None,
+) -> list[NodeId]:
+    """Return the longest path in a DAG as a list of node IDs.
+
+    Edges are treated as directed: (u, v) means u -> v.
+    If weights are provided, edge weights determine path length.
+    Raises ValueError if the graph contains a cycle.
+    """
+    graph = Graph(node_ids, edges, directed=True)
+    return graph.dag_longest_path(weights)
 
 
 # ── Phase 1: Structural graph primitives ──
@@ -760,6 +793,28 @@ class Graph:
         self._require_undirected("biconnected_components")
         yield from _bcc_ctx(self._ctx)
 
+    def cycle_basis(self) -> list[list[NodeId]]:
+        """Return a fundamental cycle basis as a list of cycles.
+
+        Each cycle is a list of node IDs. The number of fundamental cycles
+        equals m - n + c (circuit rank), where c is the number of connected
+        components.
+        """
+        self._require_undirected("cycle_basis")
+        result: list[list[NodeId]] = _cycle_basis_ctx(self._ctx)
+        return result
+
+    def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeId]:
+        """Return the longest path in the DAG as a list of node IDs.
+
+        If weights are provided, edge weights are used to determine path length.
+        Otherwise all edges have unit weight.
+        Raises ValueError if the graph contains a cycle.
+        """
+        self._require_directed("dag_longest_path")
+        result: list[NodeId] = _dag_longest_path_ctx(self._ctx, weights)
+        return result
+
     def bfs(self, source: NodeId) -> list[NodeId]:
         """Return nodes visited in BFS order from source."""
         result: list[NodeId] = _bfs_ctx(self._ctx, source)
@@ -1363,6 +1418,20 @@ class GraphView:
         """Yield each biconnected component as a set of node IDs."""
         self._require_undirected("biconnected_components")
         yield from _bcc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+
+    def cycle_basis(self) -> list[list[NodeId]]:
+        """Return a fundamental cycle basis as a list of cycles."""
+        self._require_undirected("cycle_basis")
+        result: list[list[NodeId]] = _cycle_basis_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        return result
+
+    def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeId]:
+        """Return the longest path in the DAG as a list of node IDs."""
+        self._require_directed("dag_longest_path")
+        result: list[NodeId] = _dag_longest_path_ctx(
+            self._graph._ctx, weights, self._excluded_edges, self._excluded_nodes
+        )
+        return result
 
     def bfs(self, source: NodeId) -> list[NodeId]:
         """Return nodes visited in BFS order from source."""

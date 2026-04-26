@@ -3635,6 +3635,273 @@ static PyObject *py_toposort_ctx(PyObject *self, PyObject *args) {
     return result;
 }
 
+/* ── Cycle basis (fundamental cycles via DFS spanning tree) ── */
+
+/*
+ * Find a fundamental cycle basis of an undirected graph.
+ * For each back edge in the DFS tree, traces the cycle through the tree.
+ * Returns a Python list of lists of original node IDs.
+ * Supports edge mask and node mask.
+ */
+static PyObject *py_cycle_basis_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    PyObject *result = PyList_New(0);
+    if (!result) return NULL;
+    if (n == 0 || !g->has_adj) return result;
+
+    if (g->directed) {
+        Py_DECREF(result);
+        PyErr_SetString(PyExc_TypeError,
+            "cycle_basis is not defined for directed graphs");
+        return NULL;
+    }
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+
+    AdjList *al = &g->al;
+    EdgeList *el = &g->nid.el;
+
+    /* Self-loops are trivial cycles */
+    for (Py_ssize_t i = 0; i < el->m; i++) {
+        if (mask && mask[i]) continue;
+        int u = EDGE_SRC(el, i);
+        if (nmask && nmask[u]) continue;
+        if (u == EDGE_DST(el, i)) {
+            PyObject *cycle = PyList_New(1);
+            if (!cycle) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result); return NULL; }
+            Py_INCREF(g->nid.nid_items[u]);
+            PyList_SET_ITEM(cycle, 0, g->nid.nid_items[u]);
+            PyList_Append(result, cycle);
+            Py_DECREF(cycle);
+        }
+    }
+
+    /* Allocate: parent[n], depth[n], stk[n], sidx[n], path_buf[n] */
+    int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
+    if (!buf5) {
+        release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result);
+        PyErr_NoMemory(); return NULL;
+    }
+    int *parent = buf5;
+    int *depth  = buf5 + n;
+    int *stk    = buf5 + 2 * n;
+    int *sidx   = buf5 + 3 * n;
+    int *path   = buf5 + 4 * n;
+    memset(depth, -1, (size_t)n * sizeof(int));
+
+    /* DFS: for each back edge, extract the fundamental cycle */
+    for (int start = 0; start < n; start++) {
+        if (depth[start] != -1) continue;
+        if (nmask && nmask[start]) continue;
+
+        int sp = 0;
+        stk[0] = start;
+        sidx[0] = al->offset[start];
+        depth[start] = 0;
+        parent[start] = -1;
+
+        while (sp >= 0) {
+            int u = stk[sp];
+            if (sidx[sp] < al->offset[u + 1]) {
+                int i = sidx[sp]++;
+                int eid = al->eid[i];
+                if (mask && mask[eid]) continue;
+                int v = al->adj[i];
+                if (nmask && nmask[v]) continue;
+                if (depth[v] == -1) {
+                    /* Tree edge */
+                    depth[v] = depth[u] + 1;
+                    parent[v] = u;
+                    stk[++sp] = v;
+                    sidx[sp] = al->offset[v];
+                } else if (depth[v] < depth[u] && v != parent[u]) {
+                    /* Back edge u--v: extract cycle by tracing up from u to v */
+                    int plen = 0;
+                    int w = u;
+                    while (w != v) {
+                        path[plen++] = w;
+                        w = parent[w];
+                    }
+                    path[plen++] = v;
+
+                    PyObject *cycle = PyList_New(plen);
+                    if (!cycle) {
+                        free(buf5); release_mask(&nmbuf); release_mask(&mbuf);
+                        Py_DECREF(result); return NULL;
+                    }
+                    for (int j = 0; j < plen; j++) {
+                        Py_INCREF(g->nid.nid_items[path[j]]);
+                        PyList_SET_ITEM(cycle, j, g->nid.nid_items[path[j]]);
+                    }
+                    PyList_Append(result, cycle);
+                    Py_DECREF(cycle);
+                }
+            } else {
+                sp--;
+            }
+        }
+    }
+
+    free(buf5);
+    release_mask(&nmbuf); release_mask(&mbuf);
+    return result;
+}
+
+/* ── DAG longest path (topological sort + DP) ── */
+
+/*
+ * Find the longest path in a weighted or unweighted DAG.
+ * Uses topological sort + dynamic programming.
+ * weights: if NULL, all edges have weight 1.
+ * Returns Python list of original node IDs forming the longest path.
+ */
+static PyObject *py_dag_longest_path_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *wobj = Py_None, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &wobj, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    if (!g->directed) {
+        PyErr_SetString(PyExc_TypeError,
+            "dag_longest_path requires a directed graph");
+        return NULL;
+    }
+    if (n == 0) return PyList_New(0);
+
+    /* Parse optional weights */
+    WeightList wl = {NULL, 0, 0};
+    int has_weights = (wobj != Py_None);
+    if (has_weights) {
+        if (parse_weights(wobj, &wl) < 0) return NULL;
+    }
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) {
+        if (has_weights) free_weights(&wl); return NULL;
+    }
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) {
+        release_mask(&mbuf); if (has_weights) free_weights(&wl); return NULL;
+    }
+
+    /* Get topological order (reuse masked toposort) */
+    int *order;
+    int active_n = n;
+    if (nmask) { active_n = 0; for (int i = 0; i < n; i++) if (!nmask[i]) active_n++; }
+
+    int count = toposort_core_masked(n, &g->nid.el, mask, nmask, &order);
+    if (count < 0) {
+        release_mask(&nmbuf); release_mask(&mbuf);
+        if (has_weights) free_weights(&wl);
+        return NULL;
+    }
+    if (count < active_n) {
+        free(order);
+        release_mask(&nmbuf); release_mask(&mbuf);
+        if (has_weights) free_weights(&wl);
+        PyErr_SetString(PyExc_ValueError,
+            "Graph contains a cycle - dag_longest_path is undefined");
+        return NULL;
+    }
+
+    /* DP: dist[v] = longest distance to reach v, prev[v] = predecessor on longest path */
+    double *dist = (double *)malloc((size_t)n * sizeof(double));
+    int *prev = (int *)malloc((size_t)n * sizeof(int));
+    if (!dist || !prev) {
+        free(dist); free(prev); free(order);
+        release_mask(&nmbuf); release_mask(&mbuf);
+        if (has_weights) free_weights(&wl);
+        PyErr_NoMemory(); return NULL;
+    }
+    for (int i = 0; i < n; i++) { dist[i] = 0.0; prev[i] = -1; }
+
+    /* Use forward CSR to iterate outgoing edges */
+    AdjList *al = &g->al;
+    int use_csr = g->has_adj;
+
+    /* Process nodes in topological order */
+    for (int ti = 0; ti < count; ti++) {
+        int u = order[ti];
+        if (use_csr) {
+            for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
+                int eid = al->eid[e];
+                if (mask && mask[eid]) continue;
+                int v = al->adj[e];
+                if (nmask && nmask[v]) continue;
+                double w = has_weights ? wl.w[eid] : 1.0;
+                if (dist[u] + w > dist[v]) {
+                    dist[v] = dist[u] + w;
+                    prev[v] = u;
+                }
+            }
+        } else {
+            /* No CSR (no edges) — nothing to relax */
+        }
+    }
+
+    /* Find node with maximum distance */
+    int best = -1;
+    double best_dist = -1.0;
+    for (int ti = 0; ti < count; ti++) {
+        int u = order[ti];
+        if (dist[u] > best_dist) {
+            best_dist = dist[u];
+            best = u;
+        }
+    }
+
+    /* Trace back the path */
+    if (best < 0 || best_dist == 0.0) {
+        /* No edges or all isolated: return first active node */
+        PyObject *res;
+        if (count > 0) {
+            res = PyList_New(1);
+            if (res) {
+                Py_INCREF(g->nid.nid_items[order[0]]);
+                PyList_SET_ITEM(res, 0, g->nid.nid_items[order[0]]);
+            }
+        } else {
+            res = PyList_New(0);
+        }
+        free(dist); free(prev); free(order);
+        release_mask(&nmbuf); release_mask(&mbuf);
+        if (has_weights) free_weights(&wl);
+        return res;
+    }
+
+    /* Count path length by tracing back */
+    int path_len = 0;
+    for (int v = best; v >= 0; v = prev[v]) path_len++;
+
+    PyObject *result = PyList_New(path_len);
+    if (!result) {
+        free(dist); free(prev); free(order);
+        release_mask(&nmbuf); release_mask(&mbuf);
+        if (has_weights) free_weights(&wl);
+        return NULL;
+    }
+    /* Fill in reverse */
+    int idx = path_len - 1;
+    for (int v = best; v >= 0; v = prev[v]) {
+        Py_INCREF(g->nid.nid_items[v]);
+        PyList_SET_ITEM(result, idx--, g->nid.nid_items[v]);
+    }
+
+    free(dist); free(prev); free(order);
+    release_mask(&nmbuf); release_mask(&mbuf);
+    if (has_weights) free_weights(&wl);
+    return result;
+}
+
 /* ── Module definition ── */
 
 static PyMethodDef methods[] = {
@@ -3742,6 +4009,12 @@ static PyMethodDef methods[] = {
     {"graph_is_directed", py_graph_is_directed, METH_VARARGS,
      "graph_is_directed(capsule) -> bool\n\n"
      "Return True if the parsed graph is directed."},
+    {"cycle_basis_ctx", py_cycle_basis_ctx, METH_VARARGS,
+     "cycle_basis_ctx(capsule[, edge_mask, node_mask]) -> list[list[NodeId]]\n\n"
+     "Fundamental cycle basis of an undirected graph."},
+    {"dag_longest_path_ctx", py_dag_longest_path_ctx, METH_VARARGS,
+     "dag_longest_path_ctx(capsule[, weights, edge_mask, node_mask]) -> list[NodeId]\n\n"
+     "Longest path in a directed acyclic graph."},
     {NULL, NULL, 0, NULL},
 };
 

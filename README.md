@@ -24,6 +24,8 @@ End-to-end from domain objects using split lists (gather + algorithm). Sparse ra
 | SCC (directed) | 1M | 0.154s | 6.16s | **40x** |
 | WCC (directed) | 1M | 0.033s | 2.06s | **62x** |
 | Topological sort | 1M | 0.084s | 2.17s | **26x** |
+| DAG longest path | 1M | 0.175s | 5.66s | **32x** |
+| Cycle basis | 100K | 14.5s | 18.9s | **1.3x** |
 
 ### vs pgmpy (DAG structure learning)
 
@@ -426,6 +428,52 @@ list(view.strongly_connected_components())  # [{1}, {2}, {3}]
 | `bfs` / `shortest_path` / `dijkstra` | yes | yes |
 | `all_edge_paths` | yes | yes |
 | `successors` / `predecessors` / `in_degree` / `out_degree` | TypeError | yes |
+
+### Cycle basis (fundamental cycles)
+
+Detect all fundamental cycles in an undirected graph. The number of cycles equals the circuit rank: `m - n + c` where `c` is the number of connected components.
+
+```python
+from cgraph import Graph, cycle_basis
+
+# Triangle
+g = Graph([1, 2, 3], [(1, 2), (2, 3), (3, 1)])
+g.cycle_basis()  # [[3, 2, 1]]
+
+# Figure-8 (two cycles sharing node 3)
+g = Graph([1, 2, 3, 4, 5], [(1, 2), (2, 3), (3, 1), (3, 4), (4, 5), (5, 3)])
+g.cycle_basis()  # [[3, 2, 1], [5, 4, 3]]
+
+# Tree (no cycles)
+g = Graph([1, 2, 3], [(1, 2), (2, 3)])
+g.cycle_basis()  # []
+
+# Free function
+cycle_basis([1, 2, 3], [(1, 2), (2, 3), (3, 1)])  # [[3, 2, 1]]
+```
+
+Useful for validating radial grid topology (presence of cycles indicates mesh). Self-loops are detected as single-node cycles. Works with GraphView masks — removing a cycle-closing edge eliminates that cycle.
+
+### DAG longest path
+
+Find the longest path in a directed acyclic graph. Supports optional edge weights.
+
+```python
+from cgraph import Graph, dag_longest_path
+
+# Unweighted: longest by hop count
+g = Graph([1, 2, 3, 4], [(1, 2), (1, 3), (3, 4)], directed=True)
+g.dag_longest_path()  # [1, 3, 4]
+
+# Weighted: longest by total weight
+g = Graph([1, 2, 3], [(1, 2), (1, 3)], directed=True)
+g.dag_longest_path(weights=[1.0, 100.0])  # [1, 3]
+
+# Free function
+dag_longest_path([1, 2, 3, 4], [(1, 2), (2, 3), (3, 4)])  # [1, 2, 3, 4]
+```
+
+Uses topological sort + dynamic programming. Raises `ValueError` on cyclic graphs. 32x faster than networkx at 1M nodes.
 
 ### Edge-path enumeration (edge-disjoint paths)
 
