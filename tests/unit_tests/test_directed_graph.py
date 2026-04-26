@@ -563,6 +563,92 @@ class TestGraphViewDirectedWithNodeMask:
         assert view.in_degree(2) == 0
 
 
+class TestDirectedSplitListConstruction:
+    """Cover edges-is-None branches when using split-list construction."""
+
+    def test_outgoing_edge_indices_split_list(self):
+        graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        assert graph.outgoing_edge_indices(1) == []
+
+    def test_incoming_edge_indices_split_list(self):
+        graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        assert graph.incoming_edge_indices(1) == []
+
+    def test_neighbors_split_list(self):
+        graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        assert graph.neighbors(1) == set()
+
+    def test_predecessors_split_list(self):
+        graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        assert graph.predecessors(1) == set()
+
+    def test_degree_split_list(self):
+        graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        assert graph.degree(1) == 0
+
+    def test_in_degree_split_list(self):
+        graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        assert graph.in_degree(1) == 0
+
+
+class TestGraphViewDirectedEdgeMask:
+    """Cover edge-exclusion paths in incoming_edge_indices, predecessors, in_degree."""
+
+    def test_incoming_edge_indices_with_excluded_edge(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_edges([0])  # exclude 1->2
+        assert view.incoming_edge_indices(2) == []  # edge 0 excluded
+
+    def test_predecessors_with_excluded_edge(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_edges([0])  # exclude 1->2
+        assert view.predecessors(2) == set()
+
+    def test_in_degree_with_excluded_edge(self):
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)], directed=True)
+        view = graph.without_edges([0])  # exclude 1->2
+        assert view.in_degree(2) == 0
+
+    def test_require_directed_on_undirected_view(self):
+        """Cover GraphView._require_directed raising TypeError."""
+        graph = Graph([1, 2, 3], [(1, 2), (2, 3)])
+        view = graph.without_edges([])
+        with pytest.raises(TypeError, match="requires a directed"):
+            view.successors(1)
+
+    def test_view_degree_undirected_self_loop(self):
+        """Cover the undirected self-loop branch in GraphView.degree."""
+        graph = Graph([1, 2], [(1, 1), (1, 2)])
+        view = graph.without_edges([])
+        assert view.degree(1) == 3  # self-loop counts 2, plus edge to 2
+
+    def test_view_degree_undirected_self_loop_with_node_mask(self):
+        """Cover self-loop + node-mask continue branch in GraphView.degree."""
+        graph = Graph([1, 2], [(1, 1), (1, 2)])
+        view = graph.without_nodes([2])
+        # When node mask is present, self-loops are skipped (existing behavior)
+        assert view.degree(1) == 0
+
+
+class TestGraphViewDirectedSplitList:
+    """Cover edges-is-None branches in GraphView directed methods."""
+
+    def test_incoming_edge_indices_split_list(self):
+        graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        view = graph.without_edges([])
+        assert view.incoming_edge_indices(2) == []  # edges is None
+
+    def test_predecessors_split_list(self):
+        graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        view = graph.without_edges([])
+        assert view.predecessors(2) == set()  # edges is None
+
+    def test_in_degree_split_list(self):
+        graph = Graph([1, 2, 3], [1, 2], [2, 3], directed=True)
+        view = graph.without_edges([])
+        assert view.in_degree(2) == 0  # edges is None
+
+
 # ── Free-function tests ──
 
 
