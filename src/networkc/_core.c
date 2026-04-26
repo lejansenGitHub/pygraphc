@@ -3684,73 +3684,102 @@ static PyObject *py_cycle_basis_ctx(PyObject *self, PyObject *args) {
         }
     }
 
-    /* Allocate: parent[n], depth[n], stk[n], sidx[n], path_buf[n] */
-    int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
-    if (!buf5) {
+    /* Track which non-tree edges have been processed (one bit per edge) */
+    Py_ssize_t m = el->m;
+    uint8_t *edge_seen = (uint8_t *)calloc(m > 0 ? (size_t)m : 1, 1);
+    if (!edge_seen) {
         release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
-    int *parent = buf5;
-    int *depth  = buf5 + n;
-    int *stk    = buf5 + 2 * n;
-    int *sidx   = buf5 + 3 * n;
-    int *path   = buf5 + 4 * n;
+
+    /* Allocate: parent[n], depth[n], queue[n], peid[n], path_a[n], path_b[n] */
+    int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
+    if (!buf6) {
+        free(edge_seen);
+        release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result);
+        PyErr_NoMemory(); return NULL;
+    }
+    int *parent = buf6;
+    int *depth  = buf6 + n;
+    int *queue  = buf6 + 2 * n;
+    int *peid   = buf6 + 3 * n;  /* parent edge ID (to skip reverse tree edge) */
+    int *path_a = buf6 + 4 * n;
+    int *path_b = buf6 + 5 * n;
     memset(depth, -1, (size_t)n * sizeof(int));
 
-    /* DFS: for each back edge, extract the fundamental cycle */
+    /* BFS spanning tree + non-tree edge cycle extraction.
+     * BFS trees are shallow (O(log n) for random graphs), making the
+     * LCA-based cycle trace O(log n) per back edge instead of O(n). */
     for (int start = 0; start < n; start++) {
         if (depth[start] != -1) continue;
         if (nmask && nmask[start]) continue;
 
-        int sp = 0;
-        stk[0] = start;
-        sidx[0] = al->offset[start];
+        /* BFS to build spanning tree */
+        int head = 0, tail = 0;
+        queue[tail++] = start;
         depth[start] = 0;
         parent[start] = -1;
+        peid[start] = -1;
 
-        while (sp >= 0) {
-            int u = stk[sp];
-            if (sidx[sp] < al->offset[u + 1]) {
-                int i = sidx[sp]++;
+        while (head < tail) {
+            int u = queue[head++];
+            for (int i = al->offset[u]; i < al->offset[u + 1]; i++) {
                 int eid = al->eid[i];
                 if (mask && mask[eid]) continue;
                 int v = al->adj[i];
                 if (nmask && nmask[v]) continue;
+                if (v == u) continue;  /* skip self-loops (handled above) */
                 if (depth[v] == -1) {
                     /* Tree edge */
                     depth[v] = depth[u] + 1;
                     parent[v] = u;
-                    stk[++sp] = v;
-                    sidx[sp] = al->offset[v];
-                } else if (depth[v] < depth[u] && v != parent[u]) {
-                    /* Back edge u--v: extract cycle by tracing up from u to v */
-                    int plen = 0;
-                    int w = u;
-                    while (w != v) {
-                        path[plen++] = w;
-                        w = parent[w];
+                    peid[v] = eid;
+                    queue[tail++] = v;
+                } else if (eid != peid[u] && !edge_seen[eid]) {
+                    /* Non-tree edge: extract cycle via LCA.
+                     * edge_seen prevents processing each undirected
+                     * edge twice (CSR has both u->v and v->u). */
+                    edge_seen[eid] = 1;
+                    int a = u, b = v;
+                    int la = 0, lb = 0;
+
+                    /* Walk a and b up to the same depth */
+                    while (depth[a] > depth[b]) { path_a[la++] = a; a = parent[a]; }
+                    while (depth[b] > depth[a]) { path_b[lb++] = b; b = parent[b]; }
+                    /* Walk both up to LCA */
+                    while (a != b) {
+                        path_a[la++] = a; a = parent[a];
+                        path_b[lb++] = b; b = parent[b];
                     }
-                    path[plen++] = v;
+                    /* a == b == LCA */
+                    int lca = a;
+                    int plen = la + lb + 1;
 
                     PyObject *cycle = PyList_New(plen);
                     if (!cycle) {
-                        free(buf5); release_mask(&nmbuf); release_mask(&mbuf);
+                        free(buf6); free(edge_seen);
+                        release_mask(&nmbuf); release_mask(&mbuf);
                         Py_DECREF(result); return NULL;
                     }
-                    for (int j = 0; j < plen; j++) {
-                        Py_INCREF(g->nid.nid_items[path[j]]);
-                        PyList_SET_ITEM(cycle, j, g->nid.nid_items[path[j]]);
+                    int idx = 0;
+                    for (int j = 0; j < la; j++) {
+                        Py_INCREF(g->nid.nid_items[path_a[j]]);
+                        PyList_SET_ITEM(cycle, idx++, g->nid.nid_items[path_a[j]]);
+                    }
+                    Py_INCREF(g->nid.nid_items[lca]);
+                    PyList_SET_ITEM(cycle, idx++, g->nid.nid_items[lca]);
+                    for (int j = lb - 1; j >= 0; j--) {
+                        Py_INCREF(g->nid.nid_items[path_b[j]]);
+                        PyList_SET_ITEM(cycle, idx++, g->nid.nid_items[path_b[j]]);
                     }
                     PyList_Append(result, cycle);
                     Py_DECREF(cycle);
                 }
-            } else {
-                sp--;
             }
         }
     }
 
-    free(buf5);
+    free(buf6); free(edge_seen);
     release_mask(&nmbuf); release_mask(&mbuf);
     return result;
 }

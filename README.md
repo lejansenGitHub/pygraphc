@@ -25,7 +25,7 @@ End-to-end from domain objects using split lists (gather + algorithm). Sparse ra
 | WCC (directed) | 1M | 0.033s | 2.06s | **62x** |
 | Topological sort | 1M | 0.084s | 2.17s | **26x** |
 | DAG longest path | 1M | 0.175s | 5.66s | **32x** |
-| Cycle basis | 100K | 14.5s | 18.9s | **1.3x** |
+| Cycle basis | 100K | 0.019s | 18.9s | **989x** |
 
 ### vs pgmpy (DAG structure learning)
 
@@ -473,7 +473,7 @@ g.dag_longest_path(weights=[1.0, 100.0])  # [1, 3]
 dag_longest_path([1, 2, 3, 4], [(1, 2), (2, 3), (3, 4)])  # [1, 2, 3, 4]
 ```
 
-Uses topological sort + dynamic programming. Raises `ValueError` on cyclic graphs. 32x faster than networkx at 1M nodes.
+Uses topological sort + dynamic programming. Raises `ValueError` on cyclic graphs. 32-80x faster than networkx.
 
 ### Edge-path enumeration (edge-disjoint paths)
 

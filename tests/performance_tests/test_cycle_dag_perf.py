@@ -40,8 +40,8 @@ def generate_dag(n: int, avg_out_degree: int = 3, seed: int = 42) -> list[tuple[
 
 @pytest.mark.parametrize(
     ("exponent", "time_limit_seconds"),
-    [(3, 0.01), (4, 0.2), (5, 20)],
-    ids=["1K", "10K", "100K"],
+    [(3, 0.005), (4, 0.02), (5, 0.2), (6, 3)],
+    ids=["1K", "10K", "100K", "1M"],
 )
 def test_cycle_basis_performance(exponent: int, time_limit_seconds: float) -> None:
     n = 10**exponent
@@ -60,7 +60,7 @@ def test_cycle_basis_performance(exponent: int, time_limit_seconds: float) -> No
     assert elapsed < time_limit_seconds, f"cycle_basis took {elapsed:.3f}s, limit {time_limit_seconds}s"
 
 
-@pytest.mark.parametrize("exponent", [3, 4, 5], ids=["1K", "10K", "100K"])
+@pytest.mark.parametrize("exponent", [3, 4, 5, 6], ids=["1K", "10K", "100K", "1M"])
 def test_cycle_basis_speedup_vs_networkx(exponent: int) -> None:
     nx = pytest.importorskip("networkx")
 
