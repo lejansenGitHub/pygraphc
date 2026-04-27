@@ -4,35 +4,35 @@ import types
 from collections import deque
 from collections.abc import Collection, Generator, Iterable, Iterator
 
-from cgraph._core import all_edge_paths_ctx as _all_edge_paths_ctx
-from cgraph._core import ap_ctx as _ap_ctx
-from cgraph._core import ap_nid as _ap_nid
-from cgraph._core import bcc_ctx as _bcc_ctx
-from cgraph._core import bcc_nid as _bcc_nid
-from cgraph._core import bfs_ctx as _bfs_ctx
-from cgraph._core import bfs_nid as _bfs_nid
-from cgraph._core import bridges_ctx as _bridges_ctx
-from cgraph._core import bridges_nid as _bridges_nid
-from cgraph._core import cc_branches_ctx as _cc_branches_ctx
-from cgraph._core import cc_ctx as _cc_ctx
-from cgraph._core import cc_nid as _cc_nid
-from cgraph._core import cc_nid_split as _cc_nid_split
-from cgraph._core import connected_components_with_branches_remapped as _cc_branches_remapped
-from cgraph._core import dijkstra_ctx as _dijkstra_ctx
-from cgraph._core import dijkstra_nid as _dijkstra_nid
-from cgraph._core import graph_edge_count as _graph_edge_count
-from cgraph._core import graph_node_count as _graph_node_count
-from cgraph._core import msdijk_ctx as _msdijk_ctx
-from cgraph._core import msdijk_nid as _msdijk_nid
-from cgraph._core import parse_graph as _parse_graph
-from cgraph._core import scc_ctx as _scc_ctx
-from cgraph._core import sssp_ctx as _sssp_ctx
-from cgraph._core import sssp_nid as _sssp_nid
-from cgraph._core import toposort_ctx as _toposort_ctx
-from cgraph._core import toposort_nid as _toposort_nid
-from cgraph._dag_learn import estimate_cpds as _estimate_cpds
-from cgraph._dag_learn import hill_climb_k2 as _hill_climb_k2
-from cgraph._dag_learn import k2_local_score as _k2_local_score
+from networkc._core import all_edge_paths_ctx as _all_edge_paths_ctx
+from networkc._core import ap_ctx as _ap_ctx
+from networkc._core import ap_nid as _ap_nid
+from networkc._core import bcc_ctx as _bcc_ctx
+from networkc._core import bcc_nid as _bcc_nid
+from networkc._core import bfs_ctx as _bfs_ctx
+from networkc._core import bfs_nid as _bfs_nid
+from networkc._core import bridges_ctx as _bridges_ctx
+from networkc._core import bridges_nid as _bridges_nid
+from networkc._core import cc_branches_ctx as _cc_branches_ctx
+from networkc._core import cc_ctx as _cc_ctx
+from networkc._core import cc_nid as _cc_nid
+from networkc._core import cc_nid_split as _cc_nid_split
+from networkc._core import connected_components_with_branches_remapped as _cc_branches_remapped
+from networkc._core import dijkstra_ctx as _dijkstra_ctx
+from networkc._core import dijkstra_nid as _dijkstra_nid
+from networkc._core import graph_edge_count as _graph_edge_count
+from networkc._core import graph_node_count as _graph_node_count
+from networkc._core import msdijk_ctx as _msdijk_ctx
+from networkc._core import msdijk_nid as _msdijk_nid
+from networkc._core import parse_graph as _parse_graph
+from networkc._core import scc_ctx as _scc_ctx
+from networkc._core import sssp_ctx as _sssp_ctx
+from networkc._core import sssp_nid as _sssp_nid
+from networkc._core import toposort_ctx as _toposort_ctx
+from networkc._core import toposort_nid as _toposort_nid
+from networkc._dag_learn import estimate_cpds as _estimate_cpds
+from networkc._dag_learn import hill_climb_k2 as _hill_climb_k2
+from networkc._dag_learn import k2_local_score as _k2_local_score
 
 __all__ = [
     "BranchId",

@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from cgraph import Graph
+from networkc import Graph
 
 pytestmark = pytest.mark.performance
 
@@ -195,7 +195,7 @@ def test_all_edge_paths_with_node_mask() -> None:
 
 
 def test_all_edge_paths_vs_networkx() -> None:
-    """Compare cgraph all_edge_paths against nx.all_simple_edge_paths.
+    """Compare networkc all_edge_paths against nx.all_simple_edge_paths.
 
     Uses node_simple=True for a fair comparison since networkx only supports
     node-simple paths.
@@ -216,10 +216,10 @@ def test_all_edge_paths_vs_networkx() -> None:
     cutoff = 5
     source, target = 0, n - 1
 
-    # cgraph
+    # networkc
     start = time.perf_counter()
-    cgraph_paths = g.all_edge_paths(source, target, cutoff=cutoff, node_simple=True)
-    cgraph_time = time.perf_counter() - start
+    networkc_paths = g.all_edge_paths(source, target, cutoff=cutoff, node_simple=True)
+    networkc_time = time.perf_counter() - start
 
     # networkx
     nxg = networkx.Graph()
@@ -231,10 +231,10 @@ def test_all_edge_paths_vs_networkx() -> None:
     nx_time = time.perf_counter() - start
 
     # Verify same number of paths found
-    assert len(cgraph_paths) == len(nx_paths), f"cgraph found {len(cgraph_paths)} paths, networkx found {len(nx_paths)}"
+    assert len(networkc_paths) == len(nx_paths), f"networkc found {len(networkc_paths)} paths, networkx found {len(nx_paths)}"
 
-    speedup = nx_time / cgraph_time if cgraph_time > 0 else float("inf")
-    assert speedup > 1.0, f"cgraph {cgraph_time:.4f}s vs networkx {nx_time:.4f}s (speedup {speedup:.1f}x)"
+    speedup = nx_time / networkc_time if networkc_time > 0 else float("inf")
+    assert speedup > 1.0, f"networkc {networkc_time:.4f}s vs networkx {nx_time:.4f}s (speedup {speedup:.1f}x)"
 
 
 def test_all_edge_paths_multigraph_scaling() -> None:

@@ -988,7 +988,7 @@ typedef struct {
 } GraphCtx;
 
 static void graphctx_destructor(PyObject *capsule) {
-    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "cgraph.GraphCtx");
+    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "networkc.GraphCtx");
     if (!g) { PyErr_Clear(); return; }
     if (g->has_adj) free_adj(&g->al);
     free_edges(&g->nid.el);
@@ -998,7 +998,7 @@ static void graphctx_destructor(PyObject *capsule) {
 }
 
 static inline GraphCtx *get_graphctx(PyObject *capsule) {
-    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "cgraph.GraphCtx");
+    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "networkc.GraphCtx");
     if (!g) PyErr_SetString(PyExc_TypeError, "expected a parsed Graph capsule");
     return g;
 }
@@ -1030,7 +1030,7 @@ static PyObject *py_parse_graph(PyObject *self, PyObject *args) {
         g->has_adj = 1;
     }
 
-    return PyCapsule_New(g, "cgraph.GraphCtx", graphctx_destructor);
+    return PyCapsule_New(g, "networkc.GraphCtx", graphctx_destructor);
 }
 
 static PyObject *py_graph_is_directed(PyObject *self, PyObject *args) {
