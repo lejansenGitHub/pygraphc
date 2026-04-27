@@ -231,7 +231,9 @@ def test_all_edge_paths_vs_networkx() -> None:
     nx_time = time.perf_counter() - start
 
     # Verify same number of paths found
-    assert len(networkc_paths) == len(nx_paths), f"networkc found {len(networkc_paths)} paths, networkx found {len(nx_paths)}"
+    assert len(networkc_paths) == len(nx_paths), (
+        f"networkc found {len(networkc_paths)} paths, networkx found {len(nx_paths)}"
+    )
 
     speedup = nx_time / networkc_time if networkc_time > 0 else float("inf")
     assert speedup > 1.0, f"networkc {networkc_time:.4f}s vs networkx {nx_time:.4f}s (speedup {speedup:.1f}x)"
