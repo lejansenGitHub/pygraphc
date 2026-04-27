@@ -1,8 +1,8 @@
-"""Correctness tests for all cgraph algorithms."""
+"""Correctness tests for all networkc algorithms."""
 
 import pytest
 
-from cgraph import (
+from networkc import (
     articulation_points,
     bfs,
     biconnected_components,

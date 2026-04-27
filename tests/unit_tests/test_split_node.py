@@ -2,7 +2,7 @@
 
 import pytest
 
-from cgraph import Graph, GraphView
+from networkc import Graph, GraphView
 
 # ── Basic split ──
 

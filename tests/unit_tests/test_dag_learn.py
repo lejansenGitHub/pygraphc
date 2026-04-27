@@ -1,5 +1,5 @@
 """
-Compare cgraph's hill_climb_k2 and k2_local_score against pgmpy.
+Compare networkc's hill_climb_k2 and k2_local_score against pgmpy.
 
 Every test creates a dataset, runs both implementations, and checks they
 produce the same results (scores within tolerance, same DAG structure).
@@ -15,7 +15,7 @@ pgmpy_estimators = pytest.importorskip("pgmpy.estimators")
 from pgmpy.estimators import K2, HillClimbSearch  # noqa: E402
 from pgmpy.estimators.ScoreCache import ScoreCache  # noqa: E402
 
-from cgraph import hill_climb_k2, k2_local_score  # noqa: E402 — after importorskip
+from networkc import hill_climb_k2, k2_local_score  # noqa: E402 — after importorskip
 
 
 def _make_dataframe(data: list[list[int]], n_vars: int) -> pd.DataFrame:
@@ -53,7 +53,7 @@ def _pgmpy_hill_climb(
 
 
 class TestK2LocalScore:
-    """Compare cgraph k2_local_score against pgmpy K2.local_score."""
+    """Compare networkc k2_local_score against pgmpy K2.local_score."""
 
     def test_no_parents_binary(self) -> None:
         """Two binary variables, score of variable 1 with no parents."""
@@ -61,10 +61,10 @@ class TestK2LocalScore:
         cards = [2, 2]
         df = _make_dataframe(data, 2)
 
-        cgraph_score = k2_local_score(data, cards, 1, [])
+        networkc_score = k2_local_score(data, cards, 1, [])
         pgmpy_score = _pgmpy_k2_score(df, 1, [])
 
-        assert cgraph_score == pytest.approx(pgmpy_score, abs=1e-10)
+        assert networkc_score == pytest.approx(pgmpy_score, abs=1e-10)
 
     def test_one_parent_binary(self) -> None:
         """Two binary variables, score of variable 1 with parent 0."""
@@ -72,10 +72,10 @@ class TestK2LocalScore:
         cards = [2, 2]
         df = _make_dataframe(data, 2)
 
-        cgraph_score = k2_local_score(data, cards, 1, [0])
+        networkc_score = k2_local_score(data, cards, 1, [0])
         pgmpy_score = _pgmpy_k2_score(df, 1, [0])
 
-        assert cgraph_score == pytest.approx(pgmpy_score, abs=1e-10)
+        assert networkc_score == pytest.approx(pgmpy_score, abs=1e-10)
 
     def test_no_parents_ternary(self) -> None:
         """Ternary variable with no parents."""
@@ -83,10 +83,10 @@ class TestK2LocalScore:
         cards = [3]
         df = _make_dataframe(data, 1)
 
-        cgraph_score = k2_local_score(data, cards, 0, [])
+        networkc_score = k2_local_score(data, cards, 0, [])
         pgmpy_score = _pgmpy_k2_score(df, 0, [])
 
-        assert cgraph_score == pytest.approx(pgmpy_score, abs=1e-10)
+        assert networkc_score == pytest.approx(pgmpy_score, abs=1e-10)
 
     def test_one_parent_ternary(self) -> None:
         """Ternary child with binary parent."""
@@ -103,10 +103,10 @@ class TestK2LocalScore:
         cards = [2, 3]
         df = _make_dataframe(data, 2)
 
-        cgraph_score = k2_local_score(data, cards, 1, [0])
+        networkc_score = k2_local_score(data, cards, 1, [0])
         pgmpy_score = _pgmpy_k2_score(df, 1, [0])
 
-        assert cgraph_score == pytest.approx(pgmpy_score, abs=1e-10)
+        assert networkc_score == pytest.approx(pgmpy_score, abs=1e-10)
 
     def test_two_parents(self) -> None:
         """Three binary variables, score of variable 2 with parents [0, 1]."""
@@ -123,31 +123,31 @@ class TestK2LocalScore:
         cards = [2, 2, 2]
         df = _make_dataframe(data, 3)
 
-        cgraph_score = k2_local_score(data, cards, 2, [0, 1])
+        networkc_score = k2_local_score(data, cards, 2, [0, 1])
         pgmpy_score = _pgmpy_k2_score(df, 2, [0, 1])
 
-        assert cgraph_score == pytest.approx(pgmpy_score, abs=1e-10)
+        assert networkc_score == pytest.approx(pgmpy_score, abs=1e-10)
 
     def test_all_same_values(self) -> None:
         """
         All samples have the same value — degenerate case.
 
         pgmpy returns 0.0 here due to its reindex=False optimization dropping
-        unobserved parent configs. cgraph computes the mathematically correct
+        unobserved parent configs. networkc computes the mathematically correct
         K2 score including all parent configurations. The difference doesn't
         affect hill climb because only score deltas matter.
         """
         data = [[0, 0]] * 10
         cards = [2, 2]
 
-        cgraph_score = k2_local_score(data, cards, 1, [0])
+        networkc_score = k2_local_score(data, cards, 1, [0])
 
         # Correct K2: lgamma(2)*2 + [lgamma(10+1) - lgamma(10+2)] + [0 - lgamma(2)]
         # = lgamma(2) + lgamma(11) - lgamma(12)
         import math
 
         expected = 2 * math.lgamma(2) + math.lgamma(11) + math.lgamma(1) - math.lgamma(12) - math.lgamma(2)
-        assert cgraph_score == pytest.approx(expected, abs=1e-10)
+        assert networkc_score == pytest.approx(expected, abs=1e-10)
 
     def test_perfect_dependency(self) -> None:
         """Child is a deterministic copy of parent."""
@@ -171,19 +171,19 @@ class TestK2LocalScore:
         Edge case: only one sample.
 
         pgmpy returns 0.0 due to reindex=False dropping empty states.
-        cgraph returns the correct K2 score: lgamma(2) + lgamma(2) - lgamma(3).
+        networkc returns the correct K2 score: lgamma(2) + lgamma(2) - lgamma(3).
         """
         data = [[1, 0]]
         cards = [2, 2]
 
-        cgraph_score = k2_local_score(data, cards, 0, [])
+        networkc_score = k2_local_score(data, cards, 0, [])
 
         import math
 
         # No parents, card=2, one sample with value=1:
         # lgamma(2) + lgamma(0+1) + lgamma(1+1) - lgamma(1+2) = lgamma(2) + 0 + lgamma(2) - lgamma(3)
         expected = math.lgamma(2) + math.lgamma(1) + math.lgamma(2) - math.lgamma(3)
-        assert cgraph_score == pytest.approx(expected, abs=1e-10)
+        assert networkc_score == pytest.approx(expected, abs=1e-10)
 
     def test_many_variables(self) -> None:
         """10 binary variables, score with 1 parent."""
@@ -196,9 +196,9 @@ class TestK2LocalScore:
             for parent in [[1], [5], [2, 8]]:
                 if child in parent:
                     continue
-                cgraph_score = k2_local_score(data, cards, child, parent)
+                networkc_score = k2_local_score(data, cards, child, parent)
                 pgmpy_score = _pgmpy_k2_score(df, child, parent)
-                assert cgraph_score == pytest.approx(pgmpy_score, abs=1e-10), (
+                assert networkc_score == pytest.approx(pgmpy_score, abs=1e-10), (
                     f"Mismatch for child={child}, parents={parent}"
                 )
 
@@ -209,10 +209,10 @@ class TestK2LocalScore:
         data = [[rng.randint(0, c - 1) for c in cards] for _ in range(30)]
         df = _make_dataframe(data, 4)
 
-        cgraph_score = k2_local_score(data, cards, 2, [0, 1])
+        networkc_score = k2_local_score(data, cards, 2, [0, 1])
         pgmpy_score = _pgmpy_k2_score(df, 2, [0, 1])
 
-        assert cgraph_score == pytest.approx(pgmpy_score, abs=1e-10)
+        assert networkc_score == pytest.approx(pgmpy_score, abs=1e-10)
 
     def test_unobserved_parent_state(self) -> None:
         """
@@ -223,17 +223,17 @@ class TestK2LocalScore:
         cards = [3, 2]  # parent 0 has card=3 but value 2 never appears
         df = _make_dataframe(data, 2)
 
-        cgraph_score = k2_local_score(data, cards, 1, [0])
+        networkc_score = k2_local_score(data, cards, 1, [0])
         pgmpy_score = _pgmpy_k2_score(df, 1, [0])
 
-        assert cgraph_score == pytest.approx(pgmpy_score, abs=1e-10)
+        assert networkc_score == pytest.approx(pgmpy_score, abs=1e-10)
 
 
 # ── Hill climb structure comparison tests ──
 
 
 class TestHillClimbK2:
-    """Compare cgraph hill_climb_k2 against pgmpy HillClimbSearch."""
+    """Compare networkc hill_climb_k2 against pgmpy HillClimbSearch."""
 
     def test_empty_data(self) -> None:
         """Empty dataset returns empty DAG."""
@@ -252,11 +252,11 @@ class TestHillClimbK2:
         data = [[rng.randint(0, 1), rng.randint(0, 1)] for _ in range(200)]
         cards = [2, 2]
 
-        cgraph_edges = set(hill_climb_k2(data, cards))
+        networkc_edges = set(hill_climb_k2(data, cards))
         df = _make_dataframe(data, 2)
         pgmpy_edges = _pgmpy_hill_climb(df, cards)
 
-        assert cgraph_edges == pgmpy_edges
+        assert networkc_edges == pgmpy_edges
 
     def test_strong_dependency(self) -> None:
         """
@@ -268,10 +268,10 @@ class TestHillClimbK2:
         data = [[0, 0]] * 100 + [[1, 1]] * 100
         cards = [2, 2]
 
-        cgraph_edges = set(hill_climb_k2(data, cards))
+        networkc_edges = set(hill_climb_k2(data, cards))
 
-        assert len(cgraph_edges) == 1
-        edge = next(iter(cgraph_edges))
+        assert len(networkc_edges) == 1
+        edge = next(iter(networkc_edges))
         assert set(edge) == {0, 1}
 
     def test_chain_dependency(self) -> None:
@@ -288,11 +288,11 @@ class TestHillClimbK2:
             data.append([x0, x1, x2])
         cards = [2, 2, 2]
 
-        cgraph_edges = set(hill_climb_k2(data, cards))
+        networkc_edges = set(hill_climb_k2(data, cards))
         df = _make_dataframe(data, 3)
         pgmpy_edges = _pgmpy_hill_climb(df, cards)
 
-        assert cgraph_edges == pgmpy_edges
+        assert networkc_edges == pgmpy_edges
 
     def test_five_binary_variables(self) -> None:
         """Five binary variables with some dependencies."""
@@ -307,11 +307,11 @@ class TestHillClimbK2:
             data.append([x0, x1, x2, x3, x4])
         cards = [2, 2, 2, 2, 2]
 
-        cgraph_edges = set(hill_climb_k2(data, cards))
+        networkc_edges = set(hill_climb_k2(data, cards))
         df = _make_dataframe(data, 5)
         pgmpy_edges = _pgmpy_hill_climb(df, cards)
 
-        assert cgraph_edges == pgmpy_edges
+        assert networkc_edges == pgmpy_edges
 
     def test_max_indegree_2(self) -> None:
         """
@@ -327,11 +327,11 @@ class TestHillClimbK2:
             data.append([x0, x1, x2])
         cards = [2, 2, 2]
 
-        cgraph_edges = set(hill_climb_k2(data, cards, max_indegree=2))
+        networkc_edges = set(hill_climb_k2(data, cards, max_indegree=2))
         df = _make_dataframe(data, 3)
         pgmpy_edges = _pgmpy_hill_climb(df, cards, max_indegree=2)
 
-        assert cgraph_edges == pgmpy_edges
+        assert networkc_edges == pgmpy_edges
 
     def test_ternary_variables(self) -> None:
         """Two ternary variables with dependency."""
@@ -343,11 +343,11 @@ class TestHillClimbK2:
             data.append([x0, x1])
         cards = [3, 3]
 
-        cgraph_edges = set(hill_climb_k2(data, cards))
+        networkc_edges = set(hill_climb_k2(data, cards))
         df = _make_dataframe(data, 2)
         pgmpy_edges = _pgmpy_hill_climb(df, cards)
 
-        assert cgraph_edges == pgmpy_edges
+        assert networkc_edges == pgmpy_edges
 
     def test_mixed_cardinalities(self) -> None:
         """Variables with different cardinalities."""
@@ -360,11 +360,11 @@ class TestHillClimbK2:
             x2 = rng.randint(0, 3)
             data.append([x0, x1, x2])
 
-        cgraph_edges = set(hill_climb_k2(data, cards))
+        networkc_edges = set(hill_climb_k2(data, cards))
         df = _make_dataframe(data, 3)
         pgmpy_edges = _pgmpy_hill_climb(df, cards)
 
-        assert cgraph_edges == pgmpy_edges
+        assert networkc_edges == pgmpy_edges
 
     def test_sso_realistic_binary(self) -> None:
         """
@@ -381,22 +381,22 @@ class TestHillClimbK2:
             data.append(genes)
         cards = [2] * 7
 
-        cgraph_edges = set(hill_climb_k2(data, cards))
+        networkc_edges = set(hill_climb_k2(data, cards))
         df = _make_dataframe(data, 7)
         pgmpy_edges = _pgmpy_hill_climb(df, cards)
 
-        assert cgraph_edges == pgmpy_edges
+        assert networkc_edges == pgmpy_edges
 
     def test_all_same_data(self) -> None:
         """All samples identical — no dependency can be learned."""
         data = [[0, 0, 0]] * 50
         cards = [2, 2, 2]
 
-        cgraph_edges = set(hill_climb_k2(data, cards))
+        networkc_edges = set(hill_climb_k2(data, cards))
         df = _make_dataframe(data, 3)
         pgmpy_edges = _pgmpy_hill_climb(df, cards)
 
-        assert cgraph_edges == pgmpy_edges
+        assert networkc_edges == pgmpy_edges
 
     def test_large_random_10_variables(self) -> None:
         """10 binary variables, 500 samples — general stress test."""
@@ -404,11 +404,11 @@ class TestHillClimbK2:
         data = [[rng.randint(0, 1) for _ in range(10)] for _ in range(500)]
         cards = [2] * 10
 
-        cgraph_edges = set(hill_climb_k2(data, cards))
+        networkc_edges = set(hill_climb_k2(data, cards))
         df = _make_dataframe(data, 10)
         pgmpy_edges = _pgmpy_hill_climb(df, cards)
 
-        assert cgraph_edges == pgmpy_edges
+        assert networkc_edges == pgmpy_edges
 
     def test_deterministic_results_same_seed(self) -> None:
         """Same data produces same results on repeated calls."""

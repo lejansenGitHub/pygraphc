@@ -1,9 +1,9 @@
-"""Tests for directed graph support in cgraph."""
+"""Tests for directed graph support in networkc."""
 
 import pytest
 
-import cgraph
-from cgraph import Graph
+import networkc
+from networkc import Graph
 
 # ── Construction ──
 
@@ -128,7 +128,7 @@ def test_scc_correctness(node_ids, edges, expected):
 def test_scc_free_function():
     node_ids = [1, 2, 3]
     edges = [(1, 2), (2, 3), (3, 1)]
-    result = list(cgraph.strongly_connected_components(node_ids, edges))
+    result = list(networkc.strongly_connected_components(node_ids, edges))
     assert result == [{1, 2, 3}]
 
 
@@ -175,7 +175,7 @@ def test_wcc_correctness(node_ids, edges, expected):
 def test_wcc_free_function():
     node_ids = [1, 2, 3, 4]
     edges = [(1, 2), (3, 4)]
-    result = list(cgraph.weakly_connected_components(node_ids, edges))
+    result = list(networkc.weakly_connected_components(node_ids, edges))
     assert len(result) == 2
     assert {1, 2} in result
     assert {3, 4} in result
@@ -655,7 +655,7 @@ class TestGraphViewDirectedSplitList:
 def test_scc_free_function_matches_graph_method():
     node_ids = [1, 2, 3, 4]
     edges = [(1, 2), (2, 1), (3, 4)]
-    free_result = list(cgraph.strongly_connected_components(node_ids, edges))
+    free_result = list(networkc.strongly_connected_components(node_ids, edges))
     graph_result = list(Graph(node_ids, edges, directed=True).strongly_connected_components())
     assert sorted(free_result, key=sorted) == sorted(graph_result, key=sorted)
 
@@ -663,7 +663,7 @@ def test_scc_free_function_matches_graph_method():
 def test_wcc_free_function_matches_graph_method():
     node_ids = [1, 2, 3, 4]
     edges = [(1, 2), (3, 4)]
-    free_result = list(cgraph.weakly_connected_components(node_ids, edges))
+    free_result = list(networkc.weakly_connected_components(node_ids, edges))
     graph_result = list(Graph(node_ids, edges, directed=True).weakly_connected_components())
     assert sorted(free_result, key=sorted) == sorted(graph_result, key=sorted)
 
