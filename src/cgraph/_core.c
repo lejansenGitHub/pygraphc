@@ -884,27 +884,39 @@ cleanup_rb:
 /* ── Adjacency list (CSR format) for graph traversal ── */
 
 typedef struct {
-    int *offset;  /* size n+1, CSR row pointers */
-    int *adj;     /* size 2*m, neighbor node indices */
-    int *eid;     /* size 2*m, original edge index */
+    int *offset;      /* size n+1, CSR row pointers */
+    int *adj;         /* size 2*m (undirected) or m (directed), neighbor indices */
+    int *eid;         /* same size, original edge index */
+    int *rev_offset;  /* directed only: size n+1, reverse CSR (NULL if undirected) */
+    int *rev_adj;     /* directed only: size m, predecessor indices */
+    int *rev_eid;     /* directed only: size m, original edge indices */
 } AdjList;
 
-static int build_adj(int n, EdgeList *el, AdjList *al) {
+static int build_adj(int n, EdgeList *el, AdjList *al, int directed) {
     Py_ssize_t m = el->m;
+    Py_ssize_t total = directed ? m : 2 * m;
     al->offset = (int *)calloc((size_t)(n + 1), sizeof(int));
-    al->adj = m > 0 ? (int *)malloc((size_t)(2 * m) * sizeof(int)) : NULL;
-    al->eid = m > 0 ? (int *)malloc((size_t)(2 * m) * sizeof(int)) : NULL;
-    if (!al->offset || (m > 0 && (!al->adj || !al->eid))) {
+    al->adj = total > 0 ? (int *)malloc((size_t)total * sizeof(int)) : NULL;
+    al->eid = total > 0 ? (int *)malloc((size_t)total * sizeof(int)) : NULL;
+    al->rev_offset = NULL;
+    al->rev_adj = NULL;
+    al->rev_eid = NULL;
+    if (!al->offset || (total > 0 && (!al->adj || !al->eid))) {
         free(al->offset); free(al->adj); free(al->eid);
         PyErr_NoMemory();
         return -1;
     }
+
+    /* Count degrees for forward CSR */
     for (Py_ssize_t i = 0; i < m; i++) {
         al->offset[EDGE_SRC(el, i) + 1]++;
-        al->offset[EDGE_DST(el, i) + 1]++;
+        if (!directed)
+            al->offset[EDGE_DST(el, i) + 1]++;
     }
     for (int i = 1; i <= n; i++) al->offset[i] += al->offset[i - 1];
-    if (m > 0) {
+
+    /* Fill forward CSR */
+    if (total > 0) {
         int *pos = (int *)malloc((size_t)n * sizeof(int));
         if (!pos) {
             free(al->offset); free(al->adj); free(al->eid);
@@ -915,10 +927,45 @@ static int build_adj(int n, EdgeList *el, AdjList *al) {
         for (Py_ssize_t i = 0; i < m; i++) {
             int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
             al->adj[pos[u]] = v; al->eid[pos[u]++] = (int)i;
-            al->adj[pos[v]] = u; al->eid[pos[v]++] = (int)i;
+            if (!directed) {
+                al->adj[pos[v]] = u; al->eid[pos[v]++] = (int)i;
+            }
         }
         free(pos);
     }
+
+    /* Build reverse CSR for directed graphs */
+    if (directed && m > 0) {
+        al->rev_offset = (int *)calloc((size_t)(n + 1), sizeof(int));
+        al->rev_adj = (int *)malloc((size_t)m * sizeof(int));
+        al->rev_eid = (int *)malloc((size_t)m * sizeof(int));
+        if (!al->rev_offset || !al->rev_adj || !al->rev_eid) {
+            free(al->rev_offset); free(al->rev_adj); free(al->rev_eid);
+            al->rev_offset = NULL; al->rev_adj = NULL; al->rev_eid = NULL;
+            free(al->offset); free(al->adj); free(al->eid);
+            PyErr_NoMemory();
+            return -1;
+        }
+        for (Py_ssize_t i = 0; i < m; i++)
+            al->rev_offset[EDGE_DST(el, i) + 1]++;
+        for (int i = 1; i <= n; i++) al->rev_offset[i] += al->rev_offset[i - 1];
+
+        int *pos = (int *)malloc((size_t)n * sizeof(int));
+        if (!pos) {
+            free(al->rev_offset); free(al->rev_adj); free(al->rev_eid);
+            al->rev_offset = NULL; al->rev_adj = NULL; al->rev_eid = NULL;
+            free(al->offset); free(al->adj); free(al->eid);
+            PyErr_NoMemory();
+            return -1;
+        }
+        memcpy(pos, al->rev_offset, (size_t)n * sizeof(int));
+        for (Py_ssize_t i = 0; i < m; i++) {
+            int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
+            al->rev_adj[pos[v]] = u; al->rev_eid[pos[v]++] = (int)i;
+        }
+        free(pos);
+    }
+
     return 0;
 }
 
@@ -926,6 +973,9 @@ static void free_adj(AdjList *al) {
     free(al->offset);
     free(al->adj);
     free(al->eid);
+    free(al->rev_offset);
+    free(al->rev_adj);
+    free(al->rev_eid);
 }
 
 /* ── GraphCtx: cached parsed graph for reuse across algorithms ── */
@@ -934,6 +984,7 @@ typedef struct {
     NidContext nid;
     AdjList    al;
     int        has_adj;
+    int        directed;  /* 0 = undirected, 1 = directed */
 } GraphCtx;
 
 static void graphctx_destructor(PyObject *capsule) {
@@ -954,12 +1005,14 @@ static inline GraphCtx *get_graphctx(PyObject *capsule) {
 
 static PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     PyObject *nids, *edges_or_src, *dst_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "OO|O", &nids, &edges_or_src, &dst_obj))
+    int directed = 0;
+    if (!PyArg_ParseTuple(args, "OO|Op", &nids, &edges_or_src, &dst_obj, &directed))
         return NULL;
 
     GraphCtx *g = (GraphCtx *)malloc(sizeof(GraphCtx));
     if (!g) { PyErr_NoMemory(); return NULL; }
     g->has_adj = 0;
+    g->directed = directed;
 
     int rc;
     if (dst_obj != Py_None)
@@ -969,7 +1022,7 @@ static PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     if (rc < 0) { free(g); return NULL; }
 
     if (g->nid.n > 0 && g->nid.el.m > 0) {
-        if (build_adj(g->nid.n, &g->nid.el, &g->al) < 0) {
+        if (build_adj(g->nid.n, &g->nid.el, &g->al, directed) < 0) {
             nid_free(&g->nid);
             free(g);
             return NULL;
@@ -978,6 +1031,14 @@ static PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     }
 
     return PyCapsule_New(g, "cgraph.GraphCtx", graphctx_destructor);
+}
+
+static PyObject *py_graph_is_directed(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    return PyBool_FromLong(g->directed);
 }
 
 static PyObject *py_graph_edge_count(PyObject *self, PyObject *args) {
@@ -1056,7 +1117,7 @@ static PyObject *py_bridges(PyObject *self, PyObject *args) {
     if (el.m == 0) { free_edges(&el); return result; }
 
     AdjList al;
-    if (build_adj(n, &el, &al) < 0) {
+    if (build_adj(n, &el, &al, 0) < 0) {
         free_edges(&el); Py_DECREF(result); return NULL;
     }
 
@@ -1138,7 +1199,7 @@ static PyObject *py_articulation_points(PyObject *self, PyObject *args) {
     if (parse_edges(edges_obj, &el) < 0) { Py_DECREF(result); return NULL; }
 
     AdjList al;
-    if (build_adj(n, &el, &al) < 0) {
+    if (build_adj(n, &el, &al, 0) < 0) {
         free_edges(&el); Py_DECREF(result); return NULL;
     }
     free_edges(&el);
@@ -1227,7 +1288,7 @@ static PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
 
     Py_ssize_t m = el.m;
     AdjList al;
-    if (build_adj(n, &el, &al) < 0) {
+    if (build_adj(n, &el, &al, 0) < 0) {
         free_edges(&el); Py_DECREF(result); return NULL;
     }
     free_edges(&el);
@@ -1328,7 +1389,7 @@ static PyObject *py_bfs(PyObject *self, PyObject *args) {
     if (parse_edges(edges_obj, &el) < 0) return NULL;
 
     AdjList al;
-    if (build_adj(n, &el, &al) < 0) { free_edges(&el); return NULL; }
+    if (build_adj(n, &el, &al, 0) < 0) { free_edges(&el); return NULL; }
     free_edges(&el);
 
     int *visited = (int *)calloc((size_t)n, sizeof(int));
@@ -1453,7 +1514,7 @@ static PyObject *py_dijkstra(PyObject *self, PyObject *args) {
     if (parse_weights(weights_obj, &wl) < 0) { free_edges(&el); return NULL; }
 
     AdjList al;
-    if (build_adj(n, &el, &al) < 0) {
+    if (build_adj(n, &el, &al, 0) < 0) {
         free_edges(&el); free_weights(&wl); return NULL;
     }
     free_edges(&el);
@@ -1564,7 +1625,7 @@ static PyObject *py_sssp_lengths(PyObject *self, PyObject *args) {
     }
 
     AdjList al;
-    if (build_adj(n, &el, &al) < 0) {
+    if (build_adj(n, &el, &al, 0) < 0) {
         free_edges(&el); free_weights(&wl);
         Py_DECREF(result_dict); return NULL;
     }
@@ -1661,7 +1722,7 @@ static PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
     }
 
     AdjList al;
-    if (build_adj(n, &el, &al) < 0) {
+    if (build_adj(n, &el, &al, 0) < 0) {
         free_edges(&el); free_weights(&wl);
         Py_DECREF(src_fast); Py_DECREF(result_dict);
         return NULL;
@@ -1919,7 +1980,7 @@ static PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
     if (!result || n == 0 || ctx.el.m == 0) { nid_free(&ctx); return result; }
 
     AdjList al;
-    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
+    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
 
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     if (!buf5) {
@@ -1984,7 +2045,7 @@ static PyObject *py_ap_nid(PyObject *self, PyObject *args) {
     if (!result || n == 0) { nid_free(&ctx); return result; }
 
     AdjList al;
-    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
+    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
 
     int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
     if (!buf6) {
@@ -2046,7 +2107,7 @@ static PyObject *py_bcc_nid(PyObject *self, PyObject *args) {
 
     Py_ssize_t m = ctx.el.m;
     AdjList al;
-    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
+    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
 
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     int *esbuf = (int *)malloc(2 * (size_t)m * sizeof(int));
@@ -2125,7 +2186,7 @@ static PyObject *py_bfs_nid(PyObject *self, PyObject *args) {
     }
 
     AdjList al;
-    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); return NULL; }
+    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); return NULL; }
 
     int *vis = calloc(n, sizeof(int)), *queue = malloc(n * sizeof(int));
     if (!vis || !queue) {
@@ -2187,7 +2248,7 @@ static PyObject *py_dijkstra_nid(PyObject *self, PyObject *args) {
     WeightList wl;
     if (parse_weights(wobj, &wl) < 0) { nid_free(&ctx); return NULL; }
     AdjList al;
-    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); free_weights(&wl); return NULL; }
+    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); free_weights(&wl); return NULL; }
 
     double *dist = malloc(n*sizeof(double));
     int *prev = malloc(n*sizeof(int)), *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
@@ -2256,7 +2317,7 @@ static PyObject *py_sssp_nid(PyObject *self, PyObject *args) {
     WeightList wl;
     if (parse_weights(wobj, &wl) < 0) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
     AdjList al;
-    if (build_adj(n, &ctx.el, &al) < 0) { nid_free(&ctx); free_weights(&wl); Py_DECREF(rd); return NULL; }
+    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); free_weights(&wl); Py_DECREF(rd); return NULL; }
 
     double *dist = malloc(n*sizeof(double));
     int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
@@ -2318,7 +2379,7 @@ static PyObject *py_msdijk_nid(PyObject *self, PyObject *args) {
     WeightList wl;
     if (parse_weights(wobj, &wl) < 0) { Py_DECREF(sf); nid_free(&ctx); Py_DECREF(rd); return NULL; }
     AdjList al;
-    if (build_adj(n, &ctx.el, &al) < 0) { Py_DECREF(sf); free_weights(&wl); nid_free(&ctx); Py_DECREF(rd); return NULL; }
+    if (build_adj(n, &ctx.el, &al, 0) < 0) { Py_DECREF(sf); free_weights(&wl); nid_free(&ctx); Py_DECREF(rd); return NULL; }
 
     double *dist = malloc(n*sizeof(double));
     int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
@@ -3312,6 +3373,268 @@ static PyObject *py_toposort_nid(PyObject *self, PyObject *args) {
     return result;
 }
 
+/* ── Strongly connected components (iterative Tarjan's, directed CSR) ── */
+
+/*
+ * Core routine: iterative Tarjan's SCC on a directed graph.
+ * Uses the forward CSR (al->offset/adj/eid).
+ * Supports edge mask and node mask.
+ * Writes component labels into cr (same shape as compute_components_masked).
+ * Returns 0 on success, -1 on error.
+ */
+static int compute_scc_masked(int n, AdjList *al, const uint8_t *mask,
+                              const uint8_t *node_mask, ComponentResult *cr) {
+    /* 6n ints: disc, low, on_stack, tarjan_stk, dfs_stk, dfs_sidx */
+    int *buf = (int *)malloc(6 * (size_t)n * sizeof(int));
+    if (!buf) { PyErr_NoMemory(); return -1; }
+    int *disc      = buf;
+    int *low       = buf + n;
+    int *on_stack  = buf + 2 * n;
+    int *tarjan_stk= buf + 3 * n;
+    int *dfs_stk   = buf + 4 * n;
+    int *dfs_sidx  = buf + 5 * n;
+    memset(disc, -1, (size_t)n * sizeof(int));
+    memset(on_stack, 0, (size_t)n * sizeof(int));
+
+    cr->labels = (int *)malloc((size_t)n * sizeof(int));
+    if (!cr->labels) { free(buf); PyErr_NoMemory(); return -1; }
+    memset(cr->labels, -1, (size_t)n * sizeof(int));
+
+    int timer = 0, tsp = 0, num_comp = 0;
+
+    for (int start = 0; start < n; start++) {
+        if (disc[start] != -1) continue;
+        if (node_mask && node_mask[start]) continue;
+
+        int sp = 0;
+        dfs_stk[0] = start;
+        dfs_sidx[0] = al->offset[start];
+        disc[start] = low[start] = timer++;
+        on_stack[start] = 1;
+        tarjan_stk[tsp++] = start;
+
+        while (sp >= 0) {
+            int u = dfs_stk[sp];
+            if (dfs_sidx[sp] < al->offset[u + 1]) {
+                int i = dfs_sidx[sp]++;
+                int eid = al->eid[i];
+                if (mask && mask[eid]) continue;
+                int v = al->adj[i];
+                if (node_mask && node_mask[v]) continue;
+                if (disc[v] == -1) {
+                    disc[v] = low[v] = timer++;
+                    on_stack[v] = 1;
+                    tarjan_stk[tsp++] = v;
+                    dfs_stk[++sp] = v;
+                    dfs_sidx[sp] = al->offset[v];
+                } else if (on_stack[v]) {
+                    if (low[u] > disc[v]) low[u] = disc[v];
+                }
+            } else {
+                /* Backtrack: propagate low to parent */
+                if (sp > 0) {
+                    int p = dfs_stk[sp - 1];
+                    if (low[p] > low[u]) low[p] = low[u];
+                }
+                /* If u is a root of an SCC, pop the Tarjan stack */
+                if (low[u] == disc[u]) {
+                    int comp_id = num_comp++;
+                    int w;
+                    do {
+                        w = tarjan_stk[--tsp];
+                        on_stack[w] = 0;
+                        cr->labels[w] = comp_id;
+                    } while (w != u);
+                }
+                sp--;
+            }
+        }
+    }
+
+    /* Assign isolated masked-out nodes to their own components */
+    for (int i = 0; i < n; i++) {
+        if (cr->labels[i] == -1)
+            cr->labels[i] = num_comp++;
+    }
+
+    cr->num_comp = num_comp;
+    free(buf);
+    return 0;
+}
+
+static PyObject *py_scc_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+    if (n == 0) return PyList_New(0);
+
+    if (!g->directed) {
+        PyErr_SetString(PyExc_TypeError,
+            "strongly_connected_components requires a directed graph");
+        return NULL;
+    }
+
+    /* No adjacency list => every node is its own SCC */
+    if (!g->has_adj) {
+        const uint8_t *nmask = NULL; Py_buffer nmbuf;
+        if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) return NULL;
+        PyObject *result = PyList_New(0);
+        if (!result) { release_mask(&nmbuf); return NULL; }
+        for (int i = 0; i < n; i++) {
+            if (nmask && nmask[i]) continue;
+            PyObject *s = PySet_New(NULL);
+            PySet_Add(s, g->nid.nid_items[i]);
+            PyList_Append(result, s);
+            Py_DECREF(s);
+        }
+        release_mask(&nmbuf);
+        return result;
+    }
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
+
+    ComponentResult cr;
+    if (compute_scc_masked(n, &g->al, mask, nmask, &cr) < 0) {
+        release_mask(&nmbuf); release_mask(&mbuf); return NULL;
+    }
+    release_mask(&mbuf);
+    int nc = cr.num_comp;
+
+    /* Build sets, skipping masked nodes */
+    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
+    if (!sets) { free(cr.labels); release_mask(&nmbuf); PyErr_NoMemory(); return NULL; }
+    for (int c = 0; c < nc; c++) {
+        sets[c] = PySet_New(NULL);
+        if (!sets[c]) {
+            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
+            free(sets); free(cr.labels); release_mask(&nmbuf); return NULL;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        if (nmask && nmask[i]) continue;
+        PySet_Add(sets[cr.labels[i]], g->nid.nid_items[i]);
+    }
+
+    /* Collect non-empty sets */
+    PyObject *result = PyList_New(0);
+    if (!result) {
+        for (int c = 0; c < nc; c++) Py_DECREF(sets[c]);
+        free(sets); free(cr.labels); release_mask(&nmbuf); return NULL;
+    }
+    for (int c = 0; c < nc; c++) {
+        if (PySet_GET_SIZE(sets[c]) > 0)
+            PyList_Append(result, sets[c]);
+        Py_DECREF(sets[c]);
+    }
+    free(sets); free(cr.labels);
+    release_mask(&nmbuf);
+    return result;
+}
+
+/* ── toposort_ctx: topological sort from cached graph context ── */
+
+static int toposort_core_masked(int n, EdgeList *el, const uint8_t *mask,
+                                const uint8_t *node_mask, int **out_order) {
+    Py_ssize_t m = el->m;
+    int *in_deg  = (int *)calloc(n, sizeof(int));
+    int *head    = (int *)malloc((size_t)n * sizeof(int));
+    int *nxt     = m > 0 ? (int *)malloc((size_t)m * sizeof(int)) : NULL;
+    int *adj_dst = m > 0 ? (int *)malloc((size_t)m * sizeof(int)) : NULL;
+    int *queue   = (int *)malloc((size_t)n * sizeof(int));
+
+    if (!in_deg || !head || (m > 0 && (!nxt || !adj_dst)) || !queue) {
+        free(in_deg); free(head); free(nxt); free(adj_dst); free(queue);
+        PyErr_NoMemory();
+        return -1;
+    }
+
+    for (int i = 0; i < n; i++) head[i] = -1;
+
+    /* Build directed adjacency list + compute in-degrees, respecting masks */
+    for (Py_ssize_t i = 0; i < m; i++) {
+        if (mask && mask[i]) continue;
+        int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
+        if (node_mask && (node_mask[u] || node_mask[v])) continue;
+        in_deg[v]++;
+        adj_dst[i] = v;
+        nxt[i] = head[u];
+        head[u] = (int)i;
+    }
+
+    /* Seed queue with zero in-degree nodes (skip masked nodes) */
+    int qh = 0, qt = 0;
+    for (int i = 0; i < n; i++) {
+        if (node_mask && node_mask[i]) continue;
+        if (in_deg[i] == 0) queue[qt++] = i;
+    }
+
+    while (qh < qt) {
+        int u = queue[qh++];
+        for (int e = head[u]; e >= 0; e = nxt[e]) {
+            if (mask && mask[e]) continue;
+            int v = adj_dst[e];
+            if (node_mask && node_mask[v]) continue;
+            if (--in_deg[v] == 0) queue[qt++] = v;
+        }
+    }
+
+    free(in_deg); free(head); free(nxt); free(adj_dst);
+    *out_order = queue;
+    return qt;
+}
+
+static PyObject *py_toposort_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    if (!g->directed) {
+        PyErr_SetString(PyExc_TypeError,
+            "topological_sort requires a directed graph");
+        return NULL;
+    }
+    if (n == 0) return PyList_New(0);
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
+
+    /* Count active nodes */
+    int active_n = n;
+    if (nmask) { active_n = 0; for (int i = 0; i < n; i++) if (!nmask[i]) active_n++; }
+
+    int *order;
+    int count = toposort_core_masked(n, &g->nid.el, mask, nmask, &order);
+    release_mask(&nmbuf); release_mask(&mbuf);
+    if (count < 0) return NULL;
+
+    if (count < active_n) {
+        free(order);
+        PyErr_Format(PyExc_ValueError,
+            "Graph contains a cycle - topological sort is undefined "
+            "(%d of %d nodes processed)", count, active_n);
+        return NULL;
+    }
+
+    PyObject *result = PyList_New(count);
+    if (result) {
+        for (int i = 0; i < count; i++) {
+            Py_INCREF(g->nid.nid_items[order[i]]);
+            PyList_SET_ITEM(result, i, g->nid.nid_items[order[i]]);
+        }
+    }
+    free(order);
+    return result;
+}
+
 /* ── Module definition ── */
 
 static PyMethodDef methods[] = {
@@ -3410,6 +3733,15 @@ static PyMethodDef methods[] = {
      "all_edge_paths_ctx(capsule, source, targets[, cutoff, edge_mask, node_mask, node_simple]) -> list[list[int]]\n\n"
      "Find all paths from source to targets using each edge at most once.\n"
      "If node_simple is true, each node may be visited at most once per path."},
+    {"scc_ctx", py_scc_ctx, METH_VARARGS,
+     "scc_ctx(capsule[, edge_mask, node_mask]) -> list[set[NodeId]]\n\n"
+     "Strongly connected components from a cached directed graph (Tarjan's algorithm)."},
+    {"toposort_ctx", py_toposort_ctx, METH_VARARGS,
+     "toposort_ctx(capsule[, edge_mask, node_mask]) -> list[NodeId]\n\n"
+     "Topological sort from a cached directed graph (Kahn's algorithm)."},
+    {"graph_is_directed", py_graph_is_directed, METH_VARARGS,
+     "graph_is_directed(capsule) -> bool\n\n"
+     "Return True if the parsed graph is directed."},
     {NULL, NULL, 0, NULL},
 };
 
