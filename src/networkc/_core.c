@@ -3635,6 +3635,342 @@ static PyObject *py_toposort_ctx(PyObject *self, PyObject *args) {
     return result;
 }
 
+/* ── CSR-based query functions (O(degree) instead of O(m)) ── */
+
+/* Helper: resolve a node ID to its internal index via the IntMap.
+ * Returns -1 if not found. Sets *found to 0 if not found, 1 if found.
+ * Does NOT set a Python exception on not-found (callers return empty). */
+static int resolve_node(GraphCtx *g, PyObject *nid_obj, int *found) {
+    long nid = PyLong_AsLong(nid_obj);
+    if (nid == -1 && PyErr_Occurred()) { *found = -1; return -1; }
+    if (g->nid.n == 0 || !g->nid.im.keys) { *found = 0; return -1; }
+    int idx = intmap_get(&g->nid.im, nid);
+    *found = (idx >= 0) ? 1 : 0;
+    return idx;
+}
+
+/* neighbors_ctx: O(degree) neighbor lookup via CSR. */
+static PyObject *py_neighbors_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+
+    int found;
+    int u = resolve_node(g, nid_obj, &found);
+    if (found < 0) return NULL;  /* conversion error */
+
+    PyObject *result = PySet_New(NULL);
+    if (!result) return NULL;
+    if (!found || !g->has_adj) return result;
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+
+    if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return result; }
+
+    AdjList *al = &g->al;
+    for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
+        int v = al->adj[e];
+        if (v == u) continue;  /* skip self-loops */
+        if (mask && mask[al->eid[e]]) continue;
+        if (nmask && nmask[v]) continue;
+        PySet_Add(result, g->nid.nid_items[v]);
+    }
+    release_mask(&nmbuf); release_mask(&mbuf);
+    return result;
+}
+
+/* predecessors_ctx: O(in-degree) predecessor lookup via reverse CSR. Directed only. */
+static PyObject *py_predecessors_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    if (!g->directed) {
+        PyErr_SetString(PyExc_TypeError, "predecessors requires a directed graph");
+        return NULL;
+    }
+
+    int found;
+    int u = resolve_node(g, nid_obj, &found);
+    if (found < 0) return NULL;
+
+    PyObject *result = PySet_New(NULL);
+    if (!result) return NULL;
+    if (!found || !g->has_adj || !g->al.rev_offset) return result;
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+
+    if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return result; }
+
+    AdjList *al = &g->al;
+    for (int e = al->rev_offset[u]; e < al->rev_offset[u + 1]; e++) {
+        int v = al->rev_adj[e];
+        if (v == u) continue;
+        if (mask && mask[al->rev_eid[e]]) continue;
+        if (nmask && nmask[v]) continue;
+        PySet_Add(result, g->nid.nid_items[v]);
+    }
+    release_mask(&nmbuf); release_mask(&mbuf);
+    return result;
+}
+
+/* degree_ctx: O(degree) degree count via CSR. For directed, returns out-degree. */
+static PyObject *py_degree_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+
+    int found;
+    int u = resolve_node(g, nid_obj, &found);
+    if (found < 0) return NULL;
+    if (!found || !g->has_adj) return PyLong_FromLong(0);
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
+
+    if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return PyLong_FromLong(0); }
+
+    AdjList *al = &g->al;
+    int count = 0;
+    if (g->directed) {
+        for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
+            if (mask && mask[al->eid[e]]) continue;
+            if (nmask && nmask[al->adj[e]]) continue;
+            count++;
+        }
+    } else {
+        for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
+            if (mask && mask[al->eid[e]]) continue;
+            int v = al->adj[e];
+            if (nmask && nmask[v]) continue;
+            count += (v == u) ? 1 : 1;  /* self-loops appear twice in CSR, each counts 1 */
+        }
+    }
+    release_mask(&nmbuf); release_mask(&mbuf);
+    return PyLong_FromLong(count);
+}
+
+/* in_degree_ctx: O(in-degree) via reverse CSR. Directed only. */
+static PyObject *py_in_degree_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    if (!g->directed) {
+        PyErr_SetString(PyExc_TypeError, "in_degree requires a directed graph");
+        return NULL;
+    }
+
+    int found;
+    int u = resolve_node(g, nid_obj, &found);
+    if (found < 0) return NULL;
+    if (!found || !g->has_adj || !g->al.rev_offset) return PyLong_FromLong(0);
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
+
+    if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return PyLong_FromLong(0); }
+
+    AdjList *al = &g->al;
+    int count = 0;
+    for (int e = al->rev_offset[u]; e < al->rev_offset[u + 1]; e++) {
+        if (mask && mask[al->rev_eid[e]]) continue;
+        if (nmask && nmask[al->rev_adj[e]]) continue;
+        count++;
+    }
+    release_mask(&nmbuf); release_mask(&mbuf);
+    return PyLong_FromLong(count);
+}
+
+/* incident_edges_ctx: O(degree) edge index lookup via CSR. For directed, outgoing. */
+static PyObject *py_incident_edges_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+
+    int found;
+    int u = resolve_node(g, nid_obj, &found);
+    if (found < 0) return NULL;
+
+    PyObject *result = PyList_New(0);
+    if (!result) return NULL;
+    if (!found || !g->has_adj) return result;
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+
+    if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return result; }
+
+    AdjList *al = &g->al;
+    int prev_eid = -1;
+    for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
+        int eid = al->eid[e];
+        if (eid == prev_eid) continue;  /* deduplicate self-loops in undirected CSR */
+        prev_eid = eid;
+        if (mask && mask[eid]) continue;
+        if (nmask && nmask[al->adj[e]]) continue;
+        PyObject *val = PyLong_FromLong(eid);
+        PyList_Append(result, val);
+        Py_DECREF(val);
+    }
+    release_mask(&nmbuf); release_mask(&mbuf);
+    return result;
+}
+
+/* incoming_edges_ctx: O(in-degree) incoming edge indices via reverse CSR. Directed only. */
+static PyObject *py_incoming_edges_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    if (!g->directed) {
+        PyErr_SetString(PyExc_TypeError, "incoming_edge_indices requires a directed graph");
+        return NULL;
+    }
+
+    int found;
+    int u = resolve_node(g, nid_obj, &found);
+    if (found < 0) return NULL;
+
+    PyObject *result = PyList_New(0);
+    if (!result) return NULL;
+    if (!found || !g->has_adj || !g->al.rev_offset) return result;
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+
+    if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return result; }
+
+    AdjList *al = &g->al;
+    for (int e = al->rev_offset[u]; e < al->rev_offset[u + 1]; e++) {
+        int eid = al->rev_eid[e];
+        if (mask && mask[eid]) continue;
+        if (nmask && nmask[al->rev_adj[e]]) continue;
+        PyObject *val = PyLong_FromLong(eid);
+        PyList_Append(result, val);
+        Py_DECREF(val);
+    }
+    release_mask(&nmbuf); release_mask(&mbuf);
+    return result;
+}
+
+/* edge_indices_ctx: find edge indices between u and v via CSR. */
+static PyObject *py_edge_indices_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *u_obj, *v_obj, *mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OOO|O", &capsule, &u_obj, &v_obj, &mask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+
+    int fu, fv;
+    int u = resolve_node(g, u_obj, &fu);
+    if (fu < 0) return NULL;
+    int v = resolve_node(g, v_obj, &fv);
+    if (fv < 0) return NULL;
+
+    PyObject *result = PyList_New(0);
+    if (!result) return NULL;
+    if (!fu || !fv || !g->has_adj) return result;
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+
+    AdjList *al = &g->al;
+    for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
+        if (al->adj[e] != v) continue;
+        int eid = al->eid[e];
+        if (mask && mask[eid]) continue;
+        PyObject *val = PyLong_FromLong(eid);
+        PyList_Append(result, val);
+        Py_DECREF(val);
+    }
+    release_mask(&mbuf);
+    return result;
+}
+
+/* bridges_as_edge_indices_ctx: return bridge edge indices for use in masking. */
+static PyObject *py_bridges_as_edge_indices_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
+    GraphCtx *g = get_graphctx(capsule);
+    if (!g) return NULL;
+    int n = g->nid.n;
+
+    PyObject *result = PyList_New(0);
+    if (!result || n == 0 || g->nid.el.m == 0 || !g->has_adj) return result;
+
+    if (g->directed) {
+        Py_DECREF(result);
+        PyErr_SetString(PyExc_TypeError, "bridges is not defined for directed graphs");
+        return NULL;
+    }
+
+    const uint8_t *mask; Py_buffer mbuf;
+    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    const uint8_t *nmask; Py_buffer nmbuf;
+    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+
+    AdjList *al = &g->al;
+    int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
+    if (!buf5) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
+    int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
+    int *sidx = buf5 + 3*n, *peid = buf5 + 4*n;
+    memset(disc, -1, n * sizeof(int));
+    int timer = 0;
+
+    for (int start = 0; start < n; start++) {
+        if (disc[start] != -1) continue;
+        if (nmask && nmask[start]) continue;
+        int sp = 0;
+        stk[0] = start; sidx[0] = al->offset[start];
+        disc[start] = low[start] = timer++; peid[start] = -1;
+        while (sp >= 0) {
+            int u = stk[sp];
+            if (sidx[sp] < al->offset[u + 1]) {
+                int i = sidx[sp]++;
+                int v = al->adj[i], eid = al->eid[i];
+                if (mask && mask[eid]) continue;
+                if (nmask && nmask[v]) continue;
+                if (eid == peid[u]) continue;
+                if (disc[v] == -1) {
+                    disc[v] = low[v] = timer++; peid[v] = eid;
+                    stk[++sp] = v; sidx[sp] = al->offset[v];
+                } else { if (low[u] > disc[v]) low[u] = disc[v]; }
+            } else {
+                if (sp > 0) {
+                    int p = stk[sp-1];
+                    if (low[p] > low[u]) low[p] = low[u];
+                    if (low[u] > disc[p]) {
+                        PyObject *val = PyLong_FromLong(peid[u]);
+                        PyList_Append(result, val);
+                        Py_DECREF(val);
+                    }
+                }
+                sp--;
+            }
+        }
+    }
+    free(buf5);
+    release_mask(&nmbuf); release_mask(&mbuf);
+    return result;
+}
+
 /* ── Cycle basis (fundamental cycles via DFS spanning tree) ── */
 
 /*
@@ -4038,6 +4374,30 @@ static PyMethodDef methods[] = {
     {"graph_is_directed", py_graph_is_directed, METH_VARARGS,
      "graph_is_directed(capsule) -> bool\n\n"
      "Return True if the parsed graph is directed."},
+    {"neighbors_ctx", py_neighbors_ctx, METH_VARARGS,
+     "neighbors_ctx(capsule, node_id[, edge_mask, node_mask]) -> set[NodeId]\n\n"
+     "Neighbor node IDs via CSR. For directed graphs, returns successors."},
+    {"predecessors_ctx", py_predecessors_ctx, METH_VARARGS,
+     "predecessors_ctx(capsule, node_id[, edge_mask, node_mask]) -> set[NodeId]\n\n"
+     "Predecessor node IDs via reverse CSR. Directed graphs only."},
+    {"degree_ctx", py_degree_ctx, METH_VARARGS,
+     "degree_ctx(capsule, node_id[, edge_mask, node_mask]) -> int\n\n"
+     "Node degree via CSR. For directed graphs, returns out-degree."},
+    {"in_degree_ctx", py_in_degree_ctx, METH_VARARGS,
+     "in_degree_ctx(capsule, node_id[, edge_mask, node_mask]) -> int\n\n"
+     "In-degree via reverse CSR. Directed graphs only."},
+    {"incident_edges_ctx", py_incident_edges_ctx, METH_VARARGS,
+     "incident_edges_ctx(capsule, node_id[, edge_mask, node_mask]) -> list[int]\n\n"
+     "Incident edge indices via CSR. For directed graphs, returns outgoing."},
+    {"incoming_edges_ctx", py_incoming_edges_ctx, METH_VARARGS,
+     "incoming_edges_ctx(capsule, node_id[, edge_mask, node_mask]) -> list[int]\n\n"
+     "Incoming edge indices via reverse CSR. Directed graphs only."},
+    {"edge_indices_ctx", py_edge_indices_ctx, METH_VARARGS,
+     "edge_indices_ctx(capsule, u, v[, edge_mask]) -> list[int]\n\n"
+     "Edge indices between u and v via CSR."},
+    {"bridges_as_edge_indices_ctx", py_bridges_as_edge_indices_ctx, METH_VARARGS,
+     "bridges_as_edge_indices_ctx(capsule[, edge_mask, node_mask]) -> list[int]\n\n"
+     "Bridge edge indices (for masked two_edge_connected_components)."},
     {"cycle_basis_ctx", py_cycle_basis_ctx, METH_VARARGS,
      "cycle_basis_ctx(capsule[, edge_mask, node_mask]) -> list[list[NodeId]]\n\n"
      "Fundamental cycle basis of an undirected graph."},
