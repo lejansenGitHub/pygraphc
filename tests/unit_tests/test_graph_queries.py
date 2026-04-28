@@ -2,7 +2,7 @@
 
 import pytest
 
-from networkc import Graph
+from pygraphc import Graph
 
 # ── Fixtures ──
 

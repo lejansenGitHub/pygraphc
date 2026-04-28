@@ -1,4 +1,4 @@
-# networkc
+# pygraphc
 
 Fast, general-purpose graph algorithm library implemented in C, callable from Python. Zero runtime dependencies.
 
@@ -10,7 +10,7 @@ Edges use **original node IDs** — no manual index mapping needed. A C-side has
 
 End-to-end from domain objects using split lists (gather + algorithm). Sparse random graphs, ~3 edges per node.
 
-| Algorithm | Nodes | networkc | networkx | Speedup |
+| Algorithm | Nodes | pygraphc | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
 | Connected Components | 1K | 0.0001s | 0.001s | **17x** |
 | Connected Components | 10K | 0.001s | 0.011s | **21x** |
@@ -31,7 +31,7 @@ End-to-end from domain objects using split lists (gather + algorithm). Sparse ra
 
 Hill-climb with K2 scoring on binary variables. Both produce identical DAGs.
 
-| Scenario | networkc | pgmpy | Speedup |
+| Scenario | pygraphc | pgmpy | Speedup |
 |----------|-------:|------:|--------:|
 | 5 vars, 100 samples | 0.00003s | 0.021s | **~700x** |
 | 5 vars, 1000 samples | 0.00007s | 0.012s | **~170x** |
@@ -54,7 +54,7 @@ pip install -e .
 Or from GitHub:
 
 ```bash
-pip install git+https://github.com/lejansenGitHub/networkc.git
+pip install git+https://github.com/lejansenGitHub/pygraphc.git
 ```
 
 Requires a C compiler (the extension is compiled at install time with `-O3`).
@@ -64,7 +64,7 @@ Requires a C compiler (the extension is compiled at install time with `-O3`).
 ### Structural algorithms
 
 ```python
-from networkc import (
+from pygraphc import (
     connected_components,
     bridges,
     articulation_points,
@@ -105,7 +105,7 @@ nodes_on_simple_paths(node_ids, edges, source=100, targets=[400])
 Track which branch IDs belong to each connected component:
 
 ```python
-from networkc import connected_components_with_branch_ids
+from pygraphc import connected_components_with_branch_ids
 
 node_ids = [100, 200, 300, 400]
 edges = [(100, 200), (300, 400)]
@@ -144,7 +144,7 @@ list(view.connected_components_with_branch_ids())
 ### Weighted algorithms
 
 ```python
-from networkc import (
+from pygraphc import (
     shortest_path,
     shortest_path_lengths,
     multi_source_shortest_path_lengths,
@@ -174,7 +174,7 @@ eccentricity(node_ids, edges, weights, source=0)  # 6.0
 When running multiple algorithms on the same graph, use the `Graph` class to avoid re-parsing the input each time:
 
 ```python
-from networkc import Graph
+from pygraphc import Graph
 
 node_ids = [0, 1, 2, 3, 4, 5]
 edges = [(0, 1), (1, 2), (2, 0), (2, 3), (3, 4), (4, 5), (5, 3)]
@@ -206,7 +206,7 @@ On a 100K-node graph, running 3 algorithms via `Graph` is ~2x faster than 3 sepa
 Create lightweight views that exclude edges from the graph without rebuilding the CSR. The base graph is never mutated — views overlay a byte mask on the shared adjacency structure.
 
 ```python
-from networkc import Graph, GraphView, for_each_edge_excluded
+from pygraphc import Graph, GraphView, for_each_edge_excluded
 
 g = Graph(node_ids, edges)
 
@@ -246,10 +246,10 @@ Parallel edges are supported — each edge is tracked by ID, so two edges betwee
 
 ### MultiGraph support
 
-networkc natively supports parallel edges (multigraphs). Each duplicate edge gets a unique index — no deduplication. All algorithms handle them correctly:
+pygraphc natively supports parallel edges (multigraphs). Each duplicate edge gets a unique index — no deduplication. All algorithms handle them correctly:
 
 ```python
-from networkc import Graph
+from pygraphc import Graph
 
 g = Graph([1, 2, 3], [(1, 2), (1, 2), (2, 3)])
 
@@ -324,7 +324,7 @@ The algorithm:
 4. Stop when no operation improves the score by more than `epsilon`
 
 ```python
-from networkc import hill_climb_k2, estimate_cpds, k2_local_score
+from pygraphc import hill_climb_k2, estimate_cpds, k2_local_score
 
 # Dataset: rows of discrete observations, values in [0, cardinality)
 data = [
@@ -362,7 +362,7 @@ Complexity per iteration: O(n^2 * n_samples) where n = number of variables.
 All graph algorithms support directed graphs via `directed=True`. Edges `(u, v)` are treated as `u -> v`. A forward and reverse CSR are built, using the same total memory as undirected (2m entries).
 
 ```python
-from networkc import Graph, strongly_connected_components, weakly_connected_components
+from pygraphc import Graph, strongly_connected_components, weakly_connected_components
 
 node_ids = [1, 2, 3, 4, 5]
 edges = [(1, 2), (2, 3), (3, 1), (4, 5)]  # 1->2->3->1 cycle, 4->5
@@ -505,7 +505,7 @@ paths = view.all_edge_paths(source=0, targets=3)
 
 ### Cost breakdown
 
-Every networkc call has three cost phases. Connected components at 1M nodes, sparse random graph (~3 edges per node):
+Every pygraphc call has three cost phases. Connected components at 1M nodes, sparse random graph (~3 edges per node):
 
 ```python
 class Branch:
@@ -523,7 +523,7 @@ class Branch:
 | **Total** | **156ms** | **119ms** | **159ms** |
 | vs tuples | baseline | **1.31x** | ~same |
 
-- **Gather** is pure Python — extracting `node_a`/`node_b` from your objects. networkc can't optimize this, but the interface choice affects it (tuples cost 71ms, split lists cost 35ms).
+- **Gather** is pure Python — extracting `node_a`/`node_b` from your objects. pygraphc can't optimize this, but the interface choice affects it (tuples cost 71ms, split lists cost 35ms).
 - **Parse** is the C-side input handling — building the node-ID hash map and translating edges to internal indices. Numpy skips per-element Python unpacking via buffer reads.
 - **C algorithm** is the actual computation (union-find + building Python `set` results). Fixed cost, identical across all interfaces. The `set` construction via `PySet_Add` accounts for ~50ms of the 62ms — this is the CPython floor for creating hash-based sets of 1M elements.
 
@@ -531,7 +531,7 @@ class Branch:
 
 End-to-end from `Branch` objects using split lists. Connected components at 1M nodes:
 
-| Scenario | Components | Gather | networkc | Total |
+| Scenario | Components | Gather | pygraphc | Total |
 |----------|-----------:|-------:|-------:|------:|
 | 1 component (all connected) | 1 | 25ms | 30ms | 55ms |
 | 10 components (100K each) | 10 | 22ms | 27ms | 48ms |
@@ -540,9 +540,9 @@ End-to-end from `Branch` objects using split lists. Connected components at 1M n
 | Random sparse (avg degree 3) | 54,266 | 35ms | 74ms | 109ms |
 | 1M isolated (0 edges) | 1,000,000 | 0ms | 212ms | 212ms |
 
-The networkc call splits into union-find algorithm and Python set construction:
+The pygraphc call splits into union-find algorithm and Python set construction:
 
-| Scenario | Components | Union-find | Set construction | Set % of networkc |
+| Scenario | Components | Union-find | Set construction | Set % of pygraphc |
 |----------|-----------:|-----------:|-----------------:|----------------:|
 | 1 component (all connected) | 1 | 4ms | 24ms | 86% |
 | 10 components (100K each) | 10 | 4ms | 26ms | 87% |
@@ -551,7 +551,7 @@ The networkc call splits into union-find algorithm and Python set construction:
 | Random sparse (avg degree 3) | 54,266 | 11ms | 50ms | 82% |
 | 1M isolated (0 edges) | 1,000,000 | 2ms | 160ms | 99% |
 
-The union-find algorithm is 2-11ms — already near-optimal. **82-99% of the networkc time is Python set construction** (`PySet_New` + `PySet_Add`), which is the CPython floor for building hash-based sets. Many small components are expensive because each `PySet_New()` allocates a Python set object. Gather cost scales with edge count, not component count.
+The union-find algorithm is 2-11ms — already near-optimal. **82-99% of the pygraphc time is Python set construction** (`PySet_New` + `PySet_Add`), which is the CPython floor for building hash-based sets. Many small components are expensive because each `PySet_New()` allocates a Python set object. Gather cost scales with edge count, not component count.
 
 ### Calling conventions
 
@@ -579,7 +579,7 @@ pip install -e ".[benchmark]"
 pip install networkx pgmpy
 pytest tests/performance_tests/ -v -s -k speedup
 python benchmarks/bench_all.py       # structured cost breakdown + topology scenarios
-python benchmarks/bench_dag_learn.py  # hill-climb K2: networkc vs pgmpy
+python benchmarks/bench_dag_learn.py  # hill-climb K2: pygraphc vs pgmpy
 ```
 
 ## Tests

@@ -21,7 +21,7 @@ jobs:
         run: pip install -e ".[dev]" vendor/blueprint_linters-*.whl
       - name: Verify C extensions built
         if: matrix.check == 'mypy'
-        run: python -c "from networkc._core import cc_ctx; from networkc._dag_learn import hill_climb_k2"
+        run: python -c "from pygraphc._core import cc_ctx; from pygraphc._dag_learn import hill_climb_k2"
       - name: ruff check
         if: matrix.check == 'ruff'
         run: ruff check src/ tests/ && ruff format --check src/ tests/

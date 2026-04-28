@@ -2,8 +2,8 @@
 
 import pytest
 
-import networkc
-from networkc import Graph
+import pygraphc
+from pygraphc import Graph
 
 # ── Correctness (unweighted) ──
 
@@ -146,12 +146,12 @@ def test_dag_longest_path_view_weighted():
 
 
 def test_dag_longest_path_free_function():
-    result = networkc.dag_longest_path([1, 2, 3, 4], [(1, 2), (2, 3), (3, 4)])
+    result = pygraphc.dag_longest_path([1, 2, 3, 4], [(1, 2), (2, 3), (3, 4)])
     assert len(result) == 4
 
 
 def test_dag_longest_path_free_function_weighted():
-    result = networkc.dag_longest_path(
+    result = pygraphc.dag_longest_path(
         [1, 2, 3],
         [(1, 2), (1, 3)],
         weights=[1.0, 100.0],
@@ -161,4 +161,4 @@ def test_dag_longest_path_free_function_weighted():
 
 def test_dag_longest_path_free_function_cycle_raises():
     with pytest.raises(ValueError, match="cycle"):
-        networkc.dag_longest_path([1, 2, 3], [(1, 2), (2, 3), (3, 1)])
+        pygraphc.dag_longest_path([1, 2, 3], [(1, 2), (2, 3), (3, 1)])

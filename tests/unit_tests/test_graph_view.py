@@ -2,7 +2,7 @@
 
 import pytest
 
-from networkc import Graph, GraphView, for_each_edge_excluded
+from pygraphc import Graph, GraphView, for_each_edge_excluded
 
 # ── Fixtures ──
 

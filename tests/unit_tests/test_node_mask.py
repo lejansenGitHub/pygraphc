@@ -2,7 +2,7 @@
 
 import pytest
 
-from networkc import Graph, GraphView
+from pygraphc import Graph, GraphView
 
 
 @pytest.fixture

@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from networkc import Graph
+from pygraphc import Graph
 
 pytestmark = pytest.mark.performance
 

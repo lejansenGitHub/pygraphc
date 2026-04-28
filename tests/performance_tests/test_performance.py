@@ -10,7 +10,7 @@ import time
 import numpy as np
 import pytest
 
-from networkc import connected_components
+from pygraphc import connected_components
 
 pytestmark = pytest.mark.performance
 

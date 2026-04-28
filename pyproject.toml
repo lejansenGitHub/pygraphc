@@ -1,5 +1,5 @@
 [project]
-name = "networkc"
+name = "pygraphc"
 version = "0.1.0"
 description = "Fast graph algorithms with C kernels — connected components via union-find"
 readme = "README.md"
@@ -40,9 +40,9 @@ benchmark = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lejansenGitHub/networkc"
-Repository = "https://github.com/lejansenGitHub/networkc"
-Issues = "https://github.com/lejansenGitHub/networkc/issues"
+Homepage = "https://github.com/lejansenGitHub/pygraphc"
+Repository = "https://github.com/lejansenGitHub/pygraphc"
+Issues = "https://github.com/lejansenGitHub/pygraphc/issues"
 
 [tool.uv]
 find-links = ["vendor/"]
@@ -56,7 +56,7 @@ where = ["src"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-networkc = ["py.typed"]
+pygraphc = ["py.typed"]
 
 [tool.ruff]
 target-version = "py311"
@@ -131,7 +131,7 @@ module = ["pytest.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["networkc._core", "networkc._dag_learn", "scipy.*", "numpy.*"]
+module = ["pygraphc._core", "pygraphc._dag_learn", "scipy.*", "numpy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

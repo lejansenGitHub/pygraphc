@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from networkc import Graph
+from pygraphc import Graph
 
 pytestmark = pytest.mark.performance
 
@@ -96,7 +96,7 @@ def test_scc_speedup_vs_networkx(exponent: int) -> None:
     c_time = time.perf_counter() - start
 
     speedup = nx_time / c_time if c_time > 0 else float("inf")
-    print(f"\n  SCC 10^{exponent}: nx={nx_time:.4f}s | networkc={c_time:.4f}s ({speedup:.1f}x)")  # noqa: T201
+    print(f"\n  SCC 10^{exponent}: nx={nx_time:.4f}s | pygraphc={c_time:.4f}s ({speedup:.1f}x)")  # noqa: T201
 
 
 # ── WCC Performance ──
@@ -150,7 +150,7 @@ def test_wcc_speedup_vs_networkx(exponent: int) -> None:
     c_time = time.perf_counter() - start
 
     speedup = nx_time / c_time if c_time > 0 else float("inf")
-    print(f"\n  WCC 10^{exponent}: nx={nx_time:.4f}s | networkc={c_time:.4f}s ({speedup:.1f}x)")  # noqa: T201
+    print(f"\n  WCC 10^{exponent}: nx={nx_time:.4f}s | pygraphc={c_time:.4f}s ({speedup:.1f}x)")  # noqa: T201
 
 
 # ── Directed BFS Performance ──
@@ -254,7 +254,7 @@ def test_toposort_speedup_vs_networkx(exponent: int) -> None:
     c_time = time.perf_counter() - start
 
     speedup = nx_time / c_time if c_time > 0 else float("inf")
-    print(f"\n  toposort 10^{exponent}: nx={nx_time:.4f}s | networkc={c_time:.4f}s ({speedup:.1f}x)")  # noqa: T201
+    print(f"\n  toposort 10^{exponent}: nx={nx_time:.4f}s | pygraphc={c_time:.4f}s ({speedup:.1f}x)")  # noqa: T201
 
 
 # ── Construction Overhead ──

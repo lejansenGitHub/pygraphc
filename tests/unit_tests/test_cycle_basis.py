@@ -2,8 +2,8 @@
 
 import pytest
 
-import networkc
-from networkc import Graph
+import pygraphc
+from pygraphc import Graph
 
 
 def _cycles_as_frozensets(cycles: list[list[int]]) -> set[frozenset[int]]:
@@ -155,11 +155,11 @@ def test_cycle_basis_view_preserves_other_cycle():
 
 
 def test_cycle_basis_free_function():
-    result = networkc.cycle_basis([1, 2, 3], [(1, 2), (2, 3), (3, 1)])
+    result = pygraphc.cycle_basis([1, 2, 3], [(1, 2), (2, 3), (3, 1)])
     assert len(result) == 1
     assert frozenset(result[0]) == {1, 2, 3}
 
 
 def test_cycle_basis_free_function_no_cycles():
-    result = networkc.cycle_basis([1, 2, 3], [(1, 2), (2, 3)])
+    result = pygraphc.cycle_basis([1, 2, 3], [(1, 2), (2, 3)])
     assert result == []
