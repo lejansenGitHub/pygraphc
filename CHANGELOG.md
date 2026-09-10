@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
+- `pygraphc.reduction`: the terminal-preserving graph reduction kernel.
+  `MultiGraph` with edge identity, `Partition` from masked connected
+  components (`from_components`, `from_groups`, `compose`, `refines`,
+  `blocks`, constant-time `block_of`), `quotient` with internal edges,
+  `lift` with a fixed combination order, `reduce` (pendant, series and
+  parallel moves with terminals, protected nodes and leaf fold or drop)
+  producing `Leaf`/`Series`/`Parallel` provenance trees with
+  `folded_nodes` and `folded_interior` payload bookkeeping, the folds
+  `leaves`, `paths(cutoff)`, `closed` and `minimal_toggles`, and `scenario`
+  (mask and re-partition). All names are re-exported from `pygraphc`.
 
 ### Fixed
 - Weighted algorithms (`shortest_path`, `shortest_path_lengths`,

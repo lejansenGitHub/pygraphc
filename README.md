@@ -322,6 +322,82 @@ view.incident_edge_indices(1)                      # [0, 1] — base edge keeps 
 list(view.without_branches([11]).connected_components())  # [{0, 1}, {2}]
 ```
 
+### Graph reduction kernel
+
+`pygraphc.reduction` implements the terminal-preserving reduction kernel shared by
+N-1 analysis and switching-state optimization. The partition step runs in C through
+masked connected components; quotient, lift, reduction, provenance folds and scenario
+application are the Python tier on top. Node ids are integers, edge ids are opaque
+hashable values that keep their identity through every operation, and every result
+is deterministic by id order.
+
+```python
+from pygraphc import MultiGraph, Parallel, Partition, minimal_toggles, paths, quotient, reduce, scenario
+
+# Edges are identified by id, never by endpoint pair: parallel switches survive.
+graph = MultiGraph([1, 2, 3, 4], {"line": (1, 2), "trafo_a": (2, 3), "trafo_b": (2, 3), "feeder": (3, 4)})
+active = set(graph.endpoints)
+
+# Partition by masked connected components; block ids are the minimum member id.
+base = Partition.from_components(graph, active)        # blocks: {1: [1, 2, 3, 4]}
+base.block_of[4]                                        # 1, constant-time lookup
+
+# Scenario = mask and re-partition. A fault on both parallel transformers splits
+# the block although neither transformer is a bridge. The C graph is built once
+# per MultiGraph; scenarios only change the byte mask.
+after = scenario(graph, active, removed={"trafo_a", "trafo_b"})
+after.blocks()                                          # {1: [1, 2], 3: [3, 4]}
+after.refines(base)                                     # True
+
+# Quotient over blocks: every crossing edge keeps its id; edges inside a block are internal.
+meta, internal = quotient(after, graph, crossing={"trafo_a", "trafo_b", "line"})
+meta.endpoints                                          # {"trafo_a": (1, 3), "trafo_b": (1, 3)}
+internal                                                # {1: ["line"]}
+
+# Terminal-preserving reduction: pendant deletion, series merge, parallel merge until
+# nothing applies. Every residual edge carries a series-parallel provenance tree.
+reduced = reduce(meta, terminals={1, 3})
+(tree,) = reduced.provenance.values()
+isinstance(tree, Parallel)                              # True: Parallel({Leaf("trafo_a"), Leaf("trafo_b")})
+paths(tree)                                             # {frozenset({"trafo_a"}), frozenset({"trafo_b"})}
+minimal_toggles(tree, {"trafo_a": True, "trafo_b": True}, target_closed=False)
+# frozenset({"trafo_a", "trafo_b"}): opening the link needs both switches
+```
+
+`reduce(graph, terminals, protected=frozenset(), *, fold_leaves=True, order=None)`:
+
+- Components without a terminal are removed whole before any move.
+- Terminals always survive. Protected nodes keep their incident edges unmerged
+  (no series merge at them, no parallel merge of edges touching them); they may
+  still be deleted as pendants.
+- Self-loops take part in no move and leave with their node. Degree counts
+  non-loop incidences, so a node with a loop and one further edge is a pendant,
+  and a series merge needs exactly two non-loop incidences to two distinct neighbours.
+- With `fold_leaves`, every eliminated node appears exactly once in the output:
+  in `Reduced.folded_nodes` of a surviving node, as `Series.interior_nodes` of a
+  residual tree, or in `Reduced.folded_interior` of such an interior node (the
+  material folded into it before its series move). A pendant move passes the
+  pendant node, its folded material and the interior nodes of the dropped edge's
+  tree with their folded material on to the neighbour. With `fold_leaves=False`
+  pendant material is dropped.
+- Edges produced by moves get `VirtualEdgeId`s numbered in creation order; they
+  sort after every input edge id.
+- Deterministic: candidates are processed in increasing node id (or in `order`),
+  ties among edges by id order. Without protected nodes the residual and the folded
+  material are the same for every order; a protected node can make them order
+  dependent, in which case the id order is the documented answer.
+
+Tree folds: `leaves(tree)`, `paths(tree, cutoff=None)` (series is the product,
+parallel the union, the cutoff prunes inside the product), `closed(tree, state)`
+(series is AND, parallel is OR) and `minimal_toggles(tree, state, target_closed=...)`
+(union where the node type needs every child, cheapest child otherwise, ties by
+edge id). The folds are iterative and tree hashes are cached, so chains deeper than
+the recursion limit are fine.
+
+`lift(partition, attribute, combine)` combines node attributes per block in
+increasing node order, so a non-commutative `combine` still gives reproducible
+results. `Partition.compose(finer)` expresses a second quotient level.
+
 ### DAG structure learning (Bayesian networks)
 
 Learn directed acyclic graph (DAG) structures from discrete data using greedy hill-climb search with K2 Bayesian scoring. Implemented in C — drop-in replacement for pgmpy's `HillClimbSearch` with identical results and orders of magnitude faster.

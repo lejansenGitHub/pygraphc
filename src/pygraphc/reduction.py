@@ -1,0 +1,608 @@
+"""Terminal-preserving graph reduction kernel (Python tier).
+
+The partition step runs in the C tier through masked connected components of
+``pygraphc.Graph``. Everything above it lives here: quotient with edge
+identity, lift with a fixed combination order, the fixpoint reduction with
+series-parallel provenance, the tree folds and scenario application.
+
+Node ids are integers because the C tier interns them. Edge ids are opaque
+hashable values and every edge keeps its identity through every operation.
+Every operation is deterministic: ties are broken by id order, never by hash
+order. Self-loops take part in no move and leave with their node.
+
+The module depends on ``pygraphc`` only for ``pygraphc.Graph``; the package
+is imported as a module so that ``pygraphc/__init__.py`` can re-export the
+kernel without a circular import.
+"""
+
+from __future__ import annotations
+
+import heapq
+from collections import Counter
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, field
+from functools import cached_property
+from itertools import count, product
+from typing import Generic, TypeAlias, TypeVar
+
+import pygraphc
+
+EdgeId = TypeVar("EdgeId", bound=Hashable)
+Payload = TypeVar("Payload")
+
+
+def _order_key(value: object) -> tuple[int, str, int | str]:
+    """Total order over opaque ids of mixed types.
+
+    Integers order numerically and come first, so a block id is the
+    numerically smallest member. Everything else orders by type name, then by
+    ``repr``. Virtual edge ids come after every input edge id, in creation order.
+    """
+    if isinstance(value, VirtualEdgeId):
+        return (2, "", value.index)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return (0, "", value)
+    return (1, type(value).__name__, repr(value))
+
+
+# ---------------------------------------------------------------------------
+# Multigraph with edge identity
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VirtualEdgeId:
+    """Id of an edge produced by a series or parallel move, numbered in creation order."""
+
+    index: int
+
+
+@dataclass(frozen=True)
+class MultiGraph(Generic[EdgeId]):
+    """Multigraph whose edges are identified by id, never by endpoint pair.
+
+    Treated as an immutable value: the masked C graph used for partitions
+    is built once per instance and reused by every scenario.
+    """
+
+    nodes: list[int]
+    endpoints: dict[EdgeId, tuple[int, int]]
+
+    def __post_init__(self) -> None:
+        node_set = set(self.nodes)
+        if len(node_set) != len(self.nodes):
+            message = "node ids must be unique"
+            raise ValueError(message)
+        for edge_id, (from_node, to_node) in self.endpoints.items():
+            if from_node not in node_set or to_node not in node_set:
+                message = f"edge {edge_id!r} has an endpoint that is not a node"
+                raise ValueError(message)
+
+    @cached_property
+    def _kernel(self) -> _KernelGraph[EdgeId]:
+        edge_ids = sorted(self.endpoints, key=_order_key)
+        kernel_graph = pygraphc.Graph(list(self.nodes), [self.endpoints[edge_id] for edge_id in edge_ids])
+        return _KernelGraph(edge_ids, kernel_graph)
+
+
+@dataclass(frozen=True)
+class _KernelGraph(Generic[EdgeId]):
+    """Parsed C graph of a multigraph plus the edge id at every edge index."""
+
+    edge_ids: list[EdgeId]
+    graph: pygraphc.Graph
+
+
+# ---------------------------------------------------------------------------
+# Partition
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Partition:
+    """Node to block mapping with constant-time lookup through ``block_of``.
+
+    Block ids are the minimum member id, so they are content addressed and
+    reproducible regardless of input order.
+    """
+
+    block_of: dict[int, int]
+
+    @classmethod
+    def from_components(cls, graph: MultiGraph[EdgeId], active: AbstractSet[EdgeId]) -> Partition:
+        """Connected components of the graph restricted to the active edges.
+
+        The inactive edges are a byte mask on the cached C graph, so applying
+        a different active set never rebuilds the graph.
+        """
+        kernel = graph._kernel
+        excluded = [index for index, edge_id in enumerate(kernel.edge_ids) if edge_id not in active]
+        block_of: dict[int, int] = {}
+        for group in kernel.graph.without_edges(excluded).connected_components():
+            representative = min(group)
+            for node_id in group:
+                block_of[node_id] = representative
+        return cls(block_of)
+
+    @classmethod
+    def from_groups(cls, groups: Iterable[Iterable[int]]) -> Partition:
+        """Explicit grouping, for callers that already know the blocks."""
+        block_of: dict[int, int] = {}
+        for group in groups:
+            members = list(group)
+            representative = min(members)
+            for node_id in members:
+                block_of[node_id] = representative
+        return cls(block_of)
+
+    def blocks(self) -> dict[int, list[int]]:
+        """Members per block, blocks and members in increasing id order."""
+        members: dict[int, list[int]] = {}
+        for node_id in sorted(self.block_of):
+            members.setdefault(self.block_of[node_id], []).append(node_id)
+        return dict(sorted(members.items()))
+
+    def compose(self, finer: Partition) -> Partition:
+        """Partition of the original nodes when self partitions the blocks of the finer partition."""
+        return Partition({node_id: self.block_of[block_id] for node_id, block_id in finer.block_of.items()})
+
+    def refines(self, coarser: Partition) -> bool:
+        """Every block of self lies inside one block of the coarser partition."""
+        image: dict[int, int] = {}
+        for node_id, block_id in self.block_of.items():
+            target = coarser.block_of[node_id]
+            if image.setdefault(block_id, target) != target:
+                return False
+        return True
+
+
+def quotient(
+    partition: Partition,
+    graph: MultiGraph[EdgeId],
+    crossing: AbstractSet[EdgeId],
+) -> tuple[MultiGraph[EdgeId], dict[int, list[EdgeId]]]:
+    """Meta multigraph over the blocks in which every crossing edge keeps its identity.
+
+    Crossing edges with both endpoints in one block are returned separately
+    as the internal edges of that block.
+    """
+    block_nodes = sorted(set(partition.block_of.values()))
+    endpoints: dict[EdgeId, tuple[int, int]] = {}
+    internal: dict[int, list[EdgeId]] = {}
+    for edge_id in sorted(crossing, key=_order_key):
+        from_node, to_node = graph.endpoints[edge_id]
+        block_from, block_to = partition.block_of[from_node], partition.block_of[to_node]
+        if block_from == block_to:
+            internal.setdefault(block_from, []).append(edge_id)
+        else:
+            endpoints[edge_id] = (block_from, block_to)
+    return MultiGraph(block_nodes, endpoints), internal
+
+
+def lift(
+    partition: Partition,
+    attribute: Mapping[int, Payload],
+    combine: Callable[[Payload, Payload], Payload],
+) -> dict[int, Payload]:
+    """Combine node attributes per block in increasing node order."""
+    lifted: dict[int, Payload] = {}
+    for node_id in sorted(attribute):
+        block_id = partition.block_of[node_id]
+        value = attribute[node_id]
+        lifted[block_id] = value if block_id not in lifted else combine(lifted[block_id], value)
+    return lifted
+
+
+# ---------------------------------------------------------------------------
+# Series-parallel provenance tree
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Leaf(Generic[EdgeId]):
+    """An edge of the input graph."""
+
+    edge_id: EdgeId
+    _hash: int = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_hash", hash((Leaf, self.edge_id)))
+
+    def __hash__(self) -> int:
+        return self._hash
+
+
+@dataclass(frozen=True)
+class Series(Generic[EdgeId]):
+    """Children ordered from the from-endpoint to the to-endpoint of the merged edge.
+
+    ``interior_nodes`` records the eliminated node so node payloads can be
+    folded; the material folded into it beforehand is in
+    ``Reduced.folded_interior``. The hash is computed once from the children's
+    hashes, which keeps hashing constant-time and free of recursion on deep chains.
+    """
+
+    children: tuple[SPTree[EdgeId], ...]
+    interior_nodes: tuple[int, ...]
+    _hash: int = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_hash", hash((Series, self.children, self.interior_nodes)))
+
+    def __hash__(self) -> int:
+        return self._hash
+
+
+@dataclass(frozen=True)
+class Parallel(Generic[EdgeId]):
+    """Unordered children between the same endpoint pair."""
+
+    children: frozenset[SPTree[EdgeId]]
+    _hash: int = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_hash", hash((Parallel, self.children)))
+
+    def __hash__(self) -> int:
+        return self._hash
+
+
+SPTree: TypeAlias = Leaf[EdgeId] | Series[EdgeId] | Parallel[EdgeId]
+
+
+def _post_order(tree: SPTree[EdgeId]) -> list[SPTree[EdgeId]]:
+    """Every node of the tree once, children before parents, without recursion."""
+    order: list[SPTree[EdgeId]] = []
+    visited: set[int] = set()
+    stack: list[tuple[SPTree[EdgeId], bool]] = [(tree, False)]
+    while stack:
+        node, children_done = stack.pop()
+        if id(node) in visited:
+            continue
+        if children_done or isinstance(node, Leaf):
+            visited.add(id(node))
+            order.append(node)
+            continue
+        stack.append((node, True))
+        stack.extend((child, False) for child in node.children)
+    return order
+
+
+def leaves(tree: SPTree[EdgeId]) -> frozenset[EdgeId]:
+    """Edge ids of the input graph represented by the tree."""
+    return frozenset(node.edge_id for node in _post_order(tree) if isinstance(node, Leaf))
+
+
+def paths(tree: SPTree[EdgeId], cutoff: int | None = None) -> set[frozenset[EdgeId]]:
+    """Edge sets of all simple paths represented by the tree.
+
+    Series is the product of the children, parallel the union. The cutoff
+    prunes inside every product, never afterwards.
+    """
+    order = _post_order(tree)
+    pending_parents = Counter(id(child) for node in order if not isinstance(node, Leaf) for child in node.children)
+    paths_of: dict[int, set[frozenset[EdgeId]]] = {}
+    for node in order:
+        if isinstance(node, Leaf):
+            paths_of[id(node)] = {frozenset({node.edge_id})}
+            continue
+        child_paths = [_release(paths_of, pending_parents, id(child)) for child in node.children]
+        if isinstance(node, Parallel):
+            paths_of[id(node)] = set().union(*child_paths)
+            continue
+        result: set[frozenset[EdgeId]] = set()
+        for combination in product(*child_paths):
+            joined: frozenset[EdgeId] = frozenset().union(*combination)
+            if cutoff is None or len(joined) <= cutoff:
+                result.add(joined)
+        paths_of[id(node)] = result
+    return paths_of[id(tree)]
+
+
+def _release(
+    paths_of: dict[int, set[frozenset[EdgeId]]],
+    pending_parents: Counter[int],
+    child_key: int,
+) -> set[frozenset[EdgeId]]:
+    """Path set of a child, dropped from the table once its last parent has consumed it."""
+    pending_parents[child_key] -= 1
+    if pending_parents[child_key] == 0:
+        return paths_of.pop(child_key)
+    return paths_of[child_key]
+
+
+def _closed_states(tree: SPTree[EdgeId], edge_closed: Mapping[EdgeId, bool]) -> dict[int, bool]:
+    """Closed state of every node of the tree, keyed by ``id``. Series is AND, parallel is OR."""
+    state: dict[int, bool] = {}
+    for node in _post_order(tree):
+        if isinstance(node, Leaf):
+            state[id(node)] = edge_closed[node.edge_id]
+        elif isinstance(node, Series):
+            state[id(node)] = all(state[id(child)] for child in node.children)
+        else:
+            state[id(node)] = any(state[id(child)] for child in node.children)
+    return state
+
+
+def closed(tree: SPTree[EdgeId], edge_closed: Mapping[EdgeId, bool]) -> bool:
+    """Boolean state fold. Series is AND, parallel is OR."""
+    return _closed_states(tree, edge_closed)[id(tree)]
+
+
+def minimal_toggles(
+    tree: SPTree[EdgeId],
+    edge_closed: Mapping[EdgeId, bool],
+    *,
+    target_closed: bool,
+) -> frozenset[EdgeId]:
+    """Smallest leaf set whose toggling makes the tree take the target state.
+
+    Series to closed needs every child closed, series to open needs one child
+    open and takes the cheapest. Parallel is the dual. Ties are broken by
+    edge id order.
+    """
+    state = _closed_states(tree, edge_closed)
+    toggles: dict[int, frozenset[EdgeId]] = {}
+    for node in _post_order(tree):
+        if state[id(node)] == target_closed:
+            toggles[id(node)] = frozenset()
+        elif isinstance(node, Leaf):
+            toggles[id(node)] = frozenset({node.edge_id})
+        else:
+            options = [toggles[id(child)] for child in node.children]
+            needs_all = isinstance(node, Series) == target_closed
+            toggles[id(node)] = (
+                frozenset().union(*options)
+                if needs_all
+                else min(options, key=lambda option: (len(option), sorted(map(_order_key, option))))
+            )
+    return toggles[id(tree)]
+
+
+def _interior_nodes(tree: SPTree[EdgeId]) -> list[int]:
+    """Every node eliminated into the tree by a series move, in increasing id."""
+    return sorted(node_id for node in _post_order(tree) if isinstance(node, Series) for node_id in node.interior_nodes)
+
+
+# ---------------------------------------------------------------------------
+# Terminal-preserving reduction
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Reduced(Generic[EdgeId]):
+    """Residual multigraph, the provenance tree of every residual edge and the folded node material.
+
+    ``folded_nodes`` holds, per surviving node, the pendant material folded
+    into it. ``folded_interior`` holds, per node recorded in a series node of a
+    residual tree, the material folded into it before its series move. With
+    ``fold_leaves`` every eliminated node of a component with a terminal
+    appears exactly once: as a series interior node, in ``folded_nodes`` or in
+    ``folded_interior``. Without it pendant material is dropped.
+    """
+
+    graph: MultiGraph[EdgeId | VirtualEdgeId]
+    provenance: dict[EdgeId | VirtualEdgeId, SPTree[EdgeId]]
+    folded_nodes: dict[int, list[int]]
+    folded_interior: dict[int, list[int]]
+
+
+def _other_end(pair: tuple[int, int], node_id: int) -> int:
+    from_node, to_node = pair
+    return to_node if from_node == node_id else from_node
+
+
+class _Reduction(Generic[EdgeId]):
+    """Mutable state of one reduction run.
+
+    Incidences are kept per node and updated by every move, so degrees are
+    read, never recomputed. Candidates wait in a min-heap keyed by processing
+    rank and are re-validated when popped, which processes the first eligible
+    node exactly like a full rescan would, at logarithmic cost per move.
+    """
+
+    def __init__(
+        self,
+        graph: MultiGraph[EdgeId],
+        terminals: AbstractSet[int],
+        protected: AbstractSet[int],
+        *,
+        fold_leaves: bool,
+        order: Sequence[int] | None,
+    ) -> None:
+        self.graph = graph
+        self.terminals = terminals
+        self.protected = protected
+        self.fold_leaves = fold_leaves
+        self.rank: dict[int, int] = {} if order is None else {node_id: rank for rank, node_id in enumerate(order)}
+        self.unranked = len(self.rank)
+        self.endpoints: dict[EdgeId | VirtualEdgeId, tuple[int, int]] = {}
+        self.provenance: dict[EdgeId | VirtualEdgeId, SPTree[EdgeId]] = {}
+        self.incident: dict[int, set[EdgeId | VirtualEdgeId]] = {node_id: set() for node_id in graph.nodes}
+        self.loops: dict[int, list[EdgeId]] = {}
+        self.folded_nodes: dict[int, list[int]] = {node_id: [] for node_id in graph.nodes}
+        self.folded_interior: dict[int, list[int]] = {}
+        self.alive = set(graph.nodes)
+        self.fresh = count(1)
+        for edge_id in sorted(graph.endpoints, key=_order_key):
+            from_node, to_node = graph.endpoints[edge_id]
+            self.endpoints[edge_id] = (from_node, to_node)
+            self.provenance[edge_id] = Leaf(edge_id)
+            if from_node == to_node:
+                self.loops.setdefault(from_node, []).append(edge_id)
+            else:
+                self.incident[from_node].add(edge_id)
+                self.incident[to_node].add(edge_id)
+
+    def run(self) -> Reduced[EdgeId]:
+        self._drop_terminal_free_components()
+        self._merge_all_parallels()
+        candidates = [self._priority(node_id) for node_id in self.alive if node_id not in self.terminals]
+        heapq.heapify(candidates)
+        while candidates:
+            _rank, node_id = heapq.heappop(candidates)
+            if node_id not in self.alive:
+                continue
+            for touched in self._move(node_id):
+                if touched not in self.terminals:
+                    heapq.heappush(candidates, self._priority(touched))
+        residual: MultiGraph[EdgeId | VirtualEdgeId] = MultiGraph(sorted(self.alive), self.endpoints)
+        return Reduced(residual, self.provenance, self.folded_nodes, self.folded_interior)
+
+    def _priority(self, node_id: int) -> tuple[int, int]:
+        """Heap key: the caller's rank if given (unlisted nodes last), then the node id."""
+        return (self.rank.get(node_id, self.unranked), node_id)
+
+    def _drop_terminal_free_components(self) -> None:
+        """A component without a terminal carries no question and is removed whole."""
+        components = Partition.from_components(self.graph, self.graph.endpoints.keys())
+        terminal_blocks = {components.block_of[node_id] for node_id in self.terminals if node_id in components.block_of}
+        for node_id in self.graph.nodes:
+            if components.block_of[node_id] not in terminal_blocks:
+                for edge_id in list(self.incident[node_id]):
+                    self._remove_edge(edge_id)
+                self.folded_nodes.pop(node_id)
+                self._eliminate(node_id)
+
+    def _move(self, node_id: int) -> tuple[int, ...]:
+        """Apply the pendant or series move at the node if one applies; return the nodes whose incidences changed."""
+        incident = self.incident[node_id]
+        if len(incident) == 1:
+            (edge_id,) = incident
+            return (self._pendant(node_id, edge_id),)
+        if len(incident) == 2 and node_id not in self.protected:
+            first, second = sorted(incident, key=_order_key)
+            neighbour_first = _other_end(self.endpoints[first], node_id)
+            neighbour_second = _other_end(self.endpoints[second], node_id)
+            if neighbour_first != neighbour_second:
+                return self._series(node_id, first, second, neighbour_first, neighbour_second)
+        return ()
+
+    def _pendant(self, node_id: int, edge_id: EdgeId | VirtualEdgeId) -> int:
+        """Remove the pendant node and its edge; with folding, its material moves to the neighbour.
+
+        The material is the node, what was folded into it, and every interior
+        node of the removed edge's tree with what was folded into that.
+        """
+        neighbour = _other_end(self.endpoints[edge_id], node_id)
+        interior = _interior_nodes(self.provenance[edge_id])
+        self._remove_edge(edge_id)
+        absorbed = [node_id, *self.folded_nodes.pop(node_id)]
+        for interior_node in interior:
+            absorbed.extend([interior_node, *self.folded_interior.pop(interior_node)])
+        if self.fold_leaves:
+            self.folded_nodes[neighbour].extend(absorbed)
+        self._eliminate(node_id)
+        return neighbour
+
+    def _series(
+        self,
+        node_id: int,
+        first: EdgeId | VirtualEdgeId,
+        second: EdgeId | VirtualEdgeId,
+        neighbour_first: int,
+        neighbour_second: int,
+    ) -> tuple[int, int]:
+        tree: SPTree[EdgeId] = Series((self.provenance[first], self.provenance[second]), (node_id,))
+        self._remove_edge(first)
+        self._remove_edge(second)
+        self._add_edge(tree, (neighbour_first, neighbour_second))
+        self.folded_interior[node_id] = self.folded_nodes.pop(node_id)
+        self._eliminate(node_id)
+        if neighbour_first not in self.protected and neighbour_second not in self.protected:
+            parallel = self._edges_between(neighbour_first, neighbour_second)
+            if len(parallel) >= 2:
+                self._merge_parallel(neighbour_first, neighbour_second, parallel)
+        return neighbour_first, neighbour_second
+
+    def _merge_all_parallels(self) -> None:
+        """Initial parallel sweep, pairs in order of their first edge."""
+        by_pair: dict[tuple[int, int], list[EdgeId | VirtualEdgeId]] = {}
+        for edge_id, (from_node, to_node) in self.endpoints.items():
+            if from_node != to_node and from_node not in self.protected and to_node not in self.protected:
+                by_pair.setdefault((min(from_node, to_node), max(from_node, to_node)), []).append(edge_id)
+        for (from_node, to_node), edge_ids in by_pair.items():
+            if len(edge_ids) >= 2:
+                self._merge_parallel(from_node, to_node, edge_ids)
+
+    def _merge_parallel(self, from_node: int, to_node: int, edge_ids: list[EdgeId | VirtualEdgeId]) -> None:
+        tree: SPTree[EdgeId] = Parallel(frozenset(self.provenance[edge_id] for edge_id in edge_ids))
+        for edge_id in edge_ids:
+            self._remove_edge(edge_id)
+        self._add_edge(tree, (min(from_node, to_node), max(from_node, to_node)))
+
+    def _edges_between(self, first_node: int, second_node: int) -> list[EdgeId | VirtualEdgeId]:
+        """Non-loop edges joining the two nodes, scanned from the endpoint of smaller degree."""
+        if len(self.incident[first_node]) > len(self.incident[second_node]):
+            first_node, second_node = second_node, first_node
+        return [
+            edge_id
+            for edge_id in self.incident[first_node]
+            if _other_end(self.endpoints[edge_id], first_node) == second_node
+        ]
+
+    def _add_edge(self, tree: SPTree[EdgeId], pair: tuple[int, int]) -> None:
+        edge_id = VirtualEdgeId(next(self.fresh))
+        self.endpoints[edge_id] = pair
+        self.provenance[edge_id] = tree
+        for node_id in pair:
+            self.incident[node_id].add(edge_id)
+
+    def _remove_edge(self, edge_id: EdgeId | VirtualEdgeId) -> None:
+        for node_id in self.endpoints.pop(edge_id):
+            self.incident[node_id].discard(edge_id)
+        del self.provenance[edge_id]
+
+    def _eliminate(self, node_id: int) -> None:
+        """Remove the node together with its self-loops."""
+        for loop_id in self.loops.pop(node_id, []):
+            del self.endpoints[loop_id]
+            del self.provenance[loop_id]
+        del self.incident[node_id]
+        self.alive.discard(node_id)
+
+
+def reduce(
+    graph: MultiGraph[EdgeId],
+    terminals: AbstractSet[int],
+    protected: AbstractSet[int] = frozenset(),
+    *,
+    fold_leaves: bool = True,
+    order: Sequence[int] | None = None,
+) -> Reduced[EdgeId]:
+    """Closure under the three simple reductions with a terminal set.
+
+    Components without a terminal are removed whole first. Pendant deletion
+    removes a non-terminal with exactly one non-loop incidence and, with
+    ``fold_leaves``, records its material on the neighbour. Series merge
+    replaces a non-terminal, non-protected node with exactly two non-loop
+    incidences to two distinct neighbours by one edge (loops do not count).
+    Parallel merge replaces the edges between one endpoint pair, neither
+    protected, by one edge. Self-loops take part in no move and leave with
+    their node.
+
+    Candidates are processed in increasing node id, or in the given ``order``
+    (unlisted nodes last). With no protected nodes the residual and the folded
+    material do not depend on that order; protected nodes can make them
+    order dependent.
+    """
+    return _Reduction(graph, terminals, protected, fold_leaves=fold_leaves, order=order).run()
+
+
+# ---------------------------------------------------------------------------
+# Scenario
+# ---------------------------------------------------------------------------
+
+
+def scenario(
+    graph: MultiGraph[EdgeId],
+    active: AbstractSet[EdgeId],
+    removed: AbstractSet[EdgeId],
+) -> Partition:
+    """Apply a scenario by masking the removed edges and re-partitioning.
+
+    No bridge assumption: parallel edges failing together split the block
+    exactly like a single bridge would.
+    """
+    return Partition.from_components(graph, active - removed)
