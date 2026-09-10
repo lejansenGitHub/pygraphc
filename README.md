@@ -486,7 +486,7 @@ Uses topological sort + dynamic programming. Raises `ValueError` on cyclic graph
 
 ### Edge-path enumeration (edge-disjoint paths)
 
-Find all paths from source to targets where each edge is used at most once. Returns paths as lists of edge indices. By default, nodes may be revisited (critical for multigraphs). Use `node_simple=True` to restrict to node-simple paths where each node is visited at most once.
+Find all paths from source to targets where each edge is used at most once. Returns paths as lists of edge indices. By default, nodes may be revisited (critical for multigraphs). Use `node_simple=True` to restrict to node-simple paths where each node is visited at most once. Use `ignore_self_loops=True` to never traverse self-loops, so no returned path contains one.
 
 ```python
 g = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (0, 2), (2, 3)])

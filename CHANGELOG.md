@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
+  never traverses self-loops, so no returned path contains one.
+
 ### Fixed
 - Weighted algorithms (`shortest_path`, `shortest_path_lengths`,
   `multi_source_shortest_path_lengths`, `eccentricity`, `dag_longest_path`)
