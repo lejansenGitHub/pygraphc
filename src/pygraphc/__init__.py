@@ -461,13 +461,15 @@ class Graph:
         "_edges",
         "_branch_ids",
         "_branch_id_to_edge_idx",
+        "_repeated_branch_edge_idx",
         "_node_id_to_idx",
         "_directed",
     )
 
     _edges: list[tuple[int, int]] | None
     _branch_ids: list[BranchId] | None
-    _branch_id_to_edge_idx: dict[BranchId, list[int]] | None
+    _branch_id_to_edge_idx: dict[BranchId, int] | None
+    _repeated_branch_edge_idx: dict[BranchId, list[int]] | None
     _node_id_to_idx: dict[NodeId, int] | None
     _directed: bool
 
@@ -484,6 +486,7 @@ class Graph:
         self._edges = edges_or_src if dst is None else None  # type: ignore[assignment]
         self._branch_ids = branch_ids
         self._branch_id_to_edge_idx = None
+        self._repeated_branch_edge_idx = None
         self._node_id_to_idx = None
         self._directed = directed
         if dst is not None:
@@ -506,25 +509,37 @@ class Graph:
             self._node_id_to_idx = {nid: i for i, nid in enumerate(self._node_ids)}
         return self._node_id_to_idx
 
-    def _get_branch_id_to_edge_idx(self) -> dict[BranchId, list[int]]:
-        """Lazily build and cache the branch_id → edge indices mapping.
+    def _get_branch_id_to_edge_idx(self) -> dict[BranchId, int]:
+        """Lazily build and cache the branch_id → first edge index mapping.
 
-        Several edges may carry the same branch id, so every id maps to the
-        list of its edge indices in input order.
+        Several edges may carry the same branch id. The further indices of a
+        repeated id are kept in ``_repeated_branch_edge_idx``, which stays
+        empty in the common unique case so the build is one dict comprehension.
         """
         if self._branch_id_to_edge_idx is None:
             if self._branch_ids is None:
                 raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-            mapping: dict[BranchId, list[int]] = {}
-            for edge_idx, branch_id in enumerate(self._branch_ids):
-                mapping.setdefault(branch_id, []).append(edge_idx)
-            self._branch_id_to_edge_idx = mapping
+            first: dict[BranchId, int] = {branch_id: edge_idx for edge_idx, branch_id in enumerate(self._branch_ids)}
+            repeated: dict[BranchId, list[int]] = {}
+            if len(first) != len(self._branch_ids):
+                for edge_idx, branch_id in enumerate(self._branch_ids):
+                    if first[branch_id] > edge_idx:
+                        first[branch_id] = edge_idx
+                    elif first[branch_id] != edge_idx:
+                        repeated.setdefault(branch_id, []).append(edge_idx)
+            self._branch_id_to_edge_idx = first
+            self._repeated_branch_edge_idx = repeated
         return self._branch_id_to_edge_idx
 
     def _edge_indices_of_branches(self, branch_ids: Collection[BranchId]) -> list[int]:
         """Every edge index carrying one of the given branch ids."""
-        mapping = self._get_branch_id_to_edge_idx()
-        return [edge_idx for branch_id in branch_ids for edge_idx in mapping[branch_id]]
+        first = self._get_branch_id_to_edge_idx()
+        edge_indices = [first[branch_id] for branch_id in branch_ids]
+        repeated = self._repeated_branch_edge_idx or {}
+        if repeated:
+            for branch_id in branch_ids:
+                edge_indices.extend(repeated.get(branch_id, ()))
+        return edge_indices
 
     @property
     def edge_count(self) -> int:
