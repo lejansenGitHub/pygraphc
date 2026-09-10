@@ -8,6 +8,7 @@ from pygraphc._core import all_edge_paths_ctx as _all_edge_paths_ctx
 from pygraphc._core import ap_ctx as _ap_ctx
 from pygraphc._core import ap_nid as _ap_nid
 from pygraphc._core import bcc_ctx as _bcc_ctx
+from pygraphc._core import bcc_edge_labels_ctx as _bcc_edge_labels_ctx
 from pygraphc._core import bcc_nid as _bcc_nid
 from pygraphc._core import bfs_ctx as _bfs_ctx
 from pygraphc._core import bfs_nid as _bfs_nid
@@ -18,10 +19,12 @@ from pygraphc._core import cc_branches_ctx as _cc_branches_ctx
 from pygraphc._core import cc_ctx as _cc_ctx
 from pygraphc._core import cc_nid as _cc_nid
 from pygraphc._core import cc_nid_split as _cc_nid_split
+from pygraphc._core import component_labels_ctx as _component_labels_ctx
 from pygraphc._core import connected_components_with_branches_remapped as _cc_branches_remapped
 from pygraphc._core import cycle_basis_ctx as _cycle_basis_ctx
 from pygraphc._core import dag_longest_path_ctx as _dag_longest_path_ctx
 from pygraphc._core import degree_ctx as _degree_ctx
+from pygraphc._core import degrees_ctx as _degrees_ctx
 from pygraphc._core import dijkstra_ctx as _dijkstra_ctx
 from pygraphc._core import dijkstra_nid as _dijkstra_nid
 from pygraphc._core import edge_indices_ctx as _edge_indices_ctx
@@ -35,6 +38,7 @@ from pygraphc._core import msdijk_nid as _msdijk_nid
 from pygraphc._core import neighbors_ctx as _neighbors_ctx
 from pygraphc._core import parse_graph as _parse_graph
 from pygraphc._core import predecessors_ctx as _predecessors_ctx
+from pygraphc._core import quotient_edges_ctx as _quotient_edges_ctx
 from pygraphc._core import scc_ctx as _scc_ctx
 from pygraphc._core import sssp_ctx as _sssp_ctx
 from pygraphc._core import sssp_nid as _sssp_nid
@@ -482,6 +486,19 @@ def _rerouted_branch_ids(
     return [base_branch_ids[edge_idx] for edge_idx in edge_indices]
 
 
+def _quotient_edge_views(
+    raw: tuple[bytes, bytes, bytes, bytes],
+) -> tuple[memoryview, memoryview, memoryview, memoryview]:
+    """The four int32 byte arrays of ``quotient_edges_ctx`` as typed views."""
+    src_labels, dst_labels, edge_indices, internal_edge_indices = raw
+    return (
+        memoryview(src_labels).cast("i"),
+        memoryview(dst_labels).cast("i"),
+        memoryview(edge_indices).cast("i"),
+        memoryview(internal_edge_indices).cast("i"),
+    )
+
+
 class Graph:
     """Parsed graph that supports multiple algorithm calls without re-parsing.
 
@@ -870,6 +887,42 @@ class Graph:
         """Yield each biconnected component as a set of node IDs."""
         self._require_undirected("biconnected_components")
         yield from _bcc_ctx(self._ctx)
+
+    def component_labels(self) -> memoryview:
+        """Connected component label per node index as an int32 view, direction ignored.
+
+        The label of a node is the smallest node index of its component, so
+        one array replaces one set per component and no Python object is
+        created per node.
+        """
+        result: bytes = _component_labels_ctx(self._ctx)
+        return memoryview(result).cast("i")
+
+    def quotient_edges(self, labels: memoryview) -> tuple[memoryview, memoryview, memoryview, memoryview]:
+        """Split the edges by the int32 label of their endpoints, one label per node index.
+
+        Returns ``(src_labels, dst_labels, edge_indices, internal_edge_indices)``
+        as int32 views in edge index order: the crossing edges (different
+        labels) as three parallel arrays and the internal edges (equal labels)
+        by index. Edges at a node labelled -1 are neither. Raises ``ValueError``
+        when the labels buffer does not hold one entry per node.
+        """
+        return _quotient_edge_views(_quotient_edges_ctx(self._ctx, labels))
+
+    def degrees(self) -> memoryview:
+        """Degree per node index as an int32 view: incidences with a self-loop counted twice, out-degree if directed."""
+        result: bytes = _degrees_ctx(self._ctx)
+        return memoryview(result).cast("i")
+
+    def bcc_edge_labels(self) -> memoryview:
+        """Biconnected component id per edge index as an int32 view.
+
+        Bridges are singleton components and self-loops, which belong to no
+        component, get -1.
+        """
+        self._require_undirected("bcc_edge_labels")
+        result: bytes = _bcc_edge_labels_ctx(self._ctx)
+        return memoryview(result).cast("i")
 
     def cycle_basis(self) -> list[list[NodeId]]:
         """Return a fundamental cycle basis as a list of cycles.
@@ -1355,6 +1408,32 @@ class GraphView:
         """Yield each biconnected component as a set of node IDs."""
         self._require_undirected("biconnected_components")
         yield from _bcc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+
+    def component_labels(self) -> memoryview:
+        """Connected component label per node index as an int32 view, see ``Graph.component_labels``.
+
+        Excluded edges do not connect and excluded nodes are labelled -1.
+        """
+        result: bytes = _component_labels_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        return memoryview(result).cast("i")
+
+    def quotient_edges(self, labels: memoryview) -> tuple[memoryview, memoryview, memoryview, memoryview]:
+        """Split the unmasked edges by endpoint label, see ``Graph.quotient_edges``; excluded edges are skipped."""
+        return _quotient_edge_views(_quotient_edges_ctx(self._graph._ctx, labels, self._excluded_edges))
+
+    def degrees(self) -> memoryview:
+        """Degree per node index as an int32 view under the masks, see ``Graph.degrees``; excluded nodes get 0."""
+        result: bytes = _degrees_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        return memoryview(result).cast("i")
+
+    def bcc_edge_labels(self) -> memoryview:
+        """Biconnected component id per edge index under the masks, see ``Graph.bcc_edge_labels``.
+
+        Excluded edges and edges at an excluded node get -1.
+        """
+        self._require_undirected("bcc_edge_labels")
+        result: bytes = _bcc_edge_labels_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        return memoryview(result).cast("i")
 
     def cycle_basis(self) -> list[list[NodeId]]:
         """Return a fundamental cycle basis as a list of cycles."""
