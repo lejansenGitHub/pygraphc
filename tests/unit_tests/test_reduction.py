@@ -1,8 +1,8 @@
 """Tests for the terminal-preserving graph reduction kernel in ``pygraphc.reduction``.
 
-The four defect scenarios and the two property checks mirror the paper's
-``check_kernel.py``: parallel switches survive as one parallel node, a long
-chain keeps every switch, a parallel fault splits its block, a two-level
+The four reference scenarios and the two property checks mirror the paper's
+``check_kernel.py``: parallel edges survive as one parallel node, a long
+chain keeps every edge, removing a parallel pair splits its block, a two-level
 quotient keeps edge identity, and the provenance tree round-trips against a
 brute force path enumeration on random multigraphs.
 """
@@ -222,18 +222,18 @@ def test_compose_equals_the_direct_partition_of_the_union_mask():
     """A second quotient level composed with the first must describe the same
     blocks as partitioning the original graph by both edge classes at once."""
     # --- Input ---
-    # 1 -c- 2 -f- 3 -c- 4    5 -c- 6
-    graph = MultiGraph(range(1, 7), {"c12": (1, 2), "f23": (2, 3), "c34": (3, 4), "c56": (5, 6)})
-    closed_material = {"c12", "c34", "c56"}
-    faults = {"f23"}
+    # 1 -c- 2 -x- 3 -c- 4    5 -c- 6
+    graph = MultiGraph(range(1, 7), {"c12": (1, 2), "x23": (2, 3), "c34": (3, 4), "c56": (5, 6)})
+    base_mask = {"c12", "c34", "c56"}
+    crossing = {"x23"}
 
     # --- Execute ---
-    level_one = Partition.from_components(graph, closed_material)
-    meta, _internal = quotient(level_one, graph, faults)
+    level_one = Partition.from_components(graph, base_mask)
+    meta, _internal = quotient(level_one, graph, crossing)
     level_two = Partition.from_components(meta, set(meta.endpoints)).compose(level_one)
 
     # --- Assert ---
-    assert level_two == Partition.from_components(graph, closed_material | faults)
+    assert level_two == Partition.from_components(graph, base_mask | crossing)
     assert level_two.blocks() == {1: [1, 2, 3, 4], 5: [5, 6]}
 
 
@@ -313,7 +313,7 @@ def test_paths_cutoff_prunes_inside_the_product():
 
 
 def test_closed_series_is_and_parallel_is_or():
-    """A series link conducts only if every part does; a parallel link if any part does."""
+    """A series node is closed only if every child is; a parallel node if any child is."""
     # --- Input ---
     series = Series((Leaf("a"), Leaf("b")), (1,))
     parallel = Parallel(frozenset({Leaf("a"), Leaf("b")}))
@@ -327,7 +327,7 @@ def test_closed_series_is_and_parallel_is_or():
 
 
 def test_minimal_toggles_series_to_closed_needs_every_child():
-    """Closing a series link needs all its switches; nothing less changes the state."""
+    """Closing a series node needs every leaf; nothing less changes the state."""
     # --- Input ---
     tree = Series((Leaf("a"), Leaf("b")), (1,))
 
@@ -336,8 +336,8 @@ def test_minimal_toggles_series_to_closed_needs_every_child():
 
 
 def test_minimal_toggles_parallel_to_open_needs_every_child():
-    """Opening a link with a parallel pair needs both switches, the case the
-    flat switch list got wrong."""
+    """Opening a parallel node needs every child toggled, the case a flat leaf
+    list without the tree structure gets wrong."""
     # --- Input ---
     tree = Parallel(frozenset({Leaf("a"), Leaf("b")}))
 
@@ -370,8 +370,8 @@ def test_minimal_toggles_is_empty_when_already_in_the_target_state():
 
 
 def test_folds_survive_a_chain_deeper_than_the_recursion_limit():
-    """Real feeders are long chains, so a nested series tree wrapped in a
-    parallel node must hash and fold without recursion."""
+    """Long chains are the common input shape, so a nested series tree wrapped
+    in a parallel node must hash and fold without recursion."""
     # --- Input ---
     length = 3000
     endpoints = {f"w{index}": (index, index + 1) for index in range(length)}
@@ -610,14 +610,14 @@ def test_chain_payload_reaches_the_terminal_in_either_move_order():
     assert canonical(series_first) == canonical(pendant_first) == canonical(reduce(graph, terminals={0}))
 
 
-# ── Defect scenarios from the paper ──
+# ── Reference scenarios from the paper ──
 
 
-def test_defect_parallel_switches_survive_as_one_parallel_node():
-    """Two switches between the same site nodes must both survive as leaves of
-    one parallel node, so opening the link needs both switches."""
+def test_parallel_edges_survive_as_one_parallel_node():
+    """Two parallel edges between the same terminals must both survive as leaves
+    of one parallel node, so opening the residual edge needs both."""
     # --- Input ---
-    graph = MultiGraph([1, 2], {"s1": (1, 2), "s2": (1, 2)})
+    graph = MultiGraph([1, 2], {"p1": (1, 2), "p2": (1, 2)})
 
     # --- Execute ---
     reduced = reduce(graph, terminals={1, 2})
@@ -625,12 +625,12 @@ def test_defect_parallel_switches_survive_as_one_parallel_node():
 
     # --- Assert ---
     assert isinstance(tree, Parallel)
-    assert leaves(tree) == {"s1", "s2"}
-    assert minimal_toggles(tree, {"s1": True, "s2": True}, target_closed=False) == {"s1", "s2"}
+    assert leaves(tree) == {"p1", "p2"}
+    assert minimal_toggles(tree, {"p1": True, "p2": True}, target_closed=False) == {"p1", "p2"}
 
 
-def test_defect_long_chain_keeps_all_six_switches():
-    """Five interior degree-2 nodes: every switch must appear in the single
+def test_long_chain_keeps_all_six_edges():
+    """Five interior degree-2 nodes: every edge must appear in the single
     residual tree and the only path uses all six, the case that orphaned a
     group in the pairwise contraction."""
     # --- Input ---
@@ -648,17 +648,17 @@ def test_defect_long_chain_keeps_all_six_switches():
     assert reduced.folded_interior == {1: [], 2: [], 3: [], 4: [], 5: []}
 
 
-def test_defect_parallel_fault_splits_the_block():
-    """A station joined by two parallel transformers, neither a bridge: a fault
-    removing both must still split the block, and the result refines the base."""
+def test_removing_a_parallel_pair_splits_the_block():
+    """A node joined to the rest by two parallel edges, neither a bridge: a
+    scenario removing both must still split the block, and the result refines the base."""
     # --- Input ---
-    graph = MultiGraph([1, 2, 3, 4], {"line": (1, 2), "trafo_a": (2, 3), "trafo_b": (2, 3), "feeder": (3, 4)})
+    graph = MultiGraph([1, 2, 3, 4], {"e1": (1, 2), "p1": (2, 3), "p2": (2, 3), "e2": (3, 4)})
     active = set(graph.endpoints)
 
     # --- Execute ---
     base = Partition.from_components(graph, active)
-    after = scenario(graph, active, removed={"trafo_a", "trafo_b"})
-    single = scenario(graph, active, removed={"trafo_a"})
+    after = scenario(graph, active, removed={"p1", "p2"})
+    single = scenario(graph, active, removed={"p1"})
 
     # --- Assert ---
     assert len(base.blocks()) == 1
@@ -667,45 +667,45 @@ def test_defect_parallel_fault_splits_the_block():
     assert single == base
 
 
-def test_two_level_quotient_in_the_n_minus_one_shape():
-    """Closed material forms blocks, fault branches become level-one edges and
-    open switches level-two edges with identity kept, so the reduced tree lists
-    both resupply paths and the minimal closing set has two switches."""
+def test_two_level_quotient_keeps_edge_identity():
+    """The base mask forms blocks, the crossing class becomes level-one edges and
+    a second class level-two edges with identity kept, so the reduced tree lists
+    both terminal paths and the minimal toggle set has two edges."""
     # --- Input ---
     endpoints = {
         "c12": (1, 2),
         "c34": (3, 4),
         "c56": (5, 6),
         "c78": (7, 8),
-        "fault_a": (2, 3),
-        "fault_b": (2, 3),
-        "open_x": (4, 5),
-        "open_y": (4, 5),
-        "open_z": (6, 7),
-        "open_loop": (1, 2),
+        "p1": (2, 3),
+        "p2": (2, 3),
+        "x": (4, 5),
+        "y": (4, 5),
+        "z": (6, 7),
+        "loop": (1, 2),
     }
     graph = MultiGraph(range(1, 9), endpoints)
-    closed_material = {"c12", "c34", "c56", "c78"}
-    faults = {"fault_a", "fault_b"}
-    opens = {"open_x", "open_y", "open_z", "open_loop"}
+    base_mask = {"c12", "c34", "c56", "c78"}
+    crossing = {"p1", "p2"}
+    second_class = {"x", "y", "z", "loop"}
 
     # --- Execute ---
-    level_one = Partition.from_components(graph, closed_material)
-    meta_one, _ = quotient(level_one, graph, faults)
+    level_one = Partition.from_components(graph, base_mask)
+    meta_one, _ = quotient(level_one, graph, crossing)
     level_two_base = Partition.from_components(meta_one, set(meta_one.endpoints))
     level_two = level_two_base.compose(level_one)
-    meta_two, internal = quotient(level_two, graph, opens)
+    meta_two, internal = quotient(level_two, graph, second_class)
     reduced = reduce(meta_two, terminals={1, 7})
     (tree,) = reduced.provenance.values()
-    state = dict.fromkeys(opens, False)
+    state = dict.fromkeys(second_class, False)
     to_close = minimal_toggles(tree, state, target_closed=True)
 
     # --- Assert ---
     assert len(level_one.blocks()) == 4
     assert len(level_two_base.blocks()) == 3
-    assert internal == {1: ["open_loop"]}
-    assert paths(tree) == {frozenset({"open_x", "open_z"}), frozenset({"open_y", "open_z"})}
-    assert to_close == {"open_x", "open_z"}
+    assert internal == {1: ["loop"]}
+    assert paths(tree) == {frozenset({"x", "z"}), frozenset({"y", "z"})}
+    assert to_close == {"x", "z"}
     assert closed(tree, {**state, **dict.fromkeys(to_close, True)})
 
 
@@ -1063,10 +1063,10 @@ def test_fold_leaves_false_drops_the_interior_nodes_with_the_tree():
     ]
 
 
-def test_ring_hanging_off_a_terminal_keeps_its_edges_in_dropped():
-    """A ring returning to one node becomes a parallel edge to a pendant; the
-    pendant move used to discard that tree with its switches. The ring's
-    edges must be reported and the payload of every ring node folded into the terminal."""
+def test_dead_end_cycle_at_a_terminal_keeps_its_edges_in_dropped():
+    """A cycle returning to one node becomes a parallel edge to a pendant; the
+    pendant move used to discard that tree with its leaves. The cycle's
+    edges must be reported and the payload of every cycle node folded into the terminal."""
     # --- Input ---
     graph = MultiGraph([0, 1, 2, 3], {"t": (0, 1), "r12": (1, 2), "r23": (2, 3), "r31": (3, 1)})
 
