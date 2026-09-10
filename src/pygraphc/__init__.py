@@ -413,6 +413,35 @@ def _collect_path_nodes(
 # ── Graph class: parse once, run many algorithms ──
 
 
+def _merged_branch_ids(
+    base_branch_ids: list[BranchId] | None,
+    added_count: int,
+    added_branch_ids: list[BranchId] | None,
+) -> list[BranchId] | None:
+    """Branch ids of a rebuilt graph: base ids followed by the added ids."""
+    if base_branch_ids is None:
+        if added_branch_ids is not None:
+            raise ValueError("added_branch_ids given but the base graph has no branch_ids")  # noqa: TRY003 — one clear sentence
+        return None
+    if added_count == 0:
+        return list(base_branch_ids)
+    if added_branch_ids is None or len(added_branch_ids) != added_count:
+        raise ValueError(  # noqa: TRY003 — the count is the whole message
+            f"added_branch_ids must hold {added_count} ids, one per added edge"
+        )
+    return [*base_branch_ids, *added_branch_ids]
+
+
+def _rerouted_branch_ids(
+    base_branch_ids: list[BranchId] | None,
+    edge_indices: Collection[int],
+) -> list[BranchId] | None:
+    """A rerouted edge keeps the branch id of the edge it replaces."""
+    if base_branch_ids is None:
+        return None
+    return [base_branch_ids[edge_idx] for edge_idx in edge_indices]
+
+
 class Graph:
     """Parsed graph that supports multiple algorithm calls without re-parsing.
 
@@ -438,7 +467,7 @@ class Graph:
 
     _edges: list[tuple[int, int]] | None
     _branch_ids: list[BranchId] | None
-    _branch_id_to_edge_idx: dict[BranchId, int] | None
+    _branch_id_to_edge_idx: dict[BranchId, list[int]] | None
     _node_id_to_idx: dict[NodeId, int] | None
     _directed: bool
 
@@ -461,6 +490,10 @@ class Graph:
             self._ctx = _parse_graph(node_ids, edges_or_src, dst, directed)
         else:
             self._ctx = _parse_graph(node_ids, edges_or_src, None, directed)
+        if branch_ids is not None and len(branch_ids) != self.edge_count:
+            raise ValueError(  # noqa: TRY003 — the two counts are the whole message
+                f"branch_ids length {len(branch_ids)} does not match edge count {self.edge_count}"
+            )
 
     @property
     def directed(self) -> bool:
@@ -473,13 +506,25 @@ class Graph:
             self._node_id_to_idx = {nid: i for i, nid in enumerate(self._node_ids)}
         return self._node_id_to_idx
 
-    def _get_branch_id_to_edge_idx(self) -> dict[BranchId, int]:
-        """Lazily build and cache the branch_id → edge index mapping."""
+    def _get_branch_id_to_edge_idx(self) -> dict[BranchId, list[int]]:
+        """Lazily build and cache the branch_id → edge indices mapping.
+
+        Several edges may carry the same branch id, so every id maps to the
+        list of its edge indices in input order.
+        """
         if self._branch_id_to_edge_idx is None:
             if self._branch_ids is None:
                 raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-            self._branch_id_to_edge_idx = {branch_id: edge_idx for edge_idx, branch_id in enumerate(self._branch_ids)}
+            mapping: dict[BranchId, list[int]] = {}
+            for edge_idx, branch_id in enumerate(self._branch_ids):
+                mapping.setdefault(branch_id, []).append(edge_idx)
+            self._branch_id_to_edge_idx = mapping
         return self._branch_id_to_edge_idx
+
+    def _edge_indices_of_branches(self, branch_ids: Collection[BranchId]) -> list[int]:
+        """Every edge index carrying one of the given branch ids."""
+        mapping = self._get_branch_id_to_edge_idx()
+        return [edge_idx for branch_id in branch_ids for edge_idx in mapping[branch_id]]
 
     @property
     def edge_count(self) -> int:
@@ -585,15 +630,24 @@ class Graph:
     def with_edges(
         self,
         added_edges: list[tuple[NodeId, NodeId]],
+        added_branch_ids: list[BranchId] | None = None,
     ) -> "GraphView":
         """Create a view with extra edges added (rebuilds CSR internally).
 
-        The base graph is not modified. The returned view merges the
-        base graph's edges with ``added_edges`` and builds a new
-        internal ``Graph`` to back the view.  New nodes referenced in
-        ``added_edges`` are automatically included.
+        The base graph is not modified. The rebuilt graph keeps every base
+        edge at its original index and appends ``added_edges`` after them, so
+        edge indices held by the caller stay valid. New nodes referenced in
+        ``added_edges`` are appended after the base nodes. When the base graph
+        carries ``branch_ids``, ``added_branch_ids`` must supply one id per
+        added edge. Requires edge-pair construction.
         """
-        return GraphView._with_additions(self, added_edges=added_edges)
+        return GraphView._with_additions(
+            self,
+            excluded_edges=None,
+            excluded_nodes=None,
+            added_edges=added_edges,
+            added_branch_ids=added_branch_ids,
+        )
 
     def without_branches(
         self,
@@ -601,11 +655,10 @@ class Graph:
     ) -> "GraphView":
         """Create a lightweight view with the given branches excluded by ID.
 
-        Requires the Graph to have been constructed with branch_ids.
+        Every edge carrying one of the ids is excluded. Requires the Graph to
+        have been constructed with branch_ids.
         """
-        mapping = self._get_branch_id_to_edge_idx()
-        edge_indices = [mapping[branch_id] for branch_id in branch_ids]
-        return GraphView(self, edge_indices)
+        return GraphView(self, self._edge_indices_of_branches(branch_ids))
 
     def without_nodes(
         self,
@@ -636,6 +689,7 @@ class Graph:
         where *rerouted* replaces ``node_id`` with ``new_node_id`` in each edge.
         """
         edges = self._edges
+        base_branch_ids = self._branch_ids
         if edges is None:
             raise ValueError("split_node requires edge-pair construction")  # noqa: TRY003
         node_id_to_idx = self._get_node_id_to_idx()
@@ -654,7 +708,8 @@ class Graph:
                 raise ValueError(  # noqa: TRY003
                     f"edge {edge_idx} ({u}, {v}) is not incident to node {node_id}"
                 )
-        return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges)
+        rerouted_branch_ids = _rerouted_branch_ids(base_branch_ids, edge_indices_to_new_node)
+        return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges, rerouted_branch_ids)
 
     def all_edge_paths(
         self,
@@ -877,7 +932,10 @@ class GraphView:
     bytearray of excluded edges and an optional bytearray of excluded nodes.
 
     Edges are identified by their index in the original edge list
-    (the order in which they were passed to ``Graph()``).
+    (the order in which they were passed to ``Graph()``). A rebuild through
+    ``with_edges`` or ``split_node`` keeps every base edge at its index,
+    keeps excluded edges and nodes masked, and appends added edges and new
+    nodes, so indices and branch ids stay valid across rebuilds.
     """
 
     __slots__ = ("_graph", "_excluded_edges", "_added_graph", "_excluded_nodes")
@@ -929,59 +987,61 @@ class GraphView:
         cls,
         base: Graph,
         *,
-        excluded_edge_indices: Collection[int] | None = None,
-        added_edges: list[tuple[NodeId, NodeId]] | None = None,
+        excluded_edges: bytearray | None,
+        excluded_nodes: bytearray | None,
+        added_edges: list[tuple[NodeId, NodeId]],
+        added_branch_ids: list[BranchId] | None,
     ) -> "GraphView":
-        """Create a view that merges base edges (minus excluded) with added edges.
+        """Rebuild with every base edge kept at its index and added edges appended.
 
-        Rebuilds the CSR from the merged edge list.  The base graph's
-        node list is extended with any new nodes from ``added_edges``.
+        Excluded edges and nodes stay masked in the new view instead of being
+        compacted away, which keeps edge indices, node indices and branch ids
+        of the base graph valid on the rebuilt view.
         """
-        base_edges = base._edges or []
-        excluded: set[int] = set(excluded_edge_indices) if excluded_edge_indices else set()
+        base_edges = base._edges
+        if base_edges is None:
+            raise ValueError("with_edges requires edge-pair construction")  # noqa: TRY003 — one clear sentence
+        merged_edges: list[tuple[NodeId, NodeId]] = [*base_edges, *added_edges]
 
-        merged_edges: list[tuple[NodeId, NodeId]] = [e for i, e in enumerate(base_edges) if i not in excluded]
-        if added_edges:
-            merged_edges.extend(added_edges)
+        merged_nodes: list[NodeId] = list(base._node_ids)
+        known: set[NodeId] = set(base._node_ids)
+        for u, v in added_edges:
+            for node_id in (u, v):
+                if node_id not in known:
+                    known.add(node_id)
+                    merged_nodes.append(node_id)
 
-        # Collect all node IDs (base + any new nodes from added edges)
-        node_set: set[NodeId] = set(base._node_ids)
-        if added_edges:
-            for u, v in added_edges:
-                node_set.add(u)
-                node_set.add(v)
-        merged_nodes = sorted(node_set)
-
-        rebuilt = Graph(merged_nodes, merged_edges, directed=base._directed)
+        merged_branch_ids = _merged_branch_ids(base._branch_ids, len(added_edges), added_branch_ids)
+        rebuilt = Graph(merged_nodes, merged_edges, branch_ids=merged_branch_ids, directed=base._directed)
 
         view = object.__new__(cls)
         view._graph = rebuilt
-        view._excluded_edges = bytearray(rebuilt.edge_count)
+        base_edge_mask = bytearray(excluded_edges) if excluded_edges is not None else bytearray(base.edge_count)
+        view._excluded_edges = base_edge_mask + bytearray(len(added_edges))
         view._added_graph = rebuilt  # prevent GC
-        view._excluded_nodes = None
+        view._excluded_nodes = (
+            bytearray(excluded_nodes) + bytearray(len(merged_nodes) - base.node_count)
+            if excluded_nodes is not None
+            else None
+        )
         return view
 
     def with_edges(
         self,
         added_edges: list[tuple[NodeId, NodeId]],
+        added_branch_ids: list[BranchId] | None = None,
     ) -> "GraphView":
         """Create a new view adding extra edges to this view.
 
-        If this view has exclusions, the excluded edges are removed
-        and the added edges are appended before rebuilding the CSR.
+        The exclusions of this view are kept. Base edges keep their indices
+        and the added edges are appended, see ``Graph.with_edges``.
         """
-        # Determine effective base and exclusions
-        if self._added_graph is not None:
-            # Already a rebuilt view — use its edges as the base
-            return GraphView._with_additions(
-                self._graph,
-                added_edges=added_edges,
-            )
-        excluded = [i for i, b in enumerate(self._excluded_edges) if b]
         return GraphView._with_additions(
             self._graph,
-            excluded_edge_indices=excluded,
+            excluded_edges=self._excluded_edges,
+            excluded_nodes=self._excluded_nodes,
             added_edges=added_edges,
+            added_branch_ids=added_branch_ids,
         )
 
     def without_nodes(
@@ -1008,11 +1068,10 @@ class GraphView:
     ) -> "GraphView":
         """Create a new view also excluding the given branches by ID.
 
-        Requires the base Graph to have been constructed with branch_ids.
+        Every edge carrying one of the ids is excluded. Requires the base
+        Graph to have been constructed with branch_ids.
         """
-        mapping = self._graph._get_branch_id_to_edge_idx()
-        edge_indices = [mapping[branch_id] for branch_id in branch_ids]
-        return self.without_edges(edge_indices)
+        return self.without_edges(self._graph._edge_indices_of_branches(branch_ids))
 
     def without_edges(
         self,
@@ -1123,6 +1182,7 @@ class GraphView:
         The remaining edges of ``node_id`` stay in place.
         """
         edges = self._graph._edges
+        base_branch_ids = self._graph._branch_ids
         if edges is None:
             raise ValueError("split_node requires edge-pair construction")  # noqa: TRY003
         node_id_to_idx = self._graph._get_node_id_to_idx()
@@ -1141,7 +1201,8 @@ class GraphView:
                 raise ValueError(  # noqa: TRY003
                     f"edge {edge_idx} ({u}, {v}) is not incident to node {node_id}"
                 )
-        return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges)
+        rerouted_branch_ids = _rerouted_branch_ids(base_branch_ids, edge_indices_to_new_node)
+        return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges, rerouted_branch_ids)
 
     def all_edge_paths(
         self,
