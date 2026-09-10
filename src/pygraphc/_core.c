@@ -3145,8 +3145,9 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
     int cutoff = -1;
     PyObject *mask_obj = Py_None, *nmask_obj = Py_None;
     int node_simple = 0;
-    if (!PyArg_ParseTuple(args, "OOO|iOOp", &capsule, &src_obj, &targets_obj,
-                          &cutoff, &mask_obj, &nmask_obj, &node_simple))
+    int ignore_self_loops = 0;
+    if (!PyArg_ParseTuple(args, "OOO|iOOpp", &capsule, &src_obj, &targets_obj,
+                          &cutoff, &mask_obj, &nmask_obj, &node_simple, &ignore_self_loops))
         return NULL;
     GraphCtx *g = get_graphctx(capsule);
     if (!g) return NULL;
@@ -3229,8 +3230,10 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
             int eid = al->eid[idx];
             int v = al->adj[idx];
 
-            /* An undirected self-loop occupies two consecutive CSR slots.
-             * Visit it through the first slot only. */
+            /* Self-loops: optionally never traversed. Otherwise an undirected
+             * self-loop occupies two consecutive CSR slots and is visited
+             * through the first slot only. */
+            if (v == u && ignore_self_loops) continue;
             if (v == u && idx > al->offset[u] && al->eid[idx - 1] == eid) continue;
 
             /* Skip masked/visited edges */

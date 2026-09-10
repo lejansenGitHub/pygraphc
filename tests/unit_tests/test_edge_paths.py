@@ -260,3 +260,67 @@ def test_node_simple_with_cutoff():
     g = Graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 1), (1, 4)])
     paths = g.all_edge_paths(1, 4, cutoff=1, node_simple=True)
     assert paths == [[3]]  # only direct edge
+
+
+# ── ignore_self_loops ──
+
+
+def test_ignore_self_loops_at_source():
+    """With the flag a loop at the source is never walked, so only the direct
+    edge remains. Without it the loop-then-edge path is also valid."""
+    # --- Input ---
+    # 0:(1,1) loop, 1:(1,2)
+    graph = Graph([1, 2], [(1, 1), (1, 2)])
+
+    # --- Assert ---
+    assert sorted(graph.all_edge_paths(1, 2)) == [[0, 1], [1]]
+    assert graph.all_edge_paths(1, 2, ignore_self_loops=True) == [[1]]
+
+
+def test_ignore_self_loops_interior():
+    """An interior loop doubles the path set without the flag and disappears
+    with it."""
+    # --- Input ---
+    # 0:(1,2), 1:(2,2) loop, 2:(2,3)
+    graph = Graph([1, 2, 3], [(1, 2), (2, 2), (2, 3)])
+
+    # --- Assert ---
+    assert sorted(graph.all_edge_paths(1, 3)) == [[0, 1, 2], [0, 2]]
+    assert graph.all_edge_paths(1, 3, ignore_self_loops=True) == [[0, 2]]
+
+
+def test_ignore_self_loops_source_is_target():
+    """Source equal to target is reached only through a loop. With the flag no
+    path exists."""
+    # --- Input ---
+    graph = Graph([1, 2], [(1, 1), (1, 2)])
+
+    # --- Assert ---
+    assert graph.all_edge_paths(1, 1) == [[0]]
+    assert graph.all_edge_paths(1, 1, ignore_self_loops=True) == []
+
+
+def test_ignore_self_loops_on_view_with_masks():
+    """The flag composes with edge and node masks on a view."""
+    # --- Input ---
+    # 0:(1,2), 1:(2,2) loop, 2:(2,3), 3:(2,4), 4:(4,3)
+    graph = Graph([1, 2, 3, 4], [(1, 2), (2, 2), (2, 3), (2, 4), (4, 3)])
+    view = graph.without_nodes([4])
+
+    # --- Assert ---
+    # node 4 excluded removes the detour, the flag removes the loop
+    assert sorted(view.all_edge_paths(1, 3)) == [[0, 1, 2], [0, 2]]
+    assert view.all_edge_paths(1, 3, ignore_self_loops=True) == [[0, 2]]
+
+
+def test_ignore_self_loops_with_node_simple():
+    """node_simple forbids re-entering a node, so a loop at the source is not
+    walked. A loop at the target still is, because the target check precedes
+    the visit check. The flag removes that one as well."""
+    # --- Input ---
+    # 0:(1,2), 1:(2,2) loop at the target
+    graph = Graph([1, 2], [(1, 2), (2, 2)])
+
+    # --- Assert ---
+    assert sorted(graph.all_edge_paths(1, 2, node_simple=True)) == [[0], [0, 1]]
+    assert graph.all_edge_paths(1, 2, node_simple=True, ignore_self_loops=True) == [[0]]

@@ -733,6 +733,7 @@ class Graph:
         cutoff: int | None = None,
         *,
         node_simple: bool = False,
+        ignore_self_loops: bool = False,
     ) -> list[list[int]]:
         """Find all paths from source to targets using each edge at most once.
 
@@ -742,11 +743,16 @@ class Graph:
             (source counts as visited at initialization). Default False allows
             node revisits via different edges — relevant for multigraphs.
 
+        ignore_self_loops: if True, self-loops are never traversed, so no
+            returned path contains one.
+
         cutoff: maximum number of edges per path. None = no limit.
         """
         tgt_list = [targets] if isinstance(targets, int) else list(targets)
         c = cutoff if cutoff is not None else -1
-        result: list[list[int]] = _all_edge_paths_ctx(self._ctx, source, tgt_list, c, None, None, node_simple)
+        result: list[list[int]] = _all_edge_paths_ctx(
+            self._ctx, source, tgt_list, c, None, None, node_simple, ignore_self_loops
+        )
         return result
 
     def _require_undirected(self, method_name: str) -> None:
@@ -1226,6 +1232,7 @@ class GraphView:
         cutoff: int | None = None,
         *,
         node_simple: bool = False,
+        ignore_self_loops: bool = False,
     ) -> list[list[int]]:
         """Find all paths from source to targets using each edge at most once.
 
@@ -1233,6 +1240,7 @@ class GraphView:
         Respects both excluded edges and excluded nodes.
 
         node_simple: if True, each node may be visited at most once per path.
+        ignore_self_loops: if True, self-loops are never traversed.
         """
         tgt_list = [targets] if isinstance(targets, int) else list(targets)
         c = cutoff if cutoff is not None else -1
@@ -1244,6 +1252,7 @@ class GraphView:
             self._excluded_edges,
             self._excluded_nodes,
             node_simple,
+            ignore_self_loops,
         )
         return result
 
