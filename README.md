@@ -504,6 +504,46 @@ recurse and are not suitable for deep trees.
 increasing node order, so a non-commutative `combine` still gives reproducible
 results. `Partition.compose(finer)` expresses a second quotient level.
 
+#### Label kernels (the C tier under the reduction)
+
+`Graph` and `GraphView` expose the four array kernels the reduction runs on.
+Each returns an int32 `memoryview` indexed by node or edge index, so a result
+over a million nodes is one buffer and not one Python object per node. They are
+usable on their own, masks included.
+
+```python
+graph = Graph([10, 20, 30, 40], [(10, 20), (20, 30), (30, 10), (30, 40), (20, 20)])
+
+graph.component_labels().tolist()      # [0, 0, 0, 0] — smallest node index of each component
+graph.without_edges([3]).component_labels().tolist()   # [0, 0, 0, 3]
+graph.without_nodes([30]).component_labels().tolist()  # [0, 0, -1, 3] — excluded nodes get -1
+
+graph.degrees().tolist()               # [2, 4, 3, 1] — self-loops count twice
+graph.bcc_edge_labels().tolist()       # [1, 1, 1, 0, -1] — bridge is its own block, self-loop -1
+
+labels = graph.without_edges([3]).component_labels()
+src, dst, edge_indices, internal = graph.quotient_edges(labels)
+# src/dst/edge_indices are parallel: crossing edge 3 goes from label 0 to label 3
+[part.tolist() for part in (src, dst, edge_indices, internal)]  # [[0], [3], [3], [0, 1, 2, 4]]
+```
+
+- `component_labels()` labels a node with the smallest node index of its
+  component, so a caller whose node ids are sorted reads the numerically
+  smallest member as `node_ids[label]`. Excluded nodes get -1.
+- `quotient_edges(labels)` walks the unmasked edges once in index order:
+  endpoints with different labels are crossing edges and fill the three
+  parallel arrays, equal labels make an edge internal. Every edge keeps its
+  index, so nothing is keyed by endpoint pair and parallel edges stay
+  distinct. The labels buffer must hold one int32 per node
+  (`ValueError` otherwise, `TypeError` for a non-int32 buffer).
+- `degrees()` gives incidence degrees under both masks with self-loops counted
+  twice (out-degrees for a directed graph); `bcc_edge_labels()` gives the
+  biconnected component id of every edge, bridges being singleton blocks and
+  masked edges, edges at an excluded node and self-loops -1.
+
+`Partition.from_components` builds `block_of` straight from the label array and
+`quotient` from the edge split, so neither materialises a Python set per block.
+
 ### DAG structure learning (Bayesian networks)
 
 Learn directed acyclic graph (DAG) structures from discrete data using greedy hill-climb search with K2 Bayesian scoring. Implemented in C — drop-in replacement for pgmpy's `HillClimbSearch` with identical results and orders of magnitude faster.

@@ -1,18 +1,21 @@
 """Performance tests for the terminal-preserving reduction.
 
 A sparse random graph against a straightforward networkx implementation of
-the same three moves, and the hub-heavy case that a per-move scan of the
-smaller incidence set made quadratic.
+the same three moves, the hub-heavy case that a per-move scan of the smaller
+incidence set made quadratic, and the partition through the C label kernel
+against the earlier path that materialised one Python set per block.
 """
 
 import random
 import time
 import timeit
+import tracemalloc
+from collections.abc import Callable
 
 import networkx
 import pytest
 
-from pygraphc.reduction import MultiGraph, leaves, reduce
+from pygraphc.reduction import MultiGraph, Partition, leaves, reduce
 
 pytestmark = pytest.mark.performance
 
@@ -22,6 +25,51 @@ def sparse_multigraph(node_count: int, edge_count: int, seed: int) -> MultiGraph
     nodes = list(range(node_count))
     endpoints = {edge_id: (rng.randrange(node_count), rng.randrange(node_count)) for edge_id in range(edge_count)}
     return MultiGraph(nodes, endpoints)
+
+
+def set_based_partition(graph: MultiGraph[int], active: set[int]) -> Partition:
+    """The partition path before the label kernel: one Python set per block from ``connected_components``."""
+    kernel = graph._kernel
+    excluded = [index for index, edge_id in enumerate(kernel.edge_ids) if edge_id not in active]
+    block_of: dict[int, int] = {}
+    for group in kernel.graph.without_edges(excluded).connected_components():
+        representative = min(group)
+        for node_id in group:
+            block_of[node_id] = representative
+    return Partition(block_of)
+
+
+def time_and_peak(function: Callable[[], Partition]) -> tuple[float, int]:
+    """Wall time of one call and the tracemalloc peak of a second call, in bytes."""
+    start = time.perf_counter()
+    function()
+    elapsed = time.perf_counter() - start
+    tracemalloc.start()
+    function()
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    return elapsed, peak
+
+
+@pytest.mark.parametrize("node_count", [100_000, 1_000_000])
+def test_label_partition_uses_less_memory_than_the_set_partition(node_count: int) -> None:
+    """The label kernel returns 4 bytes per node; the set path allocated one
+    Python int reference per node inside per-block sets on top of the dict."""
+    graph = sparse_multigraph(node_count, edge_count=node_count * 5 // 4, seed=42)
+    active = set(graph.endpoints)
+    graph._kernel  # noqa: B018 — build the cached C graph outside the measurement
+
+    set_elapsed, set_peak = time_and_peak(lambda: set_based_partition(graph, active))
+    label_elapsed, label_peak = time_and_peak(lambda: Partition.from_components(graph, active))
+
+    print(  # noqa: T201 — benchmark output is intentional
+        f"\n  partition of {node_count:,} nodes / {len(graph.endpoints):,} edges: "
+        f"sets {set_elapsed:.3f}s peak {set_peak / 2**20:.1f} MiB, "
+        f"labels {label_elapsed:.3f}s peak {label_peak / 2**20:.1f} MiB"
+    )
+    assert Partition.from_components(graph, active) == set_based_partition(graph, active)
+    if node_count == 1_000_000:
+        assert label_peak < set_peak, f"labels peak {label_peak} not below sets peak {set_peak}"
 
 
 def networkx_reduce(graph: MultiGraph[int], terminals: set[int]) -> set[int]:
