@@ -37,6 +37,7 @@ benchmark = [
     "pytest>=8.0",
     "scipy>=1.14",
     "numpy>=2.0",
+    "networkx>=3.4",
 ]
 
 [project.urls]

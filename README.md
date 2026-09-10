@@ -327,9 +327,10 @@ list(view.without_branches([11]).connected_components())  # [{0, 1}, {2}]
 `pygraphc.reduction` implements the terminal-preserving reduction kernel shared by
 N-1 analysis and switching-state optimization. The partition step runs in C through
 masked connected components; quotient, lift, reduction, provenance folds and scenario
-application are the Python tier on top. Node ids are integers, edge ids are opaque
-hashable values that keep their identity through every operation, and every result
-is deterministic by id order.
+application are the Python tier on top. Node ids are non-negative integers (validated
+at construction: `TypeError` for a non-int, `ValueError` for negatives, duplicates and
+unknown endpoints), edge ids are opaque hashable values that keep their identity through
+every operation, and every result is deterministic by id order.
 
 ```python
 from pygraphc import MultiGraph, Parallel, Partition, minimal_toggles, paths, quotient, reduce, scenario
@@ -366,6 +367,7 @@ minimal_toggles(tree, {"trafo_a": True, "trafo_b": True}, target_closed=False)
 
 `reduce(graph, terminals, protected=frozenset(), *, fold_leaves=True, order=None)`:
 
+- Terminals and protected nodes must be nodes of the graph; unknown ids raise `ValueError`.
 - Components without a terminal are removed whole before any move.
 - Terminals always survive. Protected nodes keep their incident edges unmerged
   (no series merge at them, no parallel merge of edges touching them); they may
@@ -380,8 +382,12 @@ minimal_toggles(tree, {"trafo_a": True, "trafo_b": True}, target_closed=False)
   pendant node, its folded material and the interior nodes of the dropped edge's
   tree with their folded material on to the neighbour. With `fold_leaves=False`
   pendant material is dropped.
+- Every pendant move also records `(neighbour, tree)` in `Reduced.dropped`, the
+  provenance tree of the removed edge, so edge material merged before its attachment
+  became pendant (a ring returning to one node) stays available.
 - Edges produced by moves get `VirtualEdgeId`s numbered in creation order; they
-  sort after every input edge id.
+  sort after every input edge id and start above any virtual id already present in
+  the input, so a residual can be reduced again (with the same terminals it is a fixpoint).
 - Deterministic: candidates are processed in increasing node id (or in `order`),
   ties among edges by id order. Without protected nodes the residual and the folded
   material are the same for every order; a protected node can make them order
@@ -391,8 +397,13 @@ Tree folds: `leaves(tree)`, `paths(tree, cutoff=None)` (series is the product,
 parallel the union, the cutoff prunes inside the product), `closed(tree, state)`
 (series is AND, parallel is OR) and `minimal_toggles(tree, state, target_closed=...)`
 (union where the node type needs every child, cheapest child otherwise, ties by
-edge id). The folds are iterative and tree hashes are cached, so chains deeper than
-the recursion limit are fine.
+edge id). `Series` and `Parallel` compare by identity (every tree node is created once,
+by the move that produces it) and hash by cached structure; the folds, `repr` and
+`tree_records(tree)` / `tree_from_records(records)` are iterative, so chains deeper than
+the recursion limit are fine. `tree_records` is the canonical serialisable form (a
+post-order log with parallel children ordered by smallest leaf id, independent of the
+hash seed) and the way to compare two trees structurally; `pickle` and `copy.deepcopy`
+recurse and are not suitable for deep trees.
 
 `lift(partition, attribute, combine)` combines node attributes per block in
 increasing node order, so a non-commutative `combine` still gives reproducible

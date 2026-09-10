@@ -7,11 +7,15 @@ quotient keeps edge identity, and the provenance tree round-trips against a
 brute force path enumeration on random multigraphs.
 """
 
+import dataclasses
 import random
+import subprocess
+import sys
 from collections import defaultdict
 
 import pytest
 
+import pygraphc
 from pygraphc.reduction import (
     Leaf,
     MultiGraph,
@@ -27,6 +31,8 @@ from pygraphc.reduction import (
     quotient,
     reduce,
     scenario,
+    tree_from_records,
+    tree_records,
 )
 
 SEED = 20260910
@@ -97,19 +103,19 @@ def canonical(reduced) -> tuple:
     return (tuple(reduced.graph.nodes), tuple(edges), folded, folded_interior)
 
 
+def tree_interior_nodes(tree) -> list[int]:
+    """Every node recorded in a series node of the tree, in increasing id."""
+    return sorted(node_id for _index, kind, _children, interior, _leaf in tree_records(tree) for node_id in interior)
+
+
 def interior_nodes(reduced) -> list[int]:
     """Every node recorded in a series node of any residual tree."""
-    recorded: list[int] = []
-    for tree in reduced.provenance.values():
-        stack = [tree]
-        while stack:
-            node = stack.pop()
-            if isinstance(node, Series):
-                recorded.extend(node.interior_nodes)
-                stack.extend(node.children)
-            elif isinstance(node, Parallel):
-                stack.extend(node.children)
-    return recorded
+    return [node_id for tree in reduced.provenance.values() for node_id in tree_interior_nodes(tree)]
+
+
+def same_tree(actual, expected) -> bool:
+    """Structural equality; ``==`` on series and parallel nodes is identity."""
+    return tree_records(actual) == tree_records(expected)
 
 
 # ── MultiGraph ──
@@ -117,13 +123,43 @@ def interior_nodes(reduced) -> list[int]:
 
 def test_multigraph_rejects_duplicate_nodes():
     """The C tier interns node ids; a duplicate would create a phantom node."""
-    with pytest.raises(ValueError, match="unique"):
-        MultiGraph([1, 1], {})
+    with pytest.raises(ValueError, match=r"unique, duplicates: \[1\]"):
+        MultiGraph([1, 1, 2], {})
+
+
+def test_multigraph_rejects_non_int_node_ids():
+    """The C tier interns ints only; a string would die deep inside it with a type error."""
+    with pytest.raises(TypeError, match="node ids must be ints, got 'a'"):
+        MultiGraph(["a", "b"], {})
+
+
+def test_multigraph_rejects_bool_node_ids():
+    """``True == 1`` would silently alias a node; bools are ints to Python but not node ids."""
+    with pytest.raises(TypeError, match="node ids must be ints, got True"):
+        MultiGraph([True, 2], {})
+
+
+def test_multigraph_rejects_negative_node_ids():
+    """The C tier treats negative ids as missing and reports an unrelated unknown-node error."""
+    with pytest.raises(ValueError, match="non-negative, got -1"):
+        MultiGraph([-1, 2], {})
+
+
+def test_multigraph_stores_any_node_sequence_as_a_list():
+    """A ``range`` and the equivalent list describe the same graph and compare equal."""
+    assert MultiGraph(range(3), {}) == MultiGraph([0, 1, 2], {})
+    assert MultiGraph(range(3), {}).nodes == [0, 1, 2]
+
+
+def test_from_groups_rejects_non_int_node_ids():
+    """Explicit groups feed the same int-only block ids as the C tier does."""
+    with pytest.raises(TypeError, match="node ids must be ints, got 'a'"):
+        Partition.from_groups([["a", "b"]])
 
 
 def test_multigraph_rejects_edge_with_unknown_endpoint():
     """An endpoint outside the node list has no block and no incidence slot."""
-    with pytest.raises(ValueError, match="'e' has an endpoint"):
+    with pytest.raises(ValueError, match=r"'e' has an endpoint that is not a node: \(1, 3\)"):
         MultiGraph([1, 2], {"e": (1, 3)})
 
 
@@ -144,11 +180,12 @@ def test_from_components_uses_minimum_member_as_block_id():
     assert partition.block_of[9] == 3
 
 
-def test_from_components_masks_inactive_edges_without_rebuilding():
+def test_from_components_masks_inactive_edges_without_rebuilding(mocker):
     """Inactive edges are a byte mask on the cached C graph: a second call on
-    the same multigraph reuses the parsed graph and only changes the mask."""
+    the same multigraph reuses the parsed graph, so the C graph is built once."""
     # --- Input ---
     graph = MultiGraph([1, 2, 3, 4], {"e12": (1, 2), "e23": (2, 3), "e34": (3, 4), "loop": (2, 2)})
+    graph_constructor = mocker.patch("pygraphc.Graph", wraps=pygraphc.Graph)
 
     # --- Execute ---
     all_active = Partition.from_components(graph, set(graph.endpoints))
@@ -157,10 +194,10 @@ def test_from_components_masks_inactive_edges_without_rebuilding():
     # --- Assert ---
     assert all_active.blocks() == {1: [1, 2, 3, 4]}
     assert masked.blocks() == {1: [1, 2], 3: [3, 4]}
-    assert graph._kernel is graph._kernel
+    assert graph_constructor.call_count == 1
 
 
-def test_from_groups_gives_constant_time_block_lookup():
+def test_from_groups_gives_content_addressed_block_ids():
     """Callers that already know the blocks get the same content-addressed ids."""
     # --- Input ---
     partition = Partition.from_groups([[4, 2], [7]])
@@ -382,6 +419,7 @@ def test_pendant_node_is_dropped_without_folding():
 
     # --- Assert ---
     assert reduced.folded_nodes == {1: [], 2: []}
+    assert [(neighbour, leaves(tree)) for neighbour, tree in reduced.dropped] == [(1, {"f"})]
 
 
 def test_series_merge_is_oriented_from_first_to_second_edge():
@@ -397,7 +435,7 @@ def test_series_merge_is_oriented_from_first_to_second_edge():
     # --- Assert ---
     assert edge_id == VirtualEdgeId(1)
     assert pair == (1, 3)
-    assert reduced.provenance[edge_id] == Series((Leaf("a"), Leaf("b")), (2,))
+    assert same_tree(reduced.provenance[edge_id], Series((Leaf("a"), Leaf("b")), (2,)))
 
 
 def test_parallel_merge_yields_one_parallel_node_with_sorted_endpoints():
@@ -410,7 +448,7 @@ def test_parallel_merge_yields_one_parallel_node_with_sorted_endpoints():
 
     # --- Assert ---
     assert reduced.graph.endpoints == {VirtualEdgeId(1): (1, 2)}
-    assert reduced.provenance[VirtualEdgeId(1)] == Parallel(frozenset({Leaf("a"), Leaf("b"), Leaf("c")}))
+    assert same_tree(reduced.provenance[VirtualEdgeId(1)], Parallel(frozenset({Leaf("a"), Leaf("b"), Leaf("c")})))
 
 
 def test_series_then_parallel_nests_the_trees():
@@ -424,7 +462,7 @@ def test_series_then_parallel_nests_the_trees():
     (tree,) = reduced.provenance.values()
 
     # --- Assert ---
-    assert tree == Parallel(frozenset({Leaf("direct"), Series((Leaf("a"), Leaf("b")), (2,))}))
+    assert same_tree(tree, Parallel(frozenset({Leaf("direct"), Series((Leaf("a"), Leaf("b")), (2,))})))
     assert list(reduced.graph.endpoints) == [VirtualEdgeId(2)]
 
 
@@ -500,6 +538,7 @@ def test_path_without_terminals_reduces_to_the_empty_graph():
     assert reduced.graph == MultiGraph([], {})
     assert reduced.provenance == {}
     assert reduced.folded_nodes == {}
+    assert reduced.dropped == []
 
 
 def test_terminal_free_components_are_removed_before_the_moves():
@@ -532,7 +571,7 @@ def test_folded_material_of_a_series_node_is_kept_in_folded_interior():
     (tree,) = reduced.provenance.values()
 
     # --- Assert ---
-    assert tree == Series((Leaf("a"), Leaf("b")), (2,))
+    assert same_tree(tree, Series((Leaf("a"), Leaf("b")), (2,)))
     assert reduced.folded_interior == {2: [4]}
     assert reduced.folded_nodes == {1: [], 3: []}
 
@@ -551,6 +590,7 @@ def test_pendant_edge_with_a_series_tree_folds_its_interior_nodes():
     assert reduced.graph.nodes == [1]
     assert reduced.folded_nodes == {1: [4, 2, 3]}
     assert reduced.folded_interior == {}
+    assert [(neighbour, tree_interior_nodes(tree)) for neighbour, tree in reduced.dropped] == [(1, [2, 3])]
 
 
 def test_chain_payload_reaches_the_terminal_in_either_move_order():
@@ -799,3 +839,244 @@ def test_scenario_partition_refines_the_base_partition():
         # --- Assert ---
         assert after.refines(base)
         assert after == Partition.from_components(graph, active - removed)
+
+
+# ── Tree identity, repr and records ──
+
+
+def test_series_with_the_same_children_and_different_interior_stay_distinct_in_a_parallel():
+    """Two series nodes over the same edges but different eliminated nodes are
+    different material; a parallel node keeps both and the records tell them apart."""
+    # --- Input ---
+    first = Series((Leaf("a"), Leaf("b")), (1,))
+    second = Series((Leaf("a"), Leaf("b")), (2,))
+
+    # --- Execute ---
+    parallel = Parallel(frozenset({first, second}))
+
+    # --- Assert ---
+    assert len(parallel.children) == 2
+    assert first != second
+    assert tree_records(first) != tree_records(second)
+
+
+def test_tree_equality_is_identity_and_hashing_is_structural():
+    """Series and parallel nodes compare by identity, so a structurally equal
+    copy is a different key while its hash, cached from the children, agrees."""
+    # --- Input ---
+    original = Series((Leaf("a"), Leaf("b")), (1,))
+    alias = original
+    copy = Series((Leaf("a"), Leaf("b")), (1,))
+
+    # --- Assert ---
+    assert alias == original
+    assert original != copy
+    assert hash(original) == hash(copy)
+    assert same_tree(original, copy)
+
+
+def test_tree_records_list_parallel_children_by_smallest_leaf_and_series_children_in_order():
+    """The log is the canonical form: series order is meaning, parallel order is
+    fixed by the smallest leaf id so it never follows the frozenset's hash order."""
+    # --- Input ---
+    tree = Parallel(frozenset({Leaf("b"), Series((Leaf("c"), Leaf("a")), (1,))}))
+
+    # --- Assert ---
+    assert tree_records(tree) == [
+        (0, "leaf", (), (), "c"),
+        (1, "leaf", (), (), "a"),
+        (2, "series", (0, 1), (1,), None),
+        (3, "leaf", (), (), "b"),
+        (4, "parallel", (2, 3), (), None),
+    ]
+
+
+def test_tree_records_do_not_depend_on_the_hash_seed():
+    """Cached results are compared across processes, so the log of a tree with
+    string edge ids must be byte-identical under different hash seeds."""
+    # --- Input ---
+    script = (
+        "from pygraphc.reduction import MultiGraph, reduce, tree_records\n"
+        "edges = {f'p{index}': (1, 2) for index in range(8)}\n"
+        "edges.update({'a': (2, 3), 'b': (3, 4), 'c': (1, 4), 'd': (1, 4)})\n"
+        "reduced = reduce(MultiGraph([1, 2, 3, 4], edges), terminals={1, 2})\n"
+        "print([tree_records(tree) for tree in reduced.provenance.values()])\n"
+    )
+
+    # --- Execute ---
+    outputs = [
+        subprocess.run(
+            [sys.executable, "-c", script],
+            env={"PYTHONHASHSEED": seed, "PATH": ""},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        for seed in ("1", "2", "3")
+    ]
+
+    # --- Assert ---
+    assert "parallel" in outputs[0]
+    assert outputs[0] == outputs[1] == outputs[2]
+
+
+def test_tree_records_round_trip_a_chain_deeper_than_the_recursion_limit():
+    """P6 wants serialisable outputs: the module's own deep fixture must
+    compare, print and serialise without recursion, which pickle cannot do."""
+    # --- Input ---
+    length = 3000
+    endpoints = {f"w{index}": (index, index + 1) for index in range(length)}
+    endpoints["direct"] = (0, length)
+    graph = MultiGraph(range(length + 1), endpoints)
+
+    # --- Execute ---
+    reduced = reduce(graph, terminals={0, length})
+    ((edge_id, tree),) = reduced.provenance.items()
+    records = tree_records(tree)
+    rebuilt = tree_from_records(records)
+
+    # --- Assert ---
+    assert tree == reduced.provenance[edge_id]
+    assert reduced == dataclasses.replace(reduced)
+    assert repr(tree) == f"Parallel(children=2, leaves={length + 1})"
+    assert len(records) == 2 * length + 1
+    assert tree_records(rebuilt) == records
+    assert rebuilt != tree
+    assert leaves(rebuilt) == leaves(tree)
+    assert paths(rebuilt) == paths(tree)
+
+
+def test_tree_records_round_trip_random_trees():
+    """Every residual tree of a random reduction rebuilds to the same log, leaves and paths."""
+    # --- Input ---
+    rng = random.Random(SEED)
+
+    # --- Execute ---
+    for _ in range(200):
+        graph = random_multigraph(rng, rng.randrange(4, 10), rng.randrange(4, 16))
+        terminals = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
+        reduced = reduce(graph, terminals)
+        for tree in reduced.provenance.values():
+            records = tree_records(tree)
+            rebuilt = tree_from_records(records)
+
+            # --- Assert ---
+            assert tree_records(rebuilt) == records
+            assert leaves(rebuilt) == leaves(tree)
+            assert paths(rebuilt) == paths(tree)
+
+
+def test_tree_from_records_rejects_an_out_of_order_index():
+    """Child indices refer to positions, so a log whose indices do not count up is corrupt."""
+    with pytest.raises(ValueError, match="record index 1 out of order, expected 0"):
+        tree_from_records([(1, "leaf", (), (), "a")])
+
+
+# ── Reduce: re-reduction, loops in series, unknown ids, dropped trees ──
+
+
+def test_virtual_edge_ids_are_numbered_above_those_in_the_input():
+    """A residual fed back in carries virtual ids; a fresh counter from 1 would
+    overwrite a live input edge while its id stayed in the incidence sets."""
+    # --- Input ---
+    graph = MultiGraph([1, 2, 3], {VirtualEdgeId(1): (1, 2), "b": (2, 3)})
+
+    # --- Execute ---
+    reduced = reduce(graph, terminals={1, 3})
+
+    # --- Assert ---
+    assert reduced.graph.endpoints == {VirtualEdgeId(2): (3, 1)}
+    assert same_tree(reduced.provenance[VirtualEdgeId(2)], Series((Leaf("b"), Leaf(VirtualEdgeId(1))), (2,)))
+
+
+def test_reducing_the_residual_again_changes_nothing():
+    """The residual is a fixpoint of the three moves, so reducing it with the
+    same terminals returns it unchanged: same nodes, same edge ids, leaf
+    provenance, nothing folded or dropped, and the same canonical form once
+    the residual's ids are expanded through the first reduction's trees."""
+    # --- Input ---
+    rng = random.Random(SEED)
+
+    # --- Execute ---
+    for _ in range(200):
+        graph = random_multigraph(rng, rng.randrange(4, 10), rng.randrange(4, 16))
+        terminals = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
+        first = reduce(graph, terminals)
+        second = reduce(first.graph, terminals)
+        expanded = sorted(
+            (tuple(sorted(pair)), tuple(sorted(leaves(first.provenance[residual]))))
+            for residual, pair in second.graph.endpoints.items()
+        )
+
+        # --- Assert ---
+        assert second.graph == first.graph
+        assert second.provenance == {edge_id: Leaf(edge_id) for edge_id in first.graph.endpoints}
+        assert second.folded_nodes == {node_id: [] for node_id in first.graph.nodes}
+        assert second.folded_interior == {}
+        assert second.dropped == []
+        assert (tuple(second.graph.nodes), tuple(expanded)) == canonical(first)[:2]
+
+
+def test_node_with_a_loop_and_two_incidences_is_a_series_candidate_and_the_loop_leaves():
+    """Degree counts non-loop incidences: the loop neither blocks the series
+    move nor enters the tree, it is dropped with its node."""
+    # --- Input ---
+    graph = MultiGraph([1, 2, 3], {"a": (1, 2), "b": (2, 3), "loop": (2, 2)})
+
+    # --- Execute ---
+    reduced = reduce(graph, terminals={1, 3})
+
+    # --- Assert ---
+    assert reduced.graph.endpoints == {VirtualEdgeId(1): (1, 3)}
+    assert same_tree(reduced.provenance[VirtualEdgeId(1)], Series((Leaf("a"), Leaf("b")), (2,)))
+    assert reduced.folded_interior == {2: []}
+
+
+def test_unknown_terminals_and_protected_nodes_are_rejected():
+    """A mistyped terminal would silently let the component it should protect vanish."""
+    # --- Input ---
+    graph = MultiGraph([1, 2], {"a": (1, 2)})
+
+    # --- Assert ---
+    with pytest.raises(ValueError, match=r"unknown: \[99\]"):
+        reduce(graph, terminals={1, 99})
+    with pytest.raises(ValueError, match=r"unknown: \[7, 99\]"):
+        reduce(graph, terminals={1}, protected={7, 99})
+
+
+def test_fold_leaves_false_drops_the_interior_nodes_with_the_tree():
+    """Without folding a dropped series tree takes its interior nodes and their
+    folded material with it, leaving no stale ``folded_interior`` entries; the
+    tree itself is still reported."""
+    # --- Input ---
+    graph = MultiGraph([1, 2, 3, 4], {"a": (1, 2), "b": (2, 3), "c": (3, 4)})
+
+    # --- Execute ---
+    reduced = reduce(graph, terminals={1}, fold_leaves=False)
+
+    # --- Assert ---
+    assert reduced.graph.nodes == [1]
+    assert reduced.folded_nodes == {1: []}
+    assert reduced.folded_interior == {}
+    assert [(neighbour, tree_interior_nodes(tree), leaves(tree)) for neighbour, tree in reduced.dropped] == [
+        (1, [2, 3], {"a", "b", "c"})
+    ]
+
+
+def test_ring_hanging_off_a_terminal_keeps_its_edges_in_dropped():
+    """A ring returning to one node becomes a parallel edge to a pendant; the
+    pendant move used to discard that tree with its switches. The ring's
+    edges must be reported and the payload of every ring node folded into the terminal."""
+    # --- Input ---
+    graph = MultiGraph([0, 1, 2, 3], {"t": (0, 1), "r12": (1, 2), "r23": (2, 3), "r31": (3, 1)})
+
+    # --- Execute ---
+    reduced = reduce(graph, terminals={0})
+    dropped_leaves = frozenset().union(*(leaves(tree) for _neighbour, tree in reduced.dropped))
+
+    # --- Assert ---
+    assert reduced.graph == MultiGraph([0], {})
+    assert sorted(reduced.folded_nodes[0]) == [1, 2, 3]
+    assert [neighbour for neighbour, _tree in reduced.dropped] == [0]
+    assert dropped_leaves == {"t", "r12", "r23", "r31"}
+    assert any(kind == "parallel" for _index, kind, *_rest in tree_records(reduced.dropped[0][1]))

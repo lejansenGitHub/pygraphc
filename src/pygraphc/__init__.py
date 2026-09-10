@@ -51,6 +51,7 @@ from pygraphc.reduction import (
     Reduced,
     Series,
     SPTree,
+    TreeRecord,
     VirtualEdgeId,
     closed,
     leaves,
@@ -60,6 +61,8 @@ from pygraphc.reduction import (
     quotient,
     reduce,
     scenario,
+    tree_from_records,
+    tree_records,
 )
 
 __all__ = [
@@ -74,6 +77,7 @@ __all__ = [
     "Reduced",
     "SPTree",
     "Series",
+    "TreeRecord",
     "VirtualEdgeId",
     "articulation_points",
     "bfs",
@@ -102,6 +106,8 @@ __all__ = [
     "shortest_path_lengths",
     "strongly_connected_components",
     "topological_sort",
+    "tree_from_records",
+    "tree_records",
     "two_edge_connected_components",
     "weakly_connected_components",
 ]
