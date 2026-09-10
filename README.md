@@ -313,6 +313,15 @@ sorted(view2.connected_components(), key=min)  # [{0, 1}, {2, 99}]
 view3 = g.without_edges([0]).split_node(node_id=1, new_node_id=99, edge_indices_to_new_node=[2])
 ```
 
+**Rebuild contract.** `with_edges` and `split_node` rebuild the CSR, but the rebuilt view keeps every base edge at its original index, keeps excluded edges and nodes masked, and appends added edges and new nodes after the base ones. Edge indices, node masks and `branch_ids` of the base graph therefore stay valid on the rebuilt view. Weights passed to a rebuilt view must cover every edge, masked ones included. When the base graph carries `branch_ids`, `with_edges` needs `added_branch_ids`, one per added edge; `split_node` gives a rerouted edge the branch id of the edge it replaces. Both require edge-pair construction and raise `ValueError` on a split-list graph.
+
+```python
+g = Graph([0, 1, 2], [(0, 1)], branch_ids=[10])
+view = g.with_edges([(1, 2)], added_branch_ids=[11])
+view.incident_edge_indices(1)                      # [0, 1] — base edge keeps index 0
+list(view.without_branches([11]).connected_components())  # [{0, 1}, {2}]
+```
+
 ### DAG structure learning (Bayesian networks)
 
 Learn directed acyclic graph (DAG) structures from discrete data using greedy hill-climb search with K2 Bayesian scoring. Implemented in C — drop-in replacement for pgmpy's `HillClimbSearch` with identical results and orders of magnitude faster.
