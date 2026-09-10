@@ -123,13 +123,11 @@ def test_split_node_on_node_masked_view():
     # --- Step 2: split node 2 ---
     view2 = view.split_node(node_id=2, new_node_id=99, edge_indices_to_new_node=[2])
 
-    # --- Expected: node 0 still in base graph, but excluded from output ---
-    # The rebuilt graph includes all base nodes + 99. Node mask is lost after
-    # with_edges rebuild (pre-existing limitation).
-    components = list(view2.connected_components())
-    node_union = set().union(*components)
-    assert 99 in node_union
-    assert 1 in node_union
+    # --- Expected ---
+    # Node 0 stays excluded on the rebuilt view: edge (0,1) is masked with it,
+    # so 1 -- 2 and 99 -- 3 remain.
+    components = sorted(view2.connected_components(), key=min)
+    assert components == [{1, 2}, {3, 99}]
 
 
 # ── Multigraph ──
@@ -218,13 +216,10 @@ def test_split_node_shortest_path():
     view = graph.split_node(node_id=0, new_node_id=99, edge_indices_to_new_node=[1])
 
     # --- Expected ---
-    # Rebuilt edges: (0,1), (99,2), (1,3), (2,3)
-    # Weights in rebuilt graph: [1.0, 10.0, 1.0, 1.0] (same order minus excluded + added)
-    # Actually rebuilt edges are: (0,1),(1,3),(2,3),(99,2) — order may change
-    # Shortest path from 0 to 99: 0→1→3→2→99
-    # Let's just verify connectivity
-    lengths = view.shortest_path_lengths([1.0, 1.0, 1.0, 1.0], 0)
-    assert 99 in lengths
+    # Rebuilt edges keep their indices: 0:(0,1), 1:(0,2) masked, 2:(1,3), 3:(2,3), 4:(99,2)
+    # One weight per edge including the masked one. Path 0 -> 1 -> 3 -> 2 -> 99 has length 4.
+    lengths = view.shortest_path_lengths([1.0, 10.0, 1.0, 1.0, 1.0], 0)
+    assert lengths[99] == 4.0
 
 
 # ── Error cases ──
