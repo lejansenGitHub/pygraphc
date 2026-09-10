@@ -1,7 +1,7 @@
 # CPython API Bottlenecks — Findings
 
 ## Context
-When cgraph receives Python lists, the C code must extract integer values using
+When pygraphc receives Python lists, the C code must extract integer values using
 the CPython API. These API calls are the dominant cost in the parse phase.
 
 ## Key bottlenecks measured

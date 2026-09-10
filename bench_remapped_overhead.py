@@ -15,7 +15,7 @@ This isolates the cost of:
 import random
 import time
 
-from cgraph._core import (
+from pygraphc._core import (
     connected_components as _cc,
     connected_components_remapped as _cc_remapped,
 )

@@ -1,10 +1,10 @@
-# cgraph — Expansion Plan
+# pygraphc — Expansion Plan
 
 ## Vision
 
-cgraph is a general-purpose, domain-free graph algorithm library optimized for **performance and low memory consumption**. Zero runtime dependencies. Public on PyPI.
+pygraphc is a general-purpose, domain-free graph algorithm library optimized for **performance and low memory consumption**. Zero runtime dependencies. Public on PyPI.
 
-No domain knowledge — cgraph knows about nodes, edges, and weights. What those represent (electrical grids, social networks, road maps) is the caller's business.
+No domain knowledge — pygraphc knows about nodes, edges, and weights. What those represent (electrical grids, social networks, road maps) is the caller's business.
 
 - **C tier**: Primitive graph algorithms implemented in C for speed. These are the hot inner loops — union-find, BFS, biconnected components, etc. Exposed as private `_core` functions. Memory is allocated once per call, freed on return — no long-lived allocations.
 - **Python tier**: Meta/composite algorithms that orchestrate multiple C primitives. Written in Python, calling into C kernels. Part of the public API but not performance-critical themselves.
@@ -52,7 +52,7 @@ This eliminates an entire class of index-mapping bugs that callers would otherwi
 
 ### Phase 2: Weighted graph algorithms
 
-**Why Dijkstra, not A*:** A* only helps for single source → single target with an admissible heuristic (h(n) ≤ actual cost). Most practical use cases are single-source-all-targets (SSSP with cutoff, eccentricity, multi-source) where A* doesn't apply. Even for source→target, A* needs a domain-specific heuristic that cgraph can't provide as a generic library. The real speedup is C binary heap vs Python heapq, not algorithmic.
+**Why Dijkstra, not A*:** A* only helps for single source → single target with an admissible heuristic (h(n) ≤ actual cost). Most practical use cases are single-source-all-targets (SSSP with cutoff, eccentricity, multi-source) where A* doesn't apply. Even for source→target, A* needs a domain-specific heuristic that pygraphc can't provide as a generic library. The real speedup is C binary heap vs Python heapq, not algorithmic.
 
 | Algorithm | C tier | Python tier | Benchmark vs | Notes |
 |-----------|--------|-------------|-------------|-------|
@@ -97,7 +97,7 @@ def test_<algorithm>_memory(exponent):
 
 ### Problem
 
-Every cgraph algorithm call pays the cost of:
+Every pygraphc algorithm call pays the cost of:
 1. **Node-ID → index mapping**: Building an IntMap hash table from node_ids
 2. **Edge translation**: Looking up both endpoints per edge in the hash map
 3. **CSR construction**: Building the adjacency list from translated edges
@@ -112,7 +112,7 @@ EdgeList + CSR adjacency list), stored as a `PyCapsule`. All algorithm methods
 reuse the cached context.
 
 ```python
-from cgraph import Graph
+from pygraphc import Graph
 
 g = Graph(node_ids, edges)          # parse once
 g = Graph(node_ids, src, dst)       # split-list variant
@@ -471,7 +471,7 @@ call. The mask is allocated once and toggled in-place — no per-iteration alloc
 **Why byte-mask, not bitset?** A byte array (`uint8_t[]`) is simpler in C (direct
 indexing: `mask[eid]`) and avoids bit-shifting overhead in the inner loop. The 8x
 memory cost (1 byte vs 1 bit per edge) is acceptable for graphs up to ~100M edges
-(100 MB). If cgraph grows to handle billion-edge graphs, switch to bitset.
+(100 MB). If pygraphc grows to handle billion-edge graphs, switch to bitset.
 
 **Why not modify the CSR in-place?** Removing an edge from CSR requires either
 rebuilding the offset array (O(V)) or marking a sentinel value in the adj array. Both
@@ -517,7 +517,7 @@ routes). These problems also need:
 These three features are independent but reinforce each other. Together they cover the
 full spectrum of "what-if" analysis on multigraphs.
 
-### Key Insight: cgraph Already Handles Parallel Edges Internally
+### Key Insight: pygraphc Already Handles Parallel Edges Internally
 
 The C layer imposes **no uniqueness constraint** on edges:
 
@@ -770,7 +770,7 @@ AND each node entered at most once. This is stricter than default (edge-only) mo
 
 Discovered during N-1 migration: the existing `all_edge_paths_multigraph` in igp-mono
 uses `max_number_of_visits = 1` per node, meaning each node (including source) can be
-entered via an edge at most once. Without this constraint, cgraph finds extra paths
+entered via an edge at most once. Without this constraint, pygraphc finds extra paths
 that revisit intermediate nodes via parallel edges, producing incorrect results for
 the N-1 switch configuration algorithm.
 
@@ -908,7 +908,7 @@ Phase 6c (all-edge-paths) ── C changes, benefits from 6a (parallel edges)
 2. **Phase 6b** — node-masked views (moderate effort, reuses Phase 5a patterns)
 3. **Phase 6c** — all-edge-paths (largest effort, biggest performance impact)
 
-### What Remains Outside cgraph After Phase 6
+### What Remains Outside pygraphc After Phase 6
 
 Two N-1 operations are too domain-specific for a generic graph library:
 
@@ -920,10 +920,10 @@ Two N-1 operations are too domain-specific for a generic graph library:
 
 2. **Node splitting with edge redistribution** (`_update_graph` / `_revert_graph`):
    Replaces one node with two nodes and redistributes edges based on partition
-   membership. This is a graph mutation that conflicts with cgraph's immutable-view
+   membership. This is a graph mutation that conflicts with pygraphc's immutable-view
    philosophy.
 
-Both operations would be **significantly simpler to implement on top of cgraph** than
+Both operations would be **significantly simpler to implement on top of pygraphc** than
 on networkx, because the underlying primitives (CC, bridges, views) are faster and
 the edge-index model eliminates the need for manual bookkeeping. But the operations
 themselves are application-level logic, not library primitives.
@@ -931,7 +931,7 @@ themselves are application-level logic, not library primitives.
 ## File Structure (target)
 
 ```
-src/cgraph/
+src/pygraphc/
 ├── __init__.py          # Public API — all user-facing symbols
 ├── _core.c              # C primitives (union-find, BFS, Dijkstra, Tarjan,
 │                        #   edge-path enumeration, masked variants)

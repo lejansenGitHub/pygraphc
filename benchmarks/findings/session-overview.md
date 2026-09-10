@@ -1,12 +1,12 @@
 # Runtime Optimization Session — Overview
 
 ## Goal
-Improve cgraph runtime without increasing memory consumption.
+Improve pygraphc runtime without increasing memory consumption.
 Find ways to let users pass data more efficiently.
 
 ## Key discovery: 3-phase cost model
 
-Every cgraph call has three cost phases (Connected Components at 1M nodes):
+Every pygraphc call has three cost phases (Connected Components at 1M nodes):
 
 | Phase | Tuples | Split lists | numpy (m,2) |
 |-------|-------:|------------:|------------:|
@@ -16,7 +16,7 @@ Every cgraph call has three cost phases (Connected Components at 1M nodes):
 
 - C algorithm is 39-55% of total depending on interface — already tight, nothing to optimize.
 - Parse is 16-29ms — dominated by `PyLong_AsLong` per element for lists, near-zero for numpy buffers.
-- Gather is 15-45% — pure Python, cgraph can't optimize it, but interface choice affects it heavily.
+- Gather is 15-45% — pure Python, pygraphc can't optimize it, but interface choice affects it heavily.
 
 ## What we tried and learned
 
@@ -59,7 +59,7 @@ The win is entirely from gather — avoiding 1.5M tuple object allocations. C pa
 
 1. **Convert tuples to numpy in Python layer** — `np.array(edges)` costs ~155ms at 1.5M edges, wiping out the C-side gain. Net loss.
 
-2. **Accept objects + attr names in C** — `PyObject_GetAttrString` is ~2x slower than Python's `LOAD_ATTR` bytecode (no inline cache). Users' direct `b.node_a` access is faster than anything cgraph could do.
+2. **Accept objects + attr names in C** — `PyObject_GetAttrString` is ~2x slower than Python's `LOAD_ATTR` bytecode (no inline cache). Users' direct `b.node_a` access is faster than anything pygraphc could do.
 
 3. **Numpy node_ids** — Building Python int objects for output (nid_items) cancels out the buffer reading gain on input.
 

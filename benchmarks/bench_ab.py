@@ -33,7 +33,7 @@ def bench(func, *args, rounds=7, warmup=3):
     return sorted(times)[len(times)//2]
 
 def run_bench():
-    from cgraph import (connected_components, bridges, articulation_points,
+    from pygraphc import (connected_components, bridges, articulation_points,
                         biconnected_components, bfs, shortest_path, shortest_path_lengths)
 
     n = 1_000_000
