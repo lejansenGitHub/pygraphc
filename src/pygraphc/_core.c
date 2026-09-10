@@ -484,6 +484,12 @@ static int nid_parse(PyObject *node_ids_obj, PyObject *edges_obj, NidContext *ct
             Py_DECREF(ctx->nid_fast);
             return -1;
         }
+        if (intmap_get(&ctx->im, nid) != -1) {
+            PyErr_Format(PyExc_ValueError, "duplicate node id %ld", nid);
+            intmap_free(&ctx->im);
+            Py_DECREF(ctx->nid_fast);
+            return -1;
+        }
         intmap_put(&ctx->im, nid, i);
     }
 
@@ -515,6 +521,12 @@ static int nid_parse_split(PyObject *node_ids_obj, PyObject *src_obj, PyObject *
     for (int i = 0; i < ctx->n; i++) {
         long nid = PyLong_AsLong(ctx->nid_items[i]);
         if (nid == -1 && PyErr_Occurred()) {
+            intmap_free(&ctx->im);
+            Py_DECREF(ctx->nid_fast);
+            return -1;
+        }
+        if (intmap_get(&ctx->im, nid) != -1) {
+            PyErr_Format(PyExc_ValueError, "duplicate node id %ld", nid);
             intmap_free(&ctx->im);
             Py_DECREF(ctx->nid_fast);
             return -1;
@@ -1065,7 +1077,17 @@ typedef struct {
     int owns_memory;
 } WeightList;
 
-static int parse_weights(PyObject *obj, WeightList *wl) {
+static int check_weight_count(WeightList *wl, Py_ssize_t expected_m) {
+    if (wl->n == expected_m) return 0;
+    PyErr_Format(PyExc_ValueError,
+                 "weights length %zd does not match edge count %zd",
+                 wl->n, expected_m);
+    if (wl->owns_memory) free(wl->w);
+    wl->w = NULL;
+    return -1;
+}
+
+static int parse_weights(PyObject *obj, WeightList *wl, Py_ssize_t expected_m) {
     Py_buffer buf;
     if (PyObject_GetBuffer(obj, &buf, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
         if (buf.format && strcmp(buf.format, "d") == 0 &&
@@ -1074,7 +1096,7 @@ static int parse_weights(PyObject *obj, WeightList *wl) {
             wl->n = buf.shape[0];
             wl->owns_memory = 0;
             PyBuffer_Release(&buf);
-            return 0;
+            return check_weight_count(wl, expected_m);
         }
         PyBuffer_Release(&buf);
     } else {
@@ -1085,7 +1107,7 @@ static int parse_weights(PyObject *obj, WeightList *wl) {
     Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
     wl->n = n;
     wl->owns_memory = 1;
-    if (n == 0) { wl->w = NULL; Py_DECREF(fast); return 0; }
+    if (n == 0) { wl->w = NULL; Py_DECREF(fast); return check_weight_count(wl, expected_m); }
     wl->w = (double *)malloc((size_t)n * sizeof(double));
     if (!wl->w) { Py_DECREF(fast); PyErr_NoMemory(); return -1; }
     PyObject **items = PySequence_Fast_ITEMS(fast);
@@ -1094,7 +1116,7 @@ static int parse_weights(PyObject *obj, WeightList *wl) {
         if (PyErr_Occurred()) { free(wl->w); Py_DECREF(fast); return -1; }
     }
     Py_DECREF(fast);
-    return 0;
+    return check_weight_count(wl, expected_m);
 }
 
 static void free_weights(WeightList *wl) {
@@ -1511,7 +1533,7 @@ static PyObject *py_dijkstra(PyObject *self, PyObject *args) {
     EdgeList el;
     if (parse_edges(edges_obj, &el) < 0) return NULL;
     WeightList wl;
-    if (parse_weights(weights_obj, &wl) < 0) { free_edges(&el); return NULL; }
+    if (parse_weights(weights_obj, &wl, el.m) < 0) { free_edges(&el); return NULL; }
 
     AdjList al;
     if (build_adj(n, &el, &al, 0) < 0) {
@@ -1620,7 +1642,7 @@ static PyObject *py_sssp_lengths(PyObject *self, PyObject *args) {
     EdgeList el;
     if (parse_edges(edges_obj, &el) < 0) { Py_DECREF(result_dict); return NULL; }
     WeightList wl;
-    if (parse_weights(weights_obj, &wl) < 0) {
+    if (parse_weights(weights_obj, &wl, el.m) < 0) {
         free_edges(&el); Py_DECREF(result_dict); return NULL;
     }
 
@@ -1716,7 +1738,7 @@ static PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
         Py_DECREF(src_fast); Py_DECREF(result_dict); return NULL;
     }
     WeightList wl;
-    if (parse_weights(weights_obj, &wl) < 0) {
+    if (parse_weights(weights_obj, &wl, el.m) < 0) {
         free_edges(&el); Py_DECREF(src_fast); Py_DECREF(result_dict);
         return NULL;
     }
@@ -2246,7 +2268,7 @@ static PyObject *py_dijkstra_nid(PyObject *self, PyObject *args) {
     }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl) < 0) { nid_free(&ctx); return NULL; }
+    if (parse_weights(wobj, &wl, ctx.el.m) < 0) { nid_free(&ctx); return NULL; }
     AdjList al;
     if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); free_weights(&wl); return NULL; }
 
@@ -2315,7 +2337,7 @@ static PyObject *py_sssp_nid(PyObject *self, PyObject *args) {
     if (n == 0 || source < 0) { nid_free(&ctx); return rd; }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl) < 0) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
+    if (parse_weights(wobj, &wl, ctx.el.m) < 0) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
     AdjList al;
     if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); free_weights(&wl); Py_DECREF(rd); return NULL; }
 
@@ -2377,7 +2399,7 @@ static PyObject *py_msdijk_nid(PyObject *self, PyObject *args) {
     if (!sf) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl) < 0) { Py_DECREF(sf); nid_free(&ctx); Py_DECREF(rd); return NULL; }
+    if (parse_weights(wobj, &wl, ctx.el.m) < 0) { Py_DECREF(sf); nid_free(&ctx); Py_DECREF(rd); return NULL; }
     AdjList al;
     if (build_adj(n, &ctx.el, &al, 0) < 0) { Py_DECREF(sf); free_weights(&wl); nid_free(&ctx); Py_DECREF(rd); return NULL; }
 
@@ -2915,7 +2937,7 @@ static PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl) < 0) { release_mask(&nmbuf); release_mask(&mbuf); return NULL; }
+    if (parse_weights(wobj, &wl, g->nid.el.m) < 0) { release_mask(&nmbuf); release_mask(&mbuf); return NULL; }
     if (!g->has_adj) { free_weights(&wl); release_mask(&nmbuf); release_mask(&mbuf); PyObject *p = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, p); }
     AdjList *al = &g->al;
 
@@ -2993,7 +3015,7 @@ static PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
     }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl) < 0) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
+    if (parse_weights(wobj, &wl, g->nid.el.m) < 0) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
     AdjList *al = &g->al;
 
     double *dist = malloc(n*sizeof(double));
@@ -3058,7 +3080,7 @@ static PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
     if (!sf) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl) < 0) { Py_DECREF(sf); release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
+    if (parse_weights(wobj, &wl, g->nid.el.m) < 0) { Py_DECREF(sf); release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
     AdjList *al = &g->al;
 
     double *dist = malloc(n*sizeof(double));
@@ -3206,6 +3228,10 @@ static PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
             int idx = stk_pos[sp]++;
             int eid = al->eid[idx];
             int v = al->adj[idx];
+
+            /* An undirected self-loop occupies two consecutive CSR slots.
+             * Visit it through the first slot only. */
+            if (v == u && idx > al->offset[u] && al->eid[idx - 1] == eid) continue;
 
             /* Skip masked/visited edges */
             if (visited_edges[eid]) continue;
@@ -3892,9 +3918,12 @@ static PyObject *py_edge_indices_ctx(PyObject *self, PyObject *args) {
     if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
 
     AdjList *al = &g->al;
+    int prev_eid = -1;
     for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
         if (al->adj[e] != v) continue;
         int eid = al->eid[e];
+        if (eid == prev_eid) continue;  /* deduplicate self-loops in undirected CSR */
+        prev_eid = eid;
         if (mask && mask[eid]) continue;
         PyObject *val = PyLong_FromLong(eid);
         PyList_Append(result, val);
@@ -4146,7 +4175,7 @@ static PyObject *py_dag_longest_path_ctx(PyObject *self, PyObject *args) {
     WeightList wl = {NULL, 0, 0};
     int has_weights = (wobj != Py_None);
     if (has_weights) {
-        if (parse_weights(wobj, &wl) < 0) return NULL;
+        if (parse_weights(wobj, &wl, g->nid.el.m) < 0) return NULL;
     }
 
     const uint8_t *mask; Py_buffer mbuf;

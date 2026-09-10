@@ -595,7 +595,7 @@ class TestWithEdgesBasic:
         """Shortest path uses added edge."""
         g = Graph([0, 1, 2], [(0, 1)])
         view = g.with_edges([(1, 2)])
-        # 3 edges in rebuilt graph: (0,1), (1,2)
+        # 2 edges in rebuilt graph: 0:(0,1) base, 1:(1,2) added
         w = [1.0, 1.0]
         path = view.shortest_path(w, 0, 2)
         assert path == [0, 1, 2]
