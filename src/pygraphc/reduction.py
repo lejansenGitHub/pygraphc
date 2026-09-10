@@ -5,10 +5,10 @@ The partition step runs in the C tier through masked connected components of
 identity, lift with a fixed combination order, the fixpoint reduction with
 series-parallel provenance, the tree folds and scenario application.
 
-Node ids are integers because the C tier interns them. Edge ids are opaque
-hashable values and every edge keeps its identity through every operation.
-Every operation is deterministic: ties are broken by id order, never by hash
-order. Self-loops take part in no move and leave with their node.
+Node ids are non-negative integers because the C tier interns them. Edge ids
+are opaque hashable values and every edge keeps its identity through every
+operation. Every operation is deterministic: ties are broken by id order,
+never by hash order. Self-loops take part in no move and leave with their node.
 
 The module depends on ``pygraphc`` only for ``pygraphc.Graph``; the package
 is imported as a module so that ``pygraphc/__init__.py`` can re-export the
@@ -24,9 +24,34 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from functools import cached_property
 from itertools import count, product
-from typing import Generic, TypeAlias, TypeVar
+from typing import Generic, Literal, TypeAlias, TypeVar, cast
 
 import pygraphc
+
+__all__ = [
+    "EdgeId",
+    "Leaf",
+    "MultiGraph",
+    "Parallel",
+    "Partition",
+    "Payload",
+    "Reduced",
+    "SPTree",
+    "Series",
+    "TreeKind",
+    "TreeRecord",
+    "VirtualEdgeId",
+    "closed",
+    "leaves",
+    "lift",
+    "minimal_toggles",
+    "paths",
+    "quotient",
+    "reduce",
+    "scenario",
+    "tree_from_records",
+    "tree_records",
+]
 
 EdgeId = TypeVar("EdgeId", bound=Hashable)
 Payload = TypeVar("Payload")
@@ -46,6 +71,24 @@ def _order_key(value: object) -> tuple[int, str, int | str]:
     return (1, type(value).__name__, repr(value))
 
 
+def _check_node_ids(node_ids: Iterable[int]) -> None:
+    """Node ids must be non-negative ints (``bool`` excluded) so the C tier can intern them.
+
+    A wrong type raises ``TypeError``, a negative id ``ValueError``.
+    """
+    for node_id in node_ids:
+        if isinstance(node_id, bool) or not isinstance(node_id, int):
+            message = f"node ids must be ints, got {node_id!r}"
+            raise TypeError(message)
+        if node_id < 0:
+            message = f"node ids must be non-negative, got {node_id}"
+            raise ValueError(message)
+
+
+def _sorted_pair(first_node: int, second_node: int) -> tuple[int, int]:
+    return (first_node, second_node) if first_node <= second_node else (second_node, first_node)
+
+
 # ---------------------------------------------------------------------------
 # Multigraph with edge identity
 # ---------------------------------------------------------------------------
@@ -53,7 +96,12 @@ def _order_key(value: object) -> tuple[int, str, int | str]:
 
 @dataclass(frozen=True)
 class VirtualEdgeId:
-    """Id of an edge produced by a series or parallel move, numbered in creation order."""
+    """Id of an edge produced by a series or parallel move, numbered in creation order.
+
+    A reduction whose input already contains virtual ids (the residual of an
+    earlier reduction) numbers its own edges above the largest one present, so
+    generated ids never collide with input ids.
+    """
 
     index: int
 
@@ -63,20 +111,26 @@ class MultiGraph(Generic[EdgeId]):
     """Multigraph whose edges are identified by id, never by endpoint pair.
 
     Treated as an immutable value: the masked C graph used for partitions
-    is built once per instance and reused by every scenario.
+    is built once per instance and reused by every scenario. Node ids are
+    validated at construction (``TypeError`` for a non-int, ``ValueError``
+    otherwise); ``nodes`` is stored as a list whatever sequence was given.
     """
 
     nodes: list[int]
     endpoints: dict[EdgeId, tuple[int, int]]
 
     def __post_init__(self) -> None:
-        node_set = set(self.nodes)
-        if len(node_set) != len(self.nodes):
-            message = "node ids must be unique"
+        nodes = list(self.nodes)
+        object.__setattr__(self, "nodes", nodes)
+        _check_node_ids(nodes)
+        node_set = set(nodes)
+        if len(node_set) != len(nodes):
+            duplicates = sorted(node_id for node_id, occurrences in Counter(nodes).items() if occurrences > 1)
+            message = f"node ids must be unique, duplicates: {duplicates}"
             raise ValueError(message)
         for edge_id, (from_node, to_node) in self.endpoints.items():
             if from_node not in node_set or to_node not in node_set:
-                message = f"edge {edge_id!r} has an endpoint that is not a node"
+                message = f"edge {edge_id!r} has an endpoint that is not a node: {(from_node, to_node)}"
                 raise ValueError(message)
 
     @cached_property
@@ -131,6 +185,7 @@ class Partition:
         block_of: dict[int, int] = {}
         for group in groups:
             members = list(group)
+            _check_node_ids(members)
             representative = min(members)
             for node_id in members:
                 block_of[node_id] = representative
@@ -213,19 +268,26 @@ class Leaf(Generic[EdgeId]):
         return self._hash
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False, repr=False)
 class Series(Generic[EdgeId]):
     """Children ordered from the from-endpoint to the to-endpoint of the merged edge.
 
     ``interior_nodes`` records the eliminated node so node payloads can be
     folded; the material folded into it beforehand is in
-    ``Reduced.folded_interior``. The hash is computed once from the children's
-    hashes, which keeps hashing constant-time and free of recursion on deep chains.
+    ``Reduced.folded_interior``.
+
+    Equality is identity. ``reduce`` creates every interior tree node once, in
+    the move that produces it, and the leaf sets of distinct live edges are
+    disjoint, so two structurally equal nodes never coexist and a recursive
+    structural comparison would only fail on deep chains. The hash is computed
+    once from the children's cached hashes, so hashing and ``frozenset``
+    membership are constant-time and recursion-free as well. Compare structures
+    through ``tree_records``.
     """
 
     children: tuple[SPTree[EdgeId], ...]
     interior_nodes: tuple[int, ...]
-    _hash: int = field(init=False, repr=False, compare=False)
+    _hash: int = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_hash", hash((Series, self.children, self.interior_nodes)))
@@ -233,13 +295,16 @@ class Series(Generic[EdgeId]):
     def __hash__(self) -> int:
         return self._hash
 
+    def __repr__(self) -> str:
+        return f"Series(children={len(self.children)}, leaves={len(leaves(self))})"
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, eq=False, repr=False)
 class Parallel(Generic[EdgeId]):
-    """Unordered children between the same endpoint pair."""
+    """Unordered children between the same endpoint pair. Equality is identity, see ``Series``."""
 
     children: frozenset[SPTree[EdgeId]]
-    _hash: int = field(init=False, repr=False, compare=False)
+    _hash: int = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_hash", hash((Parallel, self.children)))
@@ -247,12 +312,25 @@ class Parallel(Generic[EdgeId]):
     def __hash__(self) -> int:
         return self._hash
 
+    def __repr__(self) -> str:
+        return f"Parallel(children={len(self.children)}, leaves={len(leaves(self))})"
+
 
 SPTree: TypeAlias = Leaf[EdgeId] | Series[EdgeId] | Parallel[EdgeId]
 
+TreeKind: TypeAlias = Literal["leaf", "series", "parallel"]
+TreeRecord: TypeAlias = tuple[int, TreeKind, tuple[int, ...], tuple[int, ...], EdgeId | None]
 
-def _post_order(tree: SPTree[EdgeId]) -> list[SPTree[EdgeId]]:
-    """Every node of the tree once, children before parents, without recursion."""
+
+def _children(node: Series[EdgeId] | Parallel[EdgeId]) -> Iterable[SPTree[EdgeId]]:
+    return node.children
+
+
+def _post_order(
+    tree: SPTree[EdgeId],
+    children_of: Callable[[Series[EdgeId] | Parallel[EdgeId]], Iterable[SPTree[EdgeId]]] = _children,
+) -> list[SPTree[EdgeId]]:
+    """Every node of the tree once, children before parents in the order ``children_of`` gives, without recursion."""
     order: list[SPTree[EdgeId]] = []
     visited: set[int] = set()
     stack: list[tuple[SPTree[EdgeId], bool]] = [(tree, False)]
@@ -265,8 +343,73 @@ def _post_order(tree: SPTree[EdgeId]) -> list[SPTree[EdgeId]]:
             order.append(node)
             continue
         stack.append((node, True))
-        stack.extend((child, False) for child in node.children)
+        stack.extend((child, False) for child in reversed(list(children_of(node))))
     return order
+
+
+def _canonical_post_order(tree: SPTree[EdgeId]) -> list[SPTree[EdgeId]]:
+    """Post-order with parallel children in increasing order of their smallest leaf id.
+
+    Series children keep their order. Nothing depends on hash order, so the
+    result is the same in every process. Parallel children of a tree produced
+    by ``reduce`` have disjoint leaf sets, so their smallest leaves differ.
+    """
+    smallest_leaf: dict[int, tuple[int, str, int | str]] = {}
+    for node in _post_order(tree):
+        if isinstance(node, Leaf):
+            smallest_leaf[id(node)] = _order_key(node.edge_id)
+        else:
+            smallest_leaf[id(node)] = min(smallest_leaf[id(child)] for child in node.children)
+
+    def ordered_children(node: Series[EdgeId] | Parallel[EdgeId]) -> Iterable[SPTree[EdgeId]]:
+        if isinstance(node, Series):
+            return node.children
+        return sorted(node.children, key=lambda child: smallest_leaf[id(child)])
+
+    return _post_order(tree, ordered_children)
+
+
+def tree_records(tree: SPTree[EdgeId]) -> list[TreeRecord[EdgeId]]:
+    """Post-order operation log of the tree: one ``(index, kind, child indices, interior nodes, leaf id)`` per node.
+
+    Children come before parents, the last record is the root, parallel
+    children are listed by their smallest leaf id and never in hash order. The
+    log is built without recursion and is the canonical serialisable form of a
+    tree: two trees are structurally equal exactly when their logs are equal.
+    ``tree_from_records`` inverts it.
+    """
+    order = _canonical_post_order(tree)
+    index_of = {id(node): index for index, node in enumerate(order)}
+    records: list[TreeRecord[EdgeId]] = []
+    for index, node in enumerate(order):
+        if isinstance(node, Leaf):
+            records.append((index, "leaf", (), (), node.edge_id))
+        elif isinstance(node, Series):
+            child_indices = tuple(index_of[id(child)] for child in node.children)
+            records.append((index, "series", child_indices, node.interior_nodes, None))
+        else:
+            child_indices = tuple(sorted(index_of[id(child)] for child in node.children))
+            records.append((index, "parallel", child_indices, (), None))
+    return records
+
+
+def tree_from_records(records: Sequence[TreeRecord[EdgeId]]) -> SPTree[EdgeId]:
+    """Rebuild a tree from its ``tree_records`` log without recursion; the last record is the root."""
+    nodes: list[SPTree[EdgeId]] = []
+    for index, kind, child_indices, interior_nodes, edge_id in records:
+        if index != len(nodes):
+            message = f"record index {index} out of order, expected {len(nodes)}"
+            raise ValueError(message)
+        if kind == "leaf":
+            nodes.append(Leaf(cast("EdgeId", edge_id)))
+        elif kind == "series":
+            nodes.append(Series(tuple(nodes[child] for child in child_indices), interior_nodes))
+        else:
+            nodes.append(Parallel(frozenset(nodes[child] for child in child_indices)))
+    if not nodes:
+        message = "a tree has at least one record"
+        raise ValueError(message)
+    return nodes[-1]
 
 
 def leaves(tree: SPTree[EdgeId]) -> frozenset[EdgeId]:
@@ -380,12 +523,19 @@ class Reduced(Generic[EdgeId]):
     ``fold_leaves`` every eliminated node of a component with a terminal
     appears exactly once: as a series interior node, in ``folded_nodes`` or in
     ``folded_interior``. Without it pendant material is dropped.
+
+    ``dropped`` lists, per pendant move in processing order, the neighbour the
+    pendant hung on and the provenance tree of the removed edge, so edge
+    material merged before its attachment became pendant (a ring returning to
+    one node) stays available. Edges of terminal-free components are not
+    listed: no node absorbs them.
     """
 
     graph: MultiGraph[EdgeId | VirtualEdgeId]
     provenance: dict[EdgeId | VirtualEdgeId, SPTree[EdgeId]]
     folded_nodes: dict[int, list[int]]
     folded_interior: dict[int, list[int]]
+    dropped: list[tuple[int, SPTree[EdgeId]]]
 
 
 def _other_end(pair: tuple[int, int], node_id: int) -> int:
@@ -396,10 +546,11 @@ def _other_end(pair: tuple[int, int], node_id: int) -> int:
 class _Reduction(Generic[EdgeId]):
     """Mutable state of one reduction run.
 
-    Incidences are kept per node and updated by every move, so degrees are
-    read, never recomputed. Candidates wait in a min-heap keyed by processing
-    rank and are re-validated when popped, which processes the first eligible
-    node exactly like a full rescan would, at logarithmic cost per move.
+    Incidences are kept per node and the non-loop edges per endpoint pair, both
+    updated by every move, so degrees and parallel candidates are read, never
+    recomputed. Candidates wait in a min-heap keyed by processing rank and are
+    re-validated when popped, which processes the first eligible node exactly
+    like a full rescan would, at logarithmic cost per move.
     """
 
     def __init__(
@@ -411,6 +562,11 @@ class _Reduction(Generic[EdgeId]):
         fold_leaves: bool,
         order: Sequence[int] | None,
     ) -> None:
+        node_set = set(graph.nodes)
+        unknown = sorted(node_id for node_id in {*terminals, *protected} if node_id not in node_set)
+        if unknown:
+            message = f"terminals and protected nodes must be nodes of the graph, unknown: {unknown}"
+            raise ValueError(message)
         self.graph = graph
         self.terminals = terminals
         self.protected = protected
@@ -420,11 +576,14 @@ class _Reduction(Generic[EdgeId]):
         self.endpoints: dict[EdgeId | VirtualEdgeId, tuple[int, int]] = {}
         self.provenance: dict[EdgeId | VirtualEdgeId, SPTree[EdgeId]] = {}
         self.incident: dict[int, set[EdgeId | VirtualEdgeId]] = {node_id: set() for node_id in graph.nodes}
+        self.pair_edges: dict[tuple[int, int], set[EdgeId | VirtualEdgeId]] = {}
         self.loops: dict[int, list[EdgeId]] = {}
         self.folded_nodes: dict[int, list[int]] = {node_id: [] for node_id in graph.nodes}
         self.folded_interior: dict[int, list[int]] = {}
-        self.alive = set(graph.nodes)
-        self.fresh = count(1)
+        self.dropped: list[tuple[int, SPTree[EdgeId]]] = []
+        self.alive = node_set
+        virtual_indices = (edge_id.index for edge_id in graph.endpoints if isinstance(edge_id, VirtualEdgeId))
+        self.fresh = count(1 + max(virtual_indices, default=0))
         for edge_id in sorted(graph.endpoints, key=_order_key):
             from_node, to_node = graph.endpoints[edge_id]
             self.endpoints[edge_id] = (from_node, to_node)
@@ -432,8 +591,7 @@ class _Reduction(Generic[EdgeId]):
             if from_node == to_node:
                 self.loops.setdefault(from_node, []).append(edge_id)
             else:
-                self.incident[from_node].add(edge_id)
-                self.incident[to_node].add(edge_id)
+                self._index_edge(edge_id, (from_node, to_node))
 
     def run(self) -> Reduced[EdgeId]:
         self._drop_terminal_free_components()
@@ -448,7 +606,7 @@ class _Reduction(Generic[EdgeId]):
                 if touched not in self.terminals:
                     heapq.heappush(candidates, self._priority(touched))
         residual: MultiGraph[EdgeId | VirtualEdgeId] = MultiGraph(sorted(self.alive), self.endpoints)
-        return Reduced(residual, self.provenance, self.folded_nodes, self.folded_interior)
+        return Reduced(residual, self.provenance, self.folded_nodes, self.folded_interior, self.dropped)
 
     def _priority(self, node_id: int) -> tuple[int, int]:
         """Heap key: the caller's rank if given (unlisted nodes last), then the node id."""
@@ -457,7 +615,7 @@ class _Reduction(Generic[EdgeId]):
     def _drop_terminal_free_components(self) -> None:
         """A component without a terminal carries no question and is removed whole."""
         components = Partition.from_components(self.graph, self.graph.endpoints.keys())
-        terminal_blocks = {components.block_of[node_id] for node_id in self.terminals if node_id in components.block_of}
+        terminal_blocks = {components.block_of[node_id] for node_id in self.terminals}
         for node_id in self.graph.nodes:
             if components.block_of[node_id] not in terminal_blocks:
                 for edge_id in list(self.incident[node_id]):
@@ -483,11 +641,14 @@ class _Reduction(Generic[EdgeId]):
         """Remove the pendant node and its edge; with folding, its material moves to the neighbour.
 
         The material is the node, what was folded into it, and every interior
-        node of the removed edge's tree with what was folded into that.
+        node of the removed edge's tree with what was folded into that. The
+        tree itself is reported in ``dropped``.
         """
         neighbour = _other_end(self.endpoints[edge_id], node_id)
-        interior = _interior_nodes(self.provenance[edge_id])
+        tree = self.provenance[edge_id]
+        interior = _interior_nodes(tree)
         self._remove_edge(edge_id)
+        self.dropped.append((neighbour, tree))
         absorbed = [node_id, *self.folded_nodes.pop(node_id)]
         for interior_node in interior:
             absorbed.extend([interior_node, *self.folded_interior.pop(interior_node)])
@@ -511,48 +672,51 @@ class _Reduction(Generic[EdgeId]):
         self.folded_interior[node_id] = self.folded_nodes.pop(node_id)
         self._eliminate(node_id)
         if neighbour_first not in self.protected and neighbour_second not in self.protected:
-            parallel = self._edges_between(neighbour_first, neighbour_second)
+            parallel = self.pair_edges[_sorted_pair(neighbour_first, neighbour_second)]
             if len(parallel) >= 2:
-                self._merge_parallel(neighbour_first, neighbour_second, parallel)
+                self._merge_parallel(neighbour_first, neighbour_second, sorted(parallel, key=_order_key))
         return neighbour_first, neighbour_second
 
     def _merge_all_parallels(self) -> None:
         """Initial parallel sweep, pairs in order of their first edge."""
-        by_pair: dict[tuple[int, int], list[EdgeId | VirtualEdgeId]] = {}
-        for edge_id, (from_node, to_node) in self.endpoints.items():
-            if from_node != to_node and from_node not in self.protected and to_node not in self.protected:
-                by_pair.setdefault((min(from_node, to_node), max(from_node, to_node)), []).append(edge_id)
-        for (from_node, to_node), edge_ids in by_pair.items():
-            if len(edge_ids) >= 2:
-                self._merge_parallel(from_node, to_node, edge_ids)
+        candidates = [
+            (pair, sorted(edge_ids, key=_order_key))
+            for pair, edge_ids in self.pair_edges.items()
+            if len(edge_ids) >= 2 and pair[0] not in self.protected and pair[1] not in self.protected
+        ]
+        for (from_node, to_node), edge_ids in candidates:
+            self._merge_parallel(from_node, to_node, edge_ids)
 
     def _merge_parallel(self, from_node: int, to_node: int, edge_ids: list[EdgeId | VirtualEdgeId]) -> None:
         tree: SPTree[EdgeId] = Parallel(frozenset(self.provenance[edge_id] for edge_id in edge_ids))
         for edge_id in edge_ids:
             self._remove_edge(edge_id)
-        self._add_edge(tree, (min(from_node, to_node), max(from_node, to_node)))
-
-    def _edges_between(self, first_node: int, second_node: int) -> list[EdgeId | VirtualEdgeId]:
-        """Non-loop edges joining the two nodes, scanned from the endpoint of smaller degree."""
-        if len(self.incident[first_node]) > len(self.incident[second_node]):
-            first_node, second_node = second_node, first_node
-        return [
-            edge_id
-            for edge_id in self.incident[first_node]
-            if _other_end(self.endpoints[edge_id], first_node) == second_node
-        ]
+        self._add_edge(tree, _sorted_pair(from_node, to_node))
 
     def _add_edge(self, tree: SPTree[EdgeId], pair: tuple[int, int]) -> None:
         edge_id = VirtualEdgeId(next(self.fresh))
         self.endpoints[edge_id] = pair
         self.provenance[edge_id] = tree
-        for node_id in pair:
-            self.incident[node_id].add(edge_id)
+        self._index_edge(edge_id, pair)
+
+    def _index_edge(self, edge_id: EdgeId | VirtualEdgeId, pair: tuple[int, int]) -> None:
+        """Register a non-loop edge in the incidence sets and in the pair index."""
+        from_node, to_node = pair
+        self.incident[from_node].add(edge_id)
+        self.incident[to_node].add(edge_id)
+        self.pair_edges.setdefault(_sorted_pair(from_node, to_node), set()).add(edge_id)
 
     def _remove_edge(self, edge_id: EdgeId | VirtualEdgeId) -> None:
-        for node_id in self.endpoints.pop(edge_id):
-            self.incident[node_id].discard(edge_id)
+        """Unregister a non-loop edge; loops leave with their node in ``_eliminate``."""
+        pair = self.endpoints.pop(edge_id)
         del self.provenance[edge_id]
+        for node_id in pair:
+            self.incident[node_id].discard(edge_id)
+        key = _sorted_pair(*pair)
+        between = self.pair_edges[key]
+        between.discard(edge_id)
+        if not between:
+            del self.pair_edges[key]
 
     def _eliminate(self, node_id: int) -> None:
         """Remove the node together with its self-loops."""
@@ -585,7 +749,9 @@ def reduce(
     Candidates are processed in increasing node id, or in the given ``order``
     (unlisted nodes last). With no protected nodes the residual and the folded
     material do not depend on that order; protected nodes can make them
-    order dependent.
+    order dependent. Terminals and protected nodes must be nodes of the
+    graph. The residual of a reduction is a fixpoint: reducing it again with
+    the same terminals and protected nodes changes nothing.
     """
     return _Reduction(graph, terminals, protected, fold_leaves=fold_leaves, order=order).run()
 
