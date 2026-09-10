@@ -683,7 +683,7 @@ g.cycle_basis()  # []
 cycle_basis([1, 2, 3], [(1, 2), (2, 3), (3, 1)])  # [[3, 2, 1]]
 ```
 
-Useful for validating radial grid topology (presence of cycles indicates mesh). Self-loops are detected as single-node cycles. Works with GraphView masks — removing a cycle-closing edge eliminates that cycle.
+Useful for checking whether a graph is a forest (an empty basis means acyclic). Self-loops are detected as single-node cycles. Works with GraphView masks — removing a cycle-closing edge eliminates that cycle.
 
 ### DAG longest path
 
