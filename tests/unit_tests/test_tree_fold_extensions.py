@@ -409,3 +409,31 @@ def test_a_subtree_that_does_not_span_two_nodes_is_rejected():
     tree = Series((Leaf("x"), Leaf("y")), (4,))
     with pytest.raises(ValueError, match="spans .*, a subtree of a chain spans exactly two nodes"):
         series_chain(tree, {"x": (0, 4), "y": (6, 9)}, 0)
+
+
+def test_children_that_span_two_nodes_each_but_do_not_meet_are_rejected():
+    """Every subtree here spans two nodes, yet the chain 0-1-2-3 hands the last two the pair the other one has.
+
+    Spanning two nodes is necessary and not sufficient: the walk has to check
+    that the pair it hands a child is the pair that child really spans, or it
+    returns a well-formed three-step walk whose last two steps name edges the
+    graph does not have between those nodes.
+    """
+    # --- Input ---
+    tree = Series((Leaf("a"), Leaf("b"), Leaf("c")), (1, 2))
+    edge_endpoints = {"a": (0, 1), "b": (2, 3), "c": (1, 2)}
+
+    # --- Assert ---
+    with pytest.raises(ValueError, match=r"spans \[2, 3\] but sits between 1 and 2 on the chain"):
+        series_chain(tree, edge_endpoints, 0)
+
+
+def test_one_edge_used_twice_along_a_chain_is_rejected():
+    """A single edge cannot be both halves of a two-step chain, and the spanned pair of the whole tree hides it."""
+    # --- Input ---
+    tree = Series((Leaf(1), Leaf(1)), (0,))
+    edge_endpoints = {1: (1, 2)}
+
+    # --- Assert ---
+    with pytest.raises(ValueError, match=r"spans \[1, 2\] but sits between 1 and 0 on the chain"):
+        series_chain(tree, edge_endpoints, 1)

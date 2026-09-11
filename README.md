@@ -518,8 +518,13 @@ node is a sub-chain and is flattened into the sequence, so index `i` addresses t
 a `Parallel` child is one position, because its children are unordered alternatives.
 Starting from the other endpoint returns the reversed sequence with every step
 reversed, so the two walks of a chain are mutual reverses. A `Parallel` tree, a start
-node that is not an endpoint of the tree, a leaf that is not an edge of the graph and
-a subtree that does not span exactly two nodes raise `ValueError`.
+node that is not an endpoint of the tree, a leaf that is not an edge of the graph, a
+subtree that does not span exactly two nodes, a series node the walk reaches at a node
+neither of its outer children touches and a subtree whose spanned pair is not the pair
+of chain nodes its position sits between raise `ValueError`. The last of
+those is what makes the refusal sound: spanning two nodes leaves a tree whose
+subtrees do not meet end to end, and walking one returns a well-formed sequence whose
+steps name pairs the graph does not join.
 
 `Series` and `Parallel` compare by identity (every tree node is created once,
 by the move that produces it) and hash by cached structure; the folds, `repr` and

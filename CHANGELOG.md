@@ -63,8 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   node nested in a series node is flattened into the sequence so positions along
   the whole chain are addressable by index, and a `Parallel` child is one
   position. A `Parallel` tree, a start node that is not an endpoint, a leaf that
-  is not an edge of the graph and a subtree that does not span exactly two nodes
-  raise `ValueError`.
+  is not an edge of the graph, a subtree that does not span exactly two nodes, a
+  series node the walk reaches at a node neither of its outer children touches
+  and a subtree whose spanned pair is not the pair of chain nodes its position
+  sits between raise `ValueError`; the last of those is what makes the refusal sound,
+  since subtrees that each span two nodes can still fail to meet end to end.
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 - `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx

@@ -643,9 +643,12 @@ def series_chain(
 
     Raises ``ValueError`` for a ``Parallel`` tree, whose children have no order,
     for a start node that is not an endpoint of the tree, for a leaf that is not
-    an edge of the graph, for a subtree that does not span exactly two nodes and
+    an edge of the graph, for a subtree that does not span exactly two nodes,
     for a series node whose interior nodes do not number one fewer than its
-    children, which leaves the chain ambiguous.
+    children, which leaves the chain ambiguous, for a series node the walk
+    reaches at a node neither of its outer children touches, and for a subtree
+    whose spanned pair is not the pair of chain nodes its position sits
+    between, which is a tree whose subtrees do not meet end to end.
     """
     if not _has_chain_order(tree):
         message = "a parallel tree has no chain order: its children are unordered alternatives, not a sequence"
@@ -661,6 +664,13 @@ def series_chain(
     pending: list[tuple[SPTree[EdgeId], int, int]] = [(tree, start_node, end_node)]
     while pending:
         subtree, step_from, step_to = pending.pop()
+        subtree_span = boundaries[id(subtree)]
+        if subtree_span != frozenset({step_from, step_to}):
+            message = (
+                f"{subtree!r} spans {sorted(subtree_span)} but sits between {step_from} and {step_to} "
+                f"on the chain, so the tree does not describe one"
+            )
+            raise ValueError(message)
         if not isinstance(subtree, Series):
             steps.append(SeriesStep(step_from, subtree, step_to))
             continue
