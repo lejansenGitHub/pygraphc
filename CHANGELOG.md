@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   under the masks, self-loops counted twice) and `bcc_edge_labels()`
   (biconnected component id per edge, bridges as singleton components, -1
   for masked edges and self-loops). `Partition.from_components` and
-  `quotient` in `pygraphc.reduction` now run on these kernels with identical
-  results; the partition no longer materialises one set per block.
+  `quotient` in `pygraphc.reduction` now run on these kernels; the partition
+  no longer materialises one set per block. See `Changed` for the two points
+  on which `quotient` does not behave as it did before the move.
 - `pygraphc.reduction`: the terminal-preserving graph reduction kernel.
   `MultiGraph` with edge identity, `Partition` from masked connected
   components (`from_components`, `from_groups`, `compose`, `refines`,
@@ -68,6 +69,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `with_edges` takes `added_branch_ids`, required when the base graph carries
   `branch_ids`. `split_node` gives a rerouted edge the branch id of the edge it
   replaces.
+- `quotient` in `pygraphc.reduction` requires the partition to name a block for
+  every node of the graph and raises `KeyError` when one is missing. Before the
+  move onto the C kernels only the endpoints of the crossing edges needed a
+  block, because the quotient never looked at the other nodes; the kernel takes
+  one label per node, so every node needs one.
+- `quotient` raises `KeyError` for an edge id in `crossing` that is not an edge
+  of the graph, as it did before the move onto the C kernels, and now names the
+  offending ids. The kernel reads `crossing` as an edge mask, under which an
+  unknown id matches no edge and would be dropped without a word, so the ids are
+  checked against the graph first.
 
 ## [0.1.0] - 2026-04-04
 

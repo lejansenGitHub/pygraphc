@@ -235,8 +235,14 @@ def quotient(
     as the internal edges of that block. The C tier splits the edges in one
     pass over an int32 label per node (the position of the node's block in
     the sorted block list); the meta edges come back in edge id order. The
-    partition must name a block for every node of the graph.
+    partition must name a block for every node of the graph; a missing block
+    raises ``KeyError``. An edge id in ``crossing`` that the graph does not
+    contain raises ``KeyError`` as well, rather than being dropped.
     """
+    unknown_crossing = crossing - graph.endpoints.keys()
+    if unknown_crossing:
+        message = f"crossing edge ids that are not edges of the graph: {sorted(unknown_crossing, key=_order_key)}"
+        raise KeyError(message)
     block_nodes = sorted(set(partition.block_of.values()))
     block_index = {block_id: index for index, block_id in enumerate(block_nodes)}
     kernel = graph._kernel

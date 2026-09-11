@@ -268,6 +268,31 @@ def test_quotient_keeps_parallel_crossing_edges_and_reports_internal_ones():
     assert internal == {1: ["z"]}
 
 
+def test_quotient_rejects_a_crossing_edge_id_that_is_not_an_edge_of_the_graph():
+    """The crossing set is an edge mask on the cached C graph, under which an
+    unknown id simply matches nothing. A typo would be dropped without a word,
+    so the ids are checked against the graph first."""
+    # --- Input ---
+    graph = MultiGraph([1, 2, 3], {"a": (1, 2), "b": (2, 3)})
+    partition = Partition.from_groups([[1, 2], [3]])
+
+    # --- Assert ---
+    with pytest.raises(KeyError, match="not edges of the graph"):
+        quotient(partition, graph, {"a", "typo"})
+
+
+def test_quotient_requires_a_block_for_every_node_of_the_graph():
+    """The C kernel takes one label per node, so a partition that names blocks
+    only for the endpoints of the crossing edges is no longer enough."""
+    # --- Input ---
+    graph = MultiGraph([1, 2, 3], {"a": (1, 2), "b": (2, 3)})
+    partition = Partition.from_groups([[1, 2]])
+
+    # --- Assert ---
+    with pytest.raises(KeyError):
+        quotient(partition, graph, {"a"})
+
+
 def test_lift_combines_in_increasing_node_order():
     """The combination order is fixed so a non-commutative operation still
     gives reproducible results."""
