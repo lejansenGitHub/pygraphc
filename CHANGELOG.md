@@ -89,11 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   counterpart of `connected_components()`. It reads the `component_labels`
   kernel and collects only the requested component, choosing between a
   `bytes.find` scan and one pass over every label by how many members a
-  `bytes.count` probe reports. That makes it the cheaper call on every shape
-  except a graph that is itself one component: at 1,000,000 nodes it costs
-  7.2 ms and 3.8 MiB against 738.4 ms and 214.1 MiB on all singletons, 63.2 ms
-  against 143.3 ms on a sparse graph with a giant component and a tail, but
-  40.1 ms against 9.9 ms when the whole graph is one component. Each call
+  `bytes.count` probe reports. At 1,000,000 nodes that makes it the cheaper
+  call on every shape except a graph that is itself one component: 7.2 ms and
+  3.8 MiB against 738.4 ms and 214.1 MiB on all singletons, 63.2 ms against
+  143.3 ms on a sparse graph with a giant component and a tail, but 40.1 ms
+  against 9.9 ms when the whole graph is one component. On smaller graphs the
+  fixed cost of the probe weighs more: the same sparse mixture at 100,000 nodes
+  is 0.85x rather than 2.3x. Each call
   repeats the O(n + m) label pass, so more than a handful of components is a
   job for `connected_components()`. The node is resolved through the graph's
   cached node id to index map when another method has already built it and by

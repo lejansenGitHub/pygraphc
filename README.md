@@ -358,9 +358,12 @@ g.without_edges([1]).connected_component(30)         # {30}
 Both paths run the same O(n + m) label pass; the accessor then collects only
 the requested component, picking between a `bytes.find` scan and one pass over
 every label according to a `bytes.count` probe of how many members there are.
-That makes it the cheaper call on every shape except a graph that is itself a
-single component, where `connected_components()` builds its one set in C and a
-Python collection cannot beat it.
+At 1,000,000 nodes that makes it the cheaper call on every shape except a graph
+that is itself a single component, where `connected_components()` builds its one
+set in C and a Python collection cannot beat it. The advantage is size-dependent
+as well as shape-dependent: on the same sparse mixture it is 2.3x at a million
+nodes and 0.85x at a hundred thousand, because the fixed cost of the probe and
+the label pass is a larger share of a smaller graph.
 
 Measured over four shapes with `benchmarks/bench_single_component.py` (fastest
 of five calls, `tracemalloc` peak of one call). The accessor uses the graph's
@@ -390,11 +393,12 @@ requested component is large.
 
 There is no single break-even count, because there are two break-evens:
 
-- **Shape.** The accessor is the cheaper call on every shape here except a
-  graph that is one single component, where it is 4x slower. Its advantage
-  grows as the requested component shrinks relative to the graph: 2.3x at two
-  thirds of the graph, 5.1x for a small component of the same graph, 103x for
-  a singleton among a million.
+- **Shape.** Its advantage grows as the requested component shrinks relative
+  to the graph: at a million nodes, 2.3x at two thirds of the graph, 5.1x for a
+  small component of the same graph, 103x for a singleton. On a graph that is
+  one single component it is 4x slower. Two rows of the table are below 1x, and
+  the second is the one to keep in mind: the sparse mixture's giant component at
+  a hundred thousand nodes is 0.85x, the same shape that is 2.3x at a million.
 - **Count.** Each call repeats the O(n + m) label pass, so *k* lookups cost
   *k* warm calls, and one `connected_components()` call is cheaper above the
   ratio in the table — one lookup on a single-component graph, two on the

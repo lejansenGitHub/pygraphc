@@ -148,9 +148,11 @@ def test_connected_component_skips_hits_that_straddle_two_neighbouring_labels():
     assert graph.connected_component(256) == {256, 500}
 
 
-def test_connected_component_agrees_across_both_collection_strategies():
-    """A component of more than about an eighth of the graph is collected by one pass
-    over every label and a smaller one by the byte scan; both must give the same answer."""
+def test_connected_component_is_right_for_a_large_a_small_and_a_singleton_member():
+    """Three components of very different sizes in one graph, which on the current
+    threshold routes the first through the label pass and the others through the byte
+    scan. The answers are what is asserted; the routing is not observable from here,
+    so forcing either strategy leaves this test passing."""
     # --- Input ---
     #  a component of 120 nodes, one of five and one singleton, in a graph of 200
     large = set(range(120))
