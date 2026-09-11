@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `ValueError` at construction. Several edges may share a branch id, and
   `without_branches` excludes every edge carrying the id.
 - Duplicate node ids raise `ValueError` instead of creating a phantom isolated node.
+- Continuous integration runs for every pull request, not only for those
+  targeting `main`. The `pull_request` trigger was restricted to
+  `branches: [main]`, so a pull request stacked on another branch ran no job
+  at all and reported no checks, which reads as results pending rather than
+  as nothing having run. The `push` trigger stays on `main`.
+- The coverage job's `diff-cover` step compares against the branch the pull
+  request targets instead of always against `origin/main`. On a stacked pull
+  request the hardcoded base measured the whole stack's diff and reported a
+  number about work the pull request did not contain.
 
 ### Changed
 - Rebuilds through `with_edges` and `split_node` keep every base edge at its

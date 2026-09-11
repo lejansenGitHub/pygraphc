@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   lint:
@@ -94,4 +93,8 @@ jobs:
         with:
           name: coverage
       - name: diff-cover
-        run: diff-cover coverage.xml --compare-branch=origin/main --fail-under=80
+        env:
+          # A stacked pull request must be measured against the branch it targets,
+          # not against main, or the report covers the whole stack's diff.
+          COMPARE_BRANCH: origin/${{ github.base_ref || github.ref_name }}
+        run: diff-cover coverage.xml --compare-branch="$COMPARE_BRANCH" --fail-under=80
