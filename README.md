@@ -549,6 +549,8 @@ reduce(path, terminals={0, 2}, series_ineligible={1}).graph.nodes
 ```
 
 `reduce(graph, terminals, protected=frozenset(), *, pendant=None, series_ineligible=frozenset(), order=None, engine="c")`:
+`reduce(graph, terminals, protected=frozenset(), *, fold_leaves=True, order=None, engine="c")`
+(`engine` is one of `"c"`, `"moves"`, `"rounds"` and `"python"`):
 
 - Every node named in `terminals`, `protected`, `series_ineligible` or the pendant
   policy's exceptions must be a node of the graph; unknown ids raise `ValueError`.
@@ -687,6 +689,49 @@ the pendant policy is a mask: whether a removed pendant's material is absorbed o
 discarded changes no move, so the log reports the absorbing neighbour either way,
 there is no `fold_leaves` here, and `reduce` reads the action off the policy per
 removed node while folding the log.
+#### The same moves as primitives (`engine="moves"`, `engine="rounds"`)
+
+`Graph.series_parallel_state(terminal_mask, protected_mask)` puts that same
+incidence structure behind an opaque `ReductionState` handle and exposes one
+short primitive per step over it, so the fixpoint loop can live in Python
+without rebuilding the graph between moves. `engine="moves"` asks for the next
+applicable move and applies it, one crossing per move; `engine="rounds"` asks
+for every currently applicable and mutually independent move of one kind and
+applies the whole batch, one crossing per kind per round. Two eligible nodes
+conflict exactly when one is a neighbour of the other, so a batch admits
+eligible nodes in increasing index while none of their neighbours is admitted
+yet; the sparse graphs below take five to six rounds.
+
+```python
+state = graph.series_parallel_state(bytes([1, 0, 0, 1]), bytes(4))
+move = state.next_move()             # (kind, node, edge_a, edge_b, neighbour_a, neighbour_b)
+created, parallel_pending = state.apply_move(move)
+batch = state.batch_moves(1)         # every independent series move, as int32
+state.apply_batch(1, batch)
+log = state.log()                    # the same ReductionLog as the loop above
+state.free()                         # the handle goes inert, not dangling
+```
+
+On 20 000 nodes, 25 000 edges and 200 terminals: 0.022 s for `engine="c"`,
+**0.025 s** for `"moves"` and **0.023 s** for `"rounds"`; at a million nodes
+2.02 s, 2.19 s and 1.92 s. Only a tenth of a call is the structural work and
+four fifths of it is the fold, so 500 000 boundary crossings cost under a
+tenth of the total and 18 cost nothing measurable. `"moves"` applies the moves
+in the monolith's order and reproduces its `Reduced` exactly; `"rounds"`
+changes the order the merges happen in, which leaves the residual, the leaves
+of every residual edge and the folded payload of every surviving node alone
+but may split `dropped` differently across pendant moves and nest a series
+chain differently.
+
+`Graph.series_parallel_reduce(terminal_mask, protected_mask)`
+exposes the loop on its own and returns a `ReductionLog` of twelve int32
+`memoryview`s. The two masks hold one byte per node index and mark membership by
+a non-zero byte, and are read as buffers, so a list of node ids is not a mask;
+`None` in place of the terminal mask raises `TypeError`, because a reduction
+without a terminal deletes every component. `GraphView` reduces under its own
+edge and node masks. There is no `fold_leaves` here: the log records which
+neighbour absorbs a pendant payload either way and `reduce` decides whether to
+apply it.
 
 ```python
 graph = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3)])
