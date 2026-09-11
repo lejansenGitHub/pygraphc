@@ -557,28 +557,80 @@ def _has_chain_order(tree: SPTree[EdgeId]) -> bool:
     return not isinstance(tree, Parallel)
 
 
-def _chain_nodes(node: Series[EdgeId], from_node: int, to_node: int) -> list[int]:
-    """Nodes along a series node: its two endpoints with its interior nodes between them."""
+def _check_interior_count(node: Series[EdgeId]) -> None:
+    """A series node has exactly one eliminated node between each pair of neighbouring children."""
     if len(node.interior_nodes) != len(node.children) - 1:
         message = (
             f"a series node with {len(node.children)} children needs {len(node.children) - 1} "
             f"interior nodes, got {len(node.interior_nodes)}"
         )
         raise ValueError(message)
-    return [from_node, *node.interior_nodes, to_node]
+
+
+def _chain_boundaries(
+    tree: SPTree[EdgeId],
+    edge_endpoints: Mapping[EdgeId, tuple[int, int]],
+) -> dict[int, frozenset[int]]:
+    """The two nodes every subtree spans, by node identity.
+
+    A leaf spans the endpoints of its edge. A parallel node spans what its
+    children span, which is the same pair for all of them. A series node spans
+    what its children span except the nodes its merges ate, which are exactly
+    its interior nodes. Anything else is not a piece of a chain and is an error.
+    """
+    boundaries: dict[int, frozenset[int]] = {}
+    for node in _post_order(tree):
+        if isinstance(node, Leaf):
+            if node.edge_id not in edge_endpoints:
+                message = f"leaf edge {node.edge_id!r} is not an edge of the graph the endpoints come from"
+                raise ValueError(message)
+            spanned = frozenset(edge_endpoints[node.edge_id])
+        else:
+            spanned = frozenset[int]().union(*(boundaries[id(child)] for child in node.children))
+            if isinstance(node, Series):
+                _check_interior_count(node)
+                spanned -= frozenset(node.interior_nodes)
+        if len(spanned) != 2:
+            message = f"{node!r} spans {sorted(spanned)}, a subtree of a chain spans exactly two nodes"
+            raise ValueError(message)
+        boundaries[id(node)] = spanned
+    return boundaries
+
+
+def _in_walk_order(
+    node: Series[EdgeId],
+    step_from: int,
+    boundaries: Mapping[int, frozenset[int]],
+) -> tuple[tuple[SPTree[EdgeId], ...], tuple[int, ...]]:
+    """The children and interior nodes of a series node in the direction that leaves ``step_from``.
+
+    The stored order runs between the two nodes the series node spans, and its
+    first child touches one of them. The walk crosses the node in stored order
+    when that node is the one it steps from and against it otherwise, which is
+    unambiguous because an interior node is never an endpoint.
+    """
+    if step_from in boundaries[id(node.children[0])]:
+        return node.children, node.interior_nodes
+    if step_from in boundaries[id(node.children[-1])]:
+        return tuple(reversed(node.children)), tuple(reversed(node.interior_nodes))
+    message = f"node {step_from} is an endpoint of no outer child of {node!r}, so the chain does not run through it"
+    raise ValueError(message)
 
 
 def series_chain(
     tree: SPTree[EdgeId],
-    endpoints: tuple[int, int],
+    edge_endpoints: Mapping[EdgeId, tuple[int, int]],
     start_node: int,
 ) -> list[SeriesStep[EdgeId]]:
     """Ordered steps along a series chain, walked from ``start_node``, one step per position.
 
-    ``endpoints`` is the endpoint pair of the tree in the order its children
-    run, which is what ``Reduced.graph.endpoints`` records for the residual
-    edge the tree belongs to; the interior nodes of every series node sit
-    between its children. A ``Leaf`` is a chain of one step.
+    ``edge_endpoints`` is the endpoint mapping of the graph the tree was
+    reduced from, which is ``MultiGraph.endpoints`` of that graph; every leaf of
+    the tree is one of its edges. The nodes a subtree spans follow from it, and
+    with them the direction each child runs, which the tree itself does not
+    record: the stored order of a series node is the direction of the merge that
+    created it and a later merge can cross it either way. A ``Leaf`` is a chain
+    of one step.
 
     A series node nested in a series node is a sub-chain and is flattened into
     the sequence, so index ``i`` addresses the ``i``-th subtree along the whole
@@ -586,36 +638,39 @@ def series_chain(
     is one position: its children carry no order, so the step names the whole
     parallel subtree.
 
-    Walking from the to-endpoint returns the reversed sequence with every step
-    reversed, so the two walks of a chain are mutual reverses.
+    Walking from the other endpoint returns the reversed sequence with every
+    step reversed, so the two walks of a chain are mutual reverses.
 
-    Raises ``ValueError`` for a ``Parallel`` tree, whose children have no
-    order, for a start node that is not an endpoint of the tree, and for a
-    series node whose interior nodes do not number one fewer than its children,
-    which leaves the chain ambiguous.
+    Raises ``ValueError`` for a ``Parallel`` tree, whose children have no order,
+    for a start node that is not an endpoint of the tree, for a leaf that is not
+    an edge of the graph, for a subtree that does not span exactly two nodes and
+    for a series node whose interior nodes do not number one fewer than its
+    children, which leaves the chain ambiguous.
     """
     if not _has_chain_order(tree):
         message = "a parallel tree has no chain order: its children are unordered alternatives, not a sequence"
         raise ValueError(message)
-    from_node, to_node = endpoints
-    if start_node not in {from_node, to_node}:
-        message = f"start node {start_node} is not an endpoint of the tree, the endpoints are {from_node} and {to_node}"
+    boundaries = _chain_boundaries(tree, edge_endpoints)
+    spanned = boundaries[id(tree)]
+    if start_node not in spanned:
+        endpoint_names = " and ".join(str(node_id) for node_id in sorted(spanned))
+        message = f"start node {start_node} is not an endpoint of the tree, the endpoints are {endpoint_names}"
         raise ValueError(message)
+    (end_node,) = spanned - {start_node}
     steps: list[SeriesStep[EdgeId]] = []
-    pending: list[tuple[SPTree[EdgeId], int, int]] = [(tree, from_node, to_node)]
+    pending: list[tuple[SPTree[EdgeId], int, int]] = [(tree, start_node, end_node)]
     while pending:
         subtree, step_from, step_to = pending.pop()
         if not isinstance(subtree, Series):
             steps.append(SeriesStep(step_from, subtree, step_to))
             continue
-        chain_nodes = _chain_nodes(subtree, step_from, step_to)
+        children, interior_nodes = _in_walk_order(subtree, step_from, boundaries)
+        chain_nodes = [step_from, *interior_nodes, step_to]
         pending.extend(
             (child, chain_nodes[position], chain_nodes[position + 1])
-            for position, child in reversed(list(enumerate(subtree.children)))
+            for position, child in reversed(list(enumerate(children)))
         )
-    if start_node == from_node:
-        return steps
-    return [SeriesStep(step.to_node, step.subtree, step.from_node) for step in reversed(steps)]
+    return steps
 
 
 def _interior_nodes(tree: SPTree[EdgeId]) -> list[int]:

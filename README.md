@@ -503,18 +503,23 @@ reachable children only. The result distinguishes two answers: `frozenset()` mea
 the tree already takes the target state and nothing has to be toggled, `None` means
 no subset of the permitted leaves makes it take the target state.
 
-`series_chain(tree, endpoints, start_node)` walks a series chain and returns one
-`SeriesStep(from_node, subtree, to_node)` per position, in order. `endpoints` is the
-endpoint pair of the tree in the order its children run, which is what
-`Reduced.graph.endpoints` records for the residual edge; the interior nodes of a
-series node sit between its children. A `Leaf` is a chain of one step. A series node
-nested in a series node is a sub-chain and is flattened into the sequence, so index
-`i` addresses the `i`-th subtree along the whole chain and the length is the number of
-positions on it; a `Parallel` child is one position, because its children are
-unordered alternatives. Starting from the to-endpoint returns the reversed sequence
-with every step reversed, so the two walks of a chain are mutual reverses. A
-`Parallel` tree and a start node that is not an endpoint of the tree raise
-`ValueError`.
+`series_chain(tree, edge_endpoints, start_node)` walks a series chain and returns one
+`SeriesStep(from_node, subtree, to_node)` per position, in order. `edge_endpoints` is
+`MultiGraph.endpoints` of the graph the tree was reduced from, and every leaf of the
+tree is one of its edges. The two nodes each subtree spans follow from it — a leaf
+spans its edge's endpoints, a series node spans what its children span minus the
+nodes its merges ate, which are its interior nodes — and with them the direction each
+child runs in. The tree does not record that direction itself: the stored order of a
+series node is the direction of the merge that created it, and a later merge can
+reach it from either end, so a walk that trusts the stored order crosses a nested
+chain backwards. A `Leaf` is a chain of one step. A series node nested in a series
+node is a sub-chain and is flattened into the sequence, so index `i` addresses the
+`i`-th subtree along the whole chain and the length is the number of positions on it;
+a `Parallel` child is one position, because its children are unordered alternatives.
+Starting from the other endpoint returns the reversed sequence with every step
+reversed, so the two walks of a chain are mutual reverses. A `Parallel` tree, a start
+node that is not an endpoint of the tree, a leaf that is not an edge of the graph and
+a subtree that does not span exactly two nodes raise `ValueError`.
 
 `Series` and `Parallel` compare by identity (every tree node is created once,
 by the move that produces it) and hash by cached structure; the folds, `repr` and

@@ -50,14 +50,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   set means the tree already takes the target state, `None` means no subset of
   the permitted leaves reaches it. Ties among equally small candidate sets are
   broken by edge id order, unchanged.
-- `series_chain(tree, endpoints, start_node)` and `SeriesStep` in
+- `series_chain(tree, edge_endpoints, start_node)` and `SeriesStep` in
   `pygraphc.reduction` expose the ordered walk of a series chain as one step
   per position, each naming the node stepped from, the subtree crossed and the
-  node reached. Walking from the to-endpoint returns the reversed sequence with
-  every step reversed, a `Leaf` is a chain of one step, a series node nested in
-  a series node is flattened into the sequence so positions along the whole
-  chain are addressable by index, and a `Parallel` child is one position. A
-  `Parallel` tree and a start node that is not an endpoint raise `ValueError`.
+  node reached. `edge_endpoints` is `MultiGraph.endpoints` of the graph the tree
+  was reduced from: the direction each subtree runs in is derived from the nodes
+  it spans, because the tree does not record it — a series node stores its
+  children in the direction of the merge that created it and a later merge can
+  reach it from either end, so a walk that trusts the stored order crosses a
+  nested chain backwards. Walking from the other endpoint returns the reversed
+  sequence with every step reversed, a `Leaf` is a chain of one step, a series
+  node nested in a series node is flattened into the sequence so positions along
+  the whole chain are addressable by index, and a `Parallel` child is one
+  position. A `Parallel` tree, a start node that is not an endpoint, a leaf that
+  is not an edge of the graph and a subtree that does not span exactly two nodes
+  raise `ValueError`.
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 - `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx
