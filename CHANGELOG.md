@@ -88,9 +88,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Several speedups are lower than the previously published ones (connected
   components at 1M: 20x, not 46x; articulation points at 1M: 17x, not 26x;
   Dijkstra at 1M: 14x, not 29x). The table also records the one operation
-  where networkx is faster: for a single source-target pair `nx.shortest_path`
-  uses bidirectional Dijkstra and beats `shortest_path` by about 6x, while
-  against the one-directional `nx.dijkstra_path` pygraphc stays 23x ahead.
+  where networkx was faster at the time of measurement: for a single
+  source-target pair `nx.shortest_path` uses bidirectional Dijkstra and beat
+  `shortest_path` by about 6x, while against the one-directional
+  `nx.dijkstra_path` pygraphc stayed 23x ahead. The entry below removes that
+  row by making `shortest_path` bidirectional too.
+- `shortest_path` (free function, `Graph` and `GraphView`) runs a bidirectional
+  Dijkstra instead of a full single-source Dijkstra from the source. The two
+  searches meet in the middle, so only a small part of a large graph is
+  settled. On a 100k-node sparse weighted graph a single source-target query
+  drops from 8.6 ms to 0.05 ms with weights passed as a float64 buffer (numpy
+  array or `array("d", ...)`) and to 1.1 ms with weights passed as a list of
+  floats, where converting the list dominates the query. That is 31x and 1.4x
+  against `nx.shortest_path` (itself bidirectional), which was 0.16x before.
+  Weights are validated the same way for both input forms. The returned path
+  may be a different path of the same total weight than before when several
+  shortest paths exist. `shortest_path_lengths`,
+  `multi_source_shortest_path_lengths` and `eccentricity` keep using the
+  single-source search.
 - Rebuilds through `with_edges` and `split_node` keep every base edge at its
   original index, keep excluded edges masked, and append added edges and new
   nodes. Edge indices and branch ids of the base graph therefore stay valid on

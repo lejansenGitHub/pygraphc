@@ -1509,6 +1509,162 @@ static inline int mh_pop(MinHeap *h) {
     return node;
 }
 
+/* ── Bidirectional Dijkstra (source -> target) ── */
+
+/* Result of a bidirectional search: the path weight and the node indices
+   from source to target. path is NULL when the target is unreachable. */
+typedef struct {
+    double weight;
+    int *path;
+    int path_length;
+} BidiPath;
+
+/* Walk the two predecessor chains from the meeting edge into a single path.
+   meet_forward and meet_backward are the endpoints of the meeting edge; they
+   are the same node when the searches met on a node rather than an edge. */
+static int bidi_build_path(const int *prev_forward, const int *prev_backward,
+                           int meet_forward, int meet_backward, BidiPath *out) {
+    int forward_length = 0;
+    for (int node = meet_forward; node != -1; node = prev_forward[node]) forward_length++;
+    int backward_start = (meet_forward == meet_backward) ? prev_backward[meet_backward]
+                                                         : meet_backward;
+    int backward_length = 0;
+    for (int node = backward_start; node != -1; node = prev_backward[node]) backward_length++;
+
+    int total = forward_length + backward_length;
+    int *path = (int *)malloc((size_t)total * sizeof(int));
+    if (!path) { PyErr_NoMemory(); return -1; }
+    int node = meet_forward;
+    for (int i = forward_length - 1; i >= 0; i--) { path[i] = node; node = prev_forward[node]; }
+    node = backward_start;
+    for (int i = forward_length; i < total; i++) { path[i] = node; node = prev_backward[node]; }
+
+    out->path = path;
+    out->path_length = total;
+    return 0;
+}
+
+/* Whether a search has a valid tentative distance for a node. dist entries are
+   left uninitialised, so this is what tells a fresh node from a reached one. */
+static inline int bidi_reached(const int *pos, const uint8_t *settled, int node) {
+    return pos[node] != -1 || settled[node];
+}
+
+/* Bidirectional Dijkstra over the CSR adjacency. The forward search follows
+   outgoing edges from source, the backward search incoming edges into target;
+   undirected graphs use the same adjacency for both. The frontier with the
+   smaller top key is expanded next, the best source-target weight seen over
+   relaxed edges is tracked as the searches proceed, and the search stops once
+   a node has been settled by both. Returns -1 on error. */
+static int bidi_dijkstra(int n, const AdjList *al, const double *edge_weights,
+                         const uint8_t *edge_mask, const uint8_t *node_mask,
+                         int directed, int source, int target, BidiPath *out) {
+    out->weight = HUGE_VAL;
+    out->path = NULL;
+    out->path_length = 0;
+
+    const int *back_offset = directed ? al->rev_offset : al->offset;
+    const int *back_adj = directed ? al->rev_adj : al->adj;
+    const int *back_eid = directed ? al->rev_eid : al->eid;
+    if (!back_offset) return 0;  /* directed graph without edges */
+
+    double *dist = (double *)malloc(2 * (size_t)n * sizeof(double));
+    int *prev = (int *)malloc(2 * (size_t)n * sizeof(int));
+    int *heap = (int *)malloc(2 * (size_t)n * sizeof(int));
+    int *pos = (int *)malloc(2 * (size_t)n * sizeof(int));
+    uint8_t *settled = (uint8_t *)calloc(2 * (size_t)n, 1);
+    if (!dist || !prev || !heap || !pos || !settled) {
+        free(dist); free(prev); free(heap); free(pos); free(settled);
+        PyErr_NoMemory();
+        return -1;
+    }
+    memset(pos, -1, 2 * (size_t)n * sizeof(int));
+
+    double *dist_forward = dist, *dist_backward = dist + n;
+    int *prev_forward = prev, *prev_backward = prev + n;
+    int *pos_forward = pos, *pos_backward = pos + n;
+    uint8_t *settled_forward = settled, *settled_backward = settled + n;
+
+    MinHeap heap_forward = {dist_forward, heap, pos_forward, 1};
+    MinHeap heap_backward = {dist_backward, heap + n, pos_backward, 1};
+    dist_forward[source] = 0.0; prev_forward[source] = -1;
+    heap_forward.heap[0] = source; pos_forward[source] = 0;
+    dist_backward[target] = 0.0; prev_backward[target] = -1;
+    heap_backward.heap[0] = target; pos_backward[target] = 0;
+
+    double best_weight = HUGE_VAL;
+    int meet_forward = -1, meet_backward = -1;
+
+    while (heap_forward.size > 0 && heap_backward.size > 0) {
+        int expand_forward = dist_forward[heap_forward.heap[0]]
+                          <= dist_backward[heap_backward.heap[0]];
+        MinHeap *frontier = expand_forward ? &heap_forward : &heap_backward;
+        double *dist_near = expand_forward ? dist_forward : dist_backward;
+        const double *dist_far = expand_forward ? dist_backward : dist_forward;
+        int *prev_near = expand_forward ? prev_forward : prev_backward;
+        uint8_t *settled_near = expand_forward ? settled_forward : settled_backward;
+        const uint8_t *settled_far = expand_forward ? settled_backward : settled_forward;
+        const int *pos_near = expand_forward ? pos_forward : pos_backward;
+        const int *pos_far = expand_forward ? pos_backward : pos_forward;
+        const int *offset = expand_forward ? al->offset : back_offset;
+        const int *adj = expand_forward ? al->adj : back_adj;
+        const int *eid = expand_forward ? al->eid : back_eid;
+
+        int u = mh_pop(frontier);
+        settled_near[u] = 1;
+        if (bidi_reached(pos_far, settled_far, u) && dist_near[u] + dist_far[u] < best_weight) {
+            best_weight = dist_near[u] + dist_far[u];
+            meet_forward = u; meet_backward = u;
+        }
+        if (settled_far[u]) break;
+
+        for (int i = offset[u]; i < offset[u + 1]; i++) {
+            if (edge_mask && edge_mask[eid[i]]) continue;
+            int v = adj[i];
+            if (node_mask && node_mask[v]) continue;
+            double reach = dist_near[u] + edge_weights[eid[i]];
+            if (bidi_reached(pos_far, settled_far, v) && reach + dist_far[v] < best_weight) {
+                best_weight = reach + dist_far[v];
+                meet_forward = expand_forward ? u : v;
+                meet_backward = expand_forward ? v : u;
+            }
+            if (!bidi_reached(pos_near, settled_near, v)) {
+                dist_near[v] = reach;
+                prev_near[v] = u;
+                int slot = frontier->size++;
+                frontier->heap[slot] = v;
+                frontier->pos[v] = slot;
+                mh_sift_up(frontier, slot);
+            } else if (!settled_near[v] && reach < dist_near[v]) {
+                dist_near[v] = reach;
+                prev_near[v] = u;
+                mh_sift_up(frontier, frontier->pos[v]);
+            }
+        }
+    }
+
+    int status = 0;
+    if (best_weight < HUGE_VAL) {
+        out->weight = best_weight;
+        status = bidi_build_path(prev_forward, prev_backward, meet_forward, meet_backward, out);
+    }
+
+    free(dist); free(prev); free(heap); free(pos); free(settled);
+    return status;
+}
+
+/* Turn the node indices of a bidirectional result into a list of node IDs. */
+static PyObject *bidi_path_to_list(const BidiPath *bp, const NidContext *ctx) {
+    PyObject *path = PyList_New(bp->path_length);
+    if (!path) return NULL;
+    for (int i = 0; i < bp->path_length; i++) {
+        PyObject *item = ctx->nid_items[bp->path[i]];
+        Py_INCREF(item);
+        PyList_SET_ITEM(path, i, item);
+    }
+    return path;
+}
+
 /* ── Dijkstra (source -> target, returns distance + path) ── */
 
 static PyObject *py_dijkstra(PyObject *self, PyObject *args) {
@@ -2272,46 +2428,14 @@ static PyObject *py_dijkstra_nid(PyObject *self, PyObject *args) {
     AdjList al;
     if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); free_weights(&wl); return NULL; }
 
-    double *dist = malloc(n*sizeof(double));
-    int *prev = malloc(n*sizeof(int)), *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
-    if (!dist||!prev||!heap||!pos) {
-        free(dist);free(prev);free(heap);free(pos);
-        free_adj(&al); free_weights(&wl); nid_free(&ctx);
-        PyErr_NoMemory(); return NULL;
-    }
-    for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; prev[i]=-1; pos[i]=-1; }
-    MinHeap mh = {dist, heap, pos, 0};
-    dist[source]=0.0; heap[0]=source; pos[source]=0; mh.size=1;
-
-    while (mh.size > 0) {
-        int u = mh_pop(&mh);
-        if (u == target || dist[u] == HUGE_VAL) break;
-        for (int i=al.offset[u]; i<al.offset[u+1]; i++) {
-            int v=al.adj[i]; double nd=dist[u]+wl.w[al.eid[i]];
-            if (nd < dist[v]) {
-                prev[v] = u;
-                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
-                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
-            }
-        }
-    }
-
-    double fd = dist[target];
-    PyObject *path;
-    if (fd < HUGE_VAL) {
-        int plen=0; for (int v=target;v!=-1;v=prev[v]) plen++;
-        path = PyList_New(plen);
-        int v=target;
-        for (int i=plen-1;i>=0;i--) {
-            Py_INCREF(ctx.nid_items[v]);
-            PyList_SET_ITEM(path, i, ctx.nid_items[v]);
-            v = prev[v];
-        }
-    } else { path = PyList_New(0); }
-
-    PyObject *res = Py_BuildValue("(dN)", fd, path);
-    free(dist);free(prev);free(heap);free(pos);
-    free_adj(&al); free_weights(&wl); nid_free(&ctx);
+    BidiPath bp;
+    int failed = bidi_dijkstra(n, &al, wl.w, NULL, NULL, 0, source, target, &bp) < 0;
+    PyObject *path = failed ? NULL : bidi_path_to_list(&bp, &ctx);
+    free(bp.path);
+    free_adj(&al); free_weights(&wl);
+    if (!path) { nid_free(&ctx); return NULL; }
+    PyObject *res = Py_BuildValue("(dN)", bp.weight, path);
+    nid_free(&ctx);
     return res;
 }
 
@@ -2939,51 +3063,14 @@ static PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     WeightList wl;
     if (parse_weights(wobj, &wl, g->nid.el.m) < 0) { release_mask(&nmbuf); release_mask(&mbuf); return NULL; }
     if (!g->has_adj) { free_weights(&wl); release_mask(&nmbuf); release_mask(&mbuf); PyObject *p = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, p); }
-    AdjList *al = &g->al;
 
-    double *dist = malloc(n*sizeof(double));
-    int *prev = malloc(n*sizeof(int)), *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
-    if (!dist||!prev||!heap||!pos) {
-        free(dist);free(prev);free(heap);free(pos);
-        free_weights(&wl); release_mask(&nmbuf); release_mask(&mbuf); PyErr_NoMemory(); return NULL;
-    }
-    for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; prev[i]=-1; pos[i]=-1; }
-    MinHeap mh = {dist, heap, pos, 0};
-    dist[source]=0.0; heap[0]=source; pos[source]=0; mh.size=1;
-
-    while (mh.size > 0) {
-        int u = mh_pop(&mh);
-        if (u == target || dist[u] == HUGE_VAL) break;
-        for (int i=al->offset[u]; i<al->offset[u+1]; i++) {
-            if (mask && mask[al->eid[i]]) continue;
-            int v=al->adj[i];
-            if (nmask && nmask[v]) continue;
-            double nd=dist[u]+wl.w[al->eid[i]];
-            if (nd < dist[v]) {
-                prev[v] = u;
-                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
-                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
-            }
-        }
-    }
-
-    double fd = dist[target];
-    PyObject *path;
-    if (fd < HUGE_VAL) {
-        int plen=0; for (int v=target;v!=-1;v=prev[v]) plen++;
-        path = PyList_New(plen);
-        int v=target;
-        for (int i=plen-1;i>=0;i--) {
-            Py_INCREF(g->nid.nid_items[v]);
-            PyList_SET_ITEM(path, i, g->nid.nid_items[v]);
-            v = prev[v];
-        }
-    } else { path = PyList_New(0); }
-
-    PyObject *res = Py_BuildValue("(dN)", fd, path);
-    free(dist);free(prev);free(heap);free(pos);
+    BidiPath bp;
+    int failed = bidi_dijkstra(n, &g->al, wl.w, mask, nmask, g->directed, source, target, &bp) < 0;
+    PyObject *path = failed ? NULL : bidi_path_to_list(&bp, &g->nid);
+    free(bp.path);
     free_weights(&wl); release_mask(&nmbuf); release_mask(&mbuf);
-    return res;
+    if (!path) return NULL;
+    return Py_BuildValue("(dN)", bp.weight, path);
 }
 
 static PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
@@ -4362,7 +4449,8 @@ static PyMethodDef methods[] = {
      "BFS with node-ID-based edges and source."},
     {"dijkstra_nid", py_dijkstra_nid, METH_VARARGS,
      "dijkstra_nid(node_ids, nid_edges, weights, source_nid, target_nid) -> (float, list)\n\n"
-     "Dijkstra with node-ID-based edges."},
+     "Bidirectional Dijkstra with node-ID-based edges. Weights as a float64\n"
+     "buffer are used in place; a sequence is converted and validated first."},
     {"sssp_nid", py_sssp_nid, METH_VARARGS,
      "sssp_nid(node_ids, nid_edges, weights, source_nid, cutoff) -> dict[NodeId, float]\n\n"
      "SSSP lengths with node-ID-based edges."},
@@ -4386,7 +4474,9 @@ static PyMethodDef methods[] = {
     {"ap_ctx", py_ap_ctx, METH_VARARGS, "Articulation points from cached graph."},
     {"bcc_ctx", py_bcc_ctx, METH_VARARGS, "Biconnected components from cached graph."},
     {"bfs_ctx", py_bfs_ctx, METH_VARARGS, "BFS from cached graph."},
-    {"dijkstra_ctx", py_dijkstra_ctx, METH_VARARGS, "Dijkstra from cached graph."},
+    {"dijkstra_ctx", py_dijkstra_ctx, METH_VARARGS,
+     "Bidirectional Dijkstra from cached graph. Weights as a float64 buffer are\n"
+     "used in place; a sequence is converted and validated first."},
     {"sssp_ctx", py_sssp_ctx, METH_VARARGS, "SSSP lengths from cached graph."},
     {"msdijk_ctx", py_msdijk_ctx, METH_VARARGS, "Multi-source Dijkstra from cached graph."},
     {"toposort_nid", py_toposort_nid, METH_VARARGS,

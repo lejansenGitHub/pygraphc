@@ -28,6 +28,8 @@ rather than the ratio.
 | Articulation Points | 1M | 0.204s | 3.55s | **17x** |
 | BFS | 1M | 0.073s | 6.94s | **95x** |
 | Dijkstra (single-source lengths) | 1M | 0.356s | 5.00s | **14x** |
+| Shortest path (single pair, float64 weights) | 100K | MEASURE_BUFFER | **MEASURE_BUFFER_X** |
+| Shortest path (single pair, list weights) | 100K | MEASURE_LIST | **MEASURE_LIST_X** |
 | Edge paths (cutoff=5) | 80 | 0.000001s | 0.0001s | **91x** |
 | SCC (directed) | 1M | 0.129s | 4.64s | **36x** |
 | WCC (directed) | 1M | 0.029s | 1.97s | **69x** |
@@ -55,6 +57,12 @@ source-target pair `nx.shortest_path` dispatches to bidirectional Dijkstra and
 settles a small fraction of the nodes, while pygraphc runs one search from the
 source. Against the same one-directional algorithm (`nx.dijkstra_path`)
 pygraphc stays 23x ahead.
+
+`shortest_path` with a target runs a bidirectional Dijkstra: two searches, one forward from the source and one backward from the target, meet in the middle, so only a small part of a large graph is settled. It is compared against `nx.shortest_path`, which dispatches to networkx's own bidirectional Dijkstra; against the one-directional `nx.dijkstra_path` the same query is ~500x (list weights) to ~12,000x (float64 weights) faster.
+
+**Pass the weights as a float64 buffer** — a numpy `float64` array or `array.array("d", ...)` — to get the fast row. Such a buffer is handed to C as is, so the search reads only the edges it inspects, a few hundred on the graph above. A list of floats has to be converted and validated element by element first, which is proportional to the whole edge list and costs more than the search itself (1.0 ms of the 1.1 ms). Both rows are correct and both beat networkx; only the buffer row shows what the search actually costs. This is the same advice as passing edges as numpy arrays.
+
+`shortest_path_lengths`, `multi_source_shortest_path_lengths` and `eccentricity` need every distance and keep using the single-source search, where the weight conversion is a small part of the total either way.
 
 ### vs pgmpy (DAG structure learning)
 
@@ -202,7 +210,8 @@ node_ids = [0, 1, 2, 3]
 edges = [(0, 1), (1, 2), (2, 3)]
 weights = [1.0, 2.0, 3.0]
 
-# Shortest path (Dijkstra with C binary heap)
+# Shortest path (bidirectional Dijkstra with C 4-ary heap)
+# Pass weights as a numpy float64 array or array('d') to skip the per-element conversion
 shortest_path(node_ids, edges, weights, source=0, target=3)  # [0, 1, 2, 3]
 
 # Single-source shortest path lengths (with optional cutoff)
@@ -309,8 +318,10 @@ Sparse random graph, 100K nodes (~3 edges per node), best of 20 runs:
 | Articulation Points | 1.6ms | 1.7ms | +8% |
 | Biconnected Components | 9.9ms | 10.6ms | +7% |
 | BFS | 2.3ms | 2.5ms | +8% |
-| Dijkstra (single pair) | 6.9ms | 7.3ms | +7% |
+| Dijkstra (single pair, bidirectional) | 0.55ms | 0.55ms | +0% |
 | SSSP lengths | 13.6ms | 13.8ms | +2% |
+
+The single-pair row was re-measured after `shortest_path` became bidirectional; the other rows are from the earlier run.
 
 The key win is avoiding O(V + E) graph rebuild per edge modification.
 

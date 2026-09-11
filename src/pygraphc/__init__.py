@@ -209,7 +209,13 @@ def shortest_path(
     source: NodeIdT,
     target: NodeIdT,
 ) -> list[NodeIdT]:
-    """Return the shortest weighted path from source to target."""
+    """Return the shortest weighted path from source to target.
+
+    Runs a bidirectional Dijkstra, so only a small part of a large graph is
+    settled. Pass ``weights`` as a float64 buffer (a numpy ``float64`` array or
+    ``array.array("d", ...)``) to hand it to C as is; a list of floats is
+    converted element by element first, which costs more than the search.
+    """
     _dist, path = _dijkstra_nid(node_ids, edges, weights, source, target)
     result: list[NodeIdT] = path
     return result
@@ -910,7 +916,13 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         source: NodeIdT,
         target: NodeIdT,
     ) -> list[NodeIdT]:
-        """Return the shortest weighted path from source to target."""
+        """Return the shortest weighted path from source to target.
+
+        Runs a bidirectional Dijkstra, so only a small part of a large graph is
+        settled. Pass ``weights`` as a float64 buffer (a numpy ``float64`` array
+        or ``array.array("d", ...)``) to hand it to C as is; a list of floats is
+        converted element by element first, which costs more than the search.
+        """
         _dist, path = _dijkstra_ctx(self._ctx, weights, source, target)
         result: list[NodeIdT] = path
         return result
@@ -1395,7 +1407,13 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         source: NodeIdT,
         target: NodeIdT,
     ) -> list[NodeIdT]:
-        """Return the shortest weighted path from source to target."""
+        """Return the shortest weighted path from source to target.
+
+        Runs a bidirectional Dijkstra, so only a small part of a large graph is
+        settled. Pass ``weights`` as a float64 buffer (a numpy ``float64`` array
+        or ``array.array("d", ...)``) to hand it to C as is; a list of floats is
+        converted element by element first, which costs more than the search.
+        """
         _dist, path = _dijkstra_ctx(
             self._graph._ctx,
             weights,
