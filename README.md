@@ -337,6 +337,38 @@ The key win is avoiding O(V + E) graph rebuild per edge modification.
 
 Parallel edges are supported — each edge is tracked by ID, so two edges between the same pair of nodes are handled correctly (e.g. for bridges, Dijkstra weight selection).
 
+### One component instead of all of them
+
+`connected_component(node_id)` is the single-component counterpart of the
+`connected_components()` generator: it returns the component containing one
+node as a set of node ids, so nothing about how a caller uses the result
+changes. It reads the `component_labels` kernel and builds only the requested
+component, instead of a set per component with every node added to one. Both
+masks of a view are respected; an unknown node and a node excluded from the
+view raise `ValueError`.
+
+```python
+g = Graph([10, 20, 30, 40, 50, 60], [(10, 20), (20, 30), (40, 50)])
+
+g.connected_component(30)                            # {10, 20, 30}
+g.connected_component(60)                            # {60}
+g.without_edges([1]).connected_component(30)         # {30}
+```
+
+Measured on a graph whose nodes sit in components of five, so there are many
+components (`benchmarks/bench_single_component.py`, wall time of one call,
+`tracemalloc` peak of a second):
+
+| nodes | `connected_component` | all, then pick one | speedup | peak, one | peak, all |
+|---|---|---|---|---|---|
+| 200,000 | 1.9 ms | 15.0 ms | 7.7x | 0.76 MiB | 28.1 MiB |
+| 1,000,000 | 9.7 ms | 130.8 ms | 13.5x | 3.82 MiB | 140.4 MiB |
+
+The speedup is also the break-even count: each call repeats the O(n + m)
+union-find pass, so above roughly eight (200,000 nodes) or fourteen
+(1,000,000 nodes) components wanted from the same graph, one
+`connected_components()` call is cheaper than that many lookups.
+
 ### MultiGraph support
 
 pygraphc natively supports parallel edges (multigraphs). Each duplicate edge gets a unique index — no deduplication. All algorithms handle them correctly:

@@ -84,6 +84,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   — dead ends pruned into the folded material). The two maze
   cases share the cell geometry and the drawing parser through
   `tests/integration_tests/maze_geometry.py`.
+- `connected_component(node_id)` on `Graph` and `GraphView`: the connected
+  component containing one node, as a set of node ids, the single-component
+  counterpart of `connected_components()`. It reads the `component_labels`
+  kernel and materialises only the requested component, so on a graph of
+  1,000,000 nodes in components of five it costs 9.7 ms and 3.8 MiB against
+  130.8 ms and 140.4 MiB for building every component and picking one. Both
+  masks of a view are respected; an unknown node and a node excluded from the
+  view raise `ValueError`.
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 - `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx

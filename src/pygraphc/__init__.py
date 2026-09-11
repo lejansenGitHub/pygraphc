@@ -577,6 +577,46 @@ def _quotient_edge_views(
     )
 
 
+_EXCLUDED_LABEL = b"\xff\xff\xff\xff"
+"""Component label -1 of a node excluded from a view, as int32 bytes in either byte order."""
+
+
+def _connected_component_of(
+    graph: "Graph[NodeIdT, BranchIdT]",
+    node_id: NodeIdT,
+    excluded_edges: bytearray | None,
+    excluded_nodes: bytearray | None,
+) -> set[NodeIdT]:
+    """The connected component containing one node, without building any other component.
+
+    ``component_labels_ctx`` labels every node index with the smallest node
+    index of its component, so the members are exactly the node indices
+    carrying the requested node's label. Those labels are found by searching
+    the raw int32 bytes for the label's four bytes, which keeps the search for
+    the next member in C instead of comparing one label per node in Python; a
+    hit at an offset that is not a multiple of four straddles two neighbouring
+    labels and is skipped. The node itself is resolved by scanning the node
+    ids, so a lookup allocates nothing beyond the label buffer and the
+    returned set.
+    """
+    node_ids = graph._node_ids
+    try:
+        node_index = node_ids.index(node_id)
+    except ValueError:
+        raise ValueError(f"node {node_id} is not in the graph") from None  # noqa: TRY003 — the id is the whole message
+    labels: bytes = _component_labels_ctx(graph._ctx, excluded_edges, excluded_nodes)
+    label = labels[4 * node_index : 4 * node_index + 4]
+    if label == _EXCLUDED_LABEL:
+        raise ValueError(f"node {node_id} is excluded from this view")  # noqa: TRY003 — the id is the whole message
+    component: set[NodeId] = set()
+    position = labels.find(label)
+    while position >= 0:
+        if position % 4 == 0:
+            component.add(node_ids[position // 4])
+        position = labels.find(label, position + 1)
+    return component
+
+
 class Graph(Generic[NodeIdT, BranchIdT]):
     """Parsed graph that supports multiple algorithm calls without re-parsing.
 
@@ -930,6 +970,17 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         """Yield each connected component as a set of original node IDs."""
         self._require_undirected("connected_components")
         yield from _cc_ctx(self._ctx)
+
+    def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
+        """Return the connected component containing ``node_id`` as a set of node IDs.
+
+        The single-component counterpart of ``connected_components``: it
+        materialises only the requested component, so one component costs one
+        component instead of all of them. Raises ``ValueError`` if the node is
+        not in the graph.
+        """
+        self._require_undirected("connected_component")
+        return _connected_component_of(self, node_id, None, None)
 
     def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
         """Yield (node_id_set, branch_id_set) for each connected component.
@@ -1487,6 +1538,15 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         """Yield each connected component as a set of original node IDs."""
         self._require_undirected("connected_components")
         yield from _cc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+
+    def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
+        """Return the connected component containing ``node_id``, see ``Graph.connected_component``.
+
+        Excluded edges do not connect. A node excluded from the view belongs
+        to no component and raises ``ValueError``, as does an unknown node.
+        """
+        self._require_undirected("connected_component")
+        return _connected_component_of(self._graph, node_id, self._excluded_edges, self._excluded_nodes)
 
     def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
         """Yield (node_id_set, branch_id_set) for each connected component.
