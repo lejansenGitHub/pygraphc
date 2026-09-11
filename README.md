@@ -460,7 +460,7 @@ minimal_toggles(tree, {"p1": True, "p2": True}, target_closed=False)
 # frozenset({"p1", "p2"}): opening the residual edge needs both leaves
 ```
 
-`reduce(graph, terminals, protected=frozenset(), *, fold_leaves=True, order=None)`:
+`reduce(graph, terminals, protected=frozenset(), *, fold_leaves=True, order=None, engine="c")`:
 
 - Terminals and protected nodes must be nodes of the graph; unknown ids raise `ValueError`.
 - Components without a terminal are removed whole before any move.
@@ -503,6 +503,51 @@ recurse and are not suitable for deep trees.
 `lift(partition, attribute, combine)` combines node attributes per block in
 increasing node order, so a non-commutative `combine` still gives reproducible
 results. `Partition.compose(finer)` expresses a second quotient level.
+
+#### The reduction loop in C (`engine="c"`)
+
+The three moves run in the C tier and return a flat operation log; Python folds
+that log once into the `Leaf`/`Series`/`Parallel` trees and the `Reduced` above,
+so the payload algebra stays in Python and nothing about `reduce` changes.
+`engine="python"` selects the pure-Python worklist, which is the reference
+semantics of the moves and what a caller-supplied `order` selects, since the C
+work queue is fixed to increasing node index.
+
+On 20 000 nodes, 25 000 edges and 200 terminals: **0.022 s** for `engine="c"`,
+0.087 s for `engine="python"` and 0.146 s for a straightforward networkx
+implementation of the same three moves, so 6.7x networkx and 3.9x the Python
+engine. A million nodes with 1.25 million edges reduce in 3.3 s, of which
+0.29 s is the C loop over 1.75 million operations; the remaining nine tenths
+are the fold, which allocates one tree node per operation because the residual
+provenance trees are the kernel's output.
+
+`Graph.series_parallel_reduce(terminal_mask, protected_mask, *, fold_leaves=True)`
+exposes the loop on its own and returns a `ReductionLog` of twelve int32
+`memoryview`s. The two masks hold one byte per node index and mark membership by
+a non-zero byte; `GraphView` reduces under its own edge and node masks.
+
+```python
+graph = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3)])
+log = graph.series_parallel_reduce(bytes([1, 0, 0, 1]), bytes(4))
+
+log.op_kind.tolist()         # [0, 0, 0, 1, 1] — three leaves, then two series merges
+log.interior_node.tolist()   # [-1, -1, -1, 1, 2] — the nodes the series merges eliminated
+log.surviving_nodes.tolist() # [0, 3] — both terminals, joined by one virtual edge
+log.residual_op.tolist()     # [4] — that edge comes from the last operation
+```
+
+- Eight arrays hold one entry per operation in the order the moves apply:
+  `op_kind` (0 leaf, 1 series, 2 parallel, 3 pendant), `left` and `right`
+  (child operation ids, -1 when absent), `endpoint_u` and `endpoint_v` (the
+  oriented endpoints of the virtual edge the operation produces, -1 when it
+  produces none), `interior_node` (the node a series merge eliminated or a
+  pendant deletion removed), `leaf_edge_index` (the input edge index of a leaf)
+  and `absorber` (the neighbour a pendant payload moves to).
+- A parallel merge of more than two edges is a left-deep chain of binary
+  operations of which only the last carries endpoints, so the fold recognises
+  the earlier ones as links of one k-ary parallel node.
+- `residual_op`, `residual_u` and `residual_v` hold one entry per surviving edge
+  and `surviving_nodes` the surviving node indices in increasing order.
 
 #### Label kernels (the C tier under the reduction)
 

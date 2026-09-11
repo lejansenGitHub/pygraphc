@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import heapq
 from array import array
+from bisect import bisect_left
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -274,16 +275,16 @@ def lift(
 
 @dataclass(frozen=True)
 class Leaf(Generic[EdgeId]):
-    """An edge of the input graph."""
+    """An edge of the input graph.
+
+    Equality and hashing are the generated ones over the edge id. A leaf has
+    no children, so neither can recurse and there is nothing to cache: the
+    interior nodes below cache their hash because a structural one would walk
+    their subtree. One leaf exists per edge of the input, so this constructor
+    is the busiest in the module and stays as thin as the dataclass allows.
+    """
 
     edge_id: EdgeId
-    _hash: int = field(init=False, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "_hash", hash((Leaf, self.edge_id)))
-
-    def __hash__(self) -> int:
-        return self._hash
 
 
 @dataclass(frozen=True, eq=False, repr=False)
@@ -580,11 +581,6 @@ class _Reduction(Generic[EdgeId]):
         fold_leaves: bool,
         order: Sequence[int] | None,
     ) -> None:
-        node_set = set(graph.nodes)
-        unknown = sorted(node_id for node_id in {*terminals, *protected} if node_id not in node_set)
-        if unknown:
-            message = f"terminals and protected nodes must be nodes of the graph, unknown: {unknown}"
-            raise ValueError(message)
         self.graph = graph
         self.terminals = terminals
         self.protected = protected
@@ -599,7 +595,7 @@ class _Reduction(Generic[EdgeId]):
         self.folded_nodes: dict[int, list[int]] = {node_id: [] for node_id in graph.nodes}
         self.folded_interior: dict[int, list[int]] = {}
         self.dropped: list[tuple[int, SPTree[EdgeId]]] = []
-        self.alive = node_set
+        self.alive = set(graph.nodes)
         virtual_indices = (edge_id.index for edge_id in graph.endpoints if isinstance(edge_id, VirtualEdgeId))
         self.fresh = count(1 + max(virtual_indices, default=0))
         for edge_id in sorted(graph.endpoints, key=_order_key):
@@ -745,6 +741,179 @@ class _Reduction(Generic[EdgeId]):
         self.alive.discard(node_id)
 
 
+def _reduce_python(
+    graph: MultiGraph[EdgeId],
+    terminals: AbstractSet[int],
+    protected: AbstractSet[int],
+    *,
+    fold_leaves: bool,
+    order: Sequence[int] | None,
+) -> Reduced[EdgeId]:
+    """The worklist over candidate nodes, in Python. The reference semantics of ``reduce``."""
+    return _Reduction(graph, terminals, protected, fold_leaves=fold_leaves, order=order).run()
+
+
+_OPERATION_LEAF = 0
+_OPERATION_SERIES = 1
+_OPERATION_PARALLEL = 2
+_OPERATION_PENDANT = 3
+
+
+def _reduce_c(
+    graph: MultiGraph[EdgeId],
+    terminals: AbstractSet[int],
+    protected: AbstractSet[int],
+    *,
+    fold_leaves: bool,
+) -> Reduced[EdgeId]:
+    """The same reduction with the structural loop in C and the payload algebra folded here.
+
+    C receives the cached compressed sparse row graph plus a terminal and a
+    protected byte mask over node indices and returns a flat operation log;
+    the fold below turns that log into the very ``Leaf``/``Series``/
+    ``Parallel`` trees and the same bookkeeping the Python worklist builds.
+    """
+    kernel = graph._kernel
+    terminal_mask = bytearray(len(kernel.nodes))
+    protected_mask = bytearray(len(kernel.nodes))
+    for node_id in terminals:
+        terminal_mask[bisect_left(kernel.nodes, node_id)] = 1
+    for node_id in protected:
+        protected_mask[bisect_left(kernel.nodes, node_id)] = 1
+    log = kernel.graph.series_parallel_reduce(terminal_mask, protected_mask, fold_leaves=fold_leaves)
+    return _fold_operation_log(graph, kernel, log, fold_leaves=fold_leaves)
+
+
+def _fold_operation_log(
+    graph: MultiGraph[EdgeId],
+    kernel: _KernelGraph[EdgeId],
+    log: pygraphc.ReductionLog,
+    *,
+    fold_leaves: bool,
+) -> Reduced[EdgeId]:
+    """Build the provenance trees and the folded node material from one pass over the log.
+
+    Every leaf precedes every move, so the leaves are one comprehension and
+    the loop runs over the moves only. Moves come in the order the worklist
+    applies them, so replaying them reproduces ``folded_nodes``,
+    ``folded_interior`` and ``dropped`` exactly, and the virtual edge ids
+    handed to the series and parallel operations that produce an edge fall in
+    the order the worklist creates them.
+
+    A series operation carries the interior nodes of its subtree along, always
+    extending the longer of the two child lists, so a pendant move reads them
+    instead of walking its subtree and a chain of series moves stays linear.
+    """
+    nodes, edge_ids = kernel.nodes, kernel.edge_ids
+    kinds = log.op_kind.tolist()
+    leaf_edges = log.leaf_edge_index.tolist()
+    leaf_count = kinds.count(_OPERATION_LEAF)
+    trees: dict[int, SPTree[EdgeId]] = {
+        operation: Leaf(edge_ids[index]) for operation, index in enumerate(leaf_edges[:leaf_count])
+    }
+    moves = zip(
+        kinds[leaf_count:],
+        log.left[leaf_count:].tolist(),
+        log.right[leaf_count:].tolist(),
+        log.endpoint_u[leaf_count:].tolist(),
+        log.interior_node[leaf_count:].tolist(),
+        log.absorber[leaf_count:].tolist(),
+        strict=True,
+    )
+
+    chain_children: dict[int, list[SPTree[EdgeId]]] = {}
+    subtree_interior: dict[int, list[int]] = {}
+    virtual_id_of: dict[int, VirtualEdgeId] = {}
+    folded_nodes: dict[int, list[int]] = {}
+    folded_interior: dict[int, list[int]] = {}
+    dropped: list[tuple[int, SPTree[EdgeId]]] = []
+    highest = edge_ids[-1] if edge_ids else None
+    virtual_ids = count(1 + (highest.index if isinstance(highest, VirtualEdgeId) else 0))
+
+    for operation, (kind, first, second, endpoint, interior_index, absorber) in enumerate(moves, start=leaf_count):
+        if kind == _OPERATION_SERIES:
+            interior_node = nodes[interior_index]
+            trees[operation] = Series((trees[first], trees[second]), (interior_node,))
+            carried = _joined(subtree_interior.pop(first, None), subtree_interior.pop(second, None))
+            carried.append(interior_node)
+            subtree_interior[operation] = carried
+            folded_interior[interior_node] = folded_nodes.pop(interior_node, [])
+            virtual_id_of[operation] = VirtualEdgeId(next(virtual_ids))
+        elif kind == _OPERATION_PARALLEL:
+            partial = chain_children.pop(first, None)
+            children = [trees[first]] if partial is None else partial
+            children.append(trees[second])
+            subtree_interior[operation] = _joined(subtree_interior.pop(first, None), subtree_interior.pop(second, None))
+            if endpoint < 0:
+                chain_children[operation] = children
+            else:
+                trees[operation] = Parallel(frozenset(children))
+                virtual_id_of[operation] = VirtualEdgeId(next(virtual_ids))
+        else:
+            tree = trees[first]
+            removed_node, neighbour = nodes[interior_index], nodes[absorber]
+            dropped.append((neighbour, tree))
+            absorbed = [removed_node, *folded_nodes.pop(removed_node, ())]
+            for interior_node in sorted(subtree_interior.pop(first, ())):
+                absorbed.extend([interior_node, *folded_interior.pop(interior_node)])
+            if not fold_leaves:
+                continue
+            material = folded_nodes.get(neighbour)
+            if material is None:
+                folded_nodes[neighbour] = absorbed
+            else:
+                material.extend(absorbed)
+
+    residual, provenance = _residual_from_log(kernel, log, trees, virtual_id_of, leaf_edges, leaf_count)
+    kept = {node_id: folded_nodes.pop(node_id, []) for node_id in residual.nodes}
+    return Reduced(residual, provenance, kept, folded_interior, dropped)
+
+
+def _residual_from_log(
+    kernel: _KernelGraph[EdgeId],
+    log: pygraphc.ReductionLog,
+    trees: Mapping[int, SPTree[EdgeId]],
+    virtual_id_of: Mapping[int, VirtualEdgeId],
+    leaf_edges: Sequence[int],
+    leaf_count: int,
+) -> tuple[MultiGraph[EdgeId | VirtualEdgeId], dict[EdgeId | VirtualEdgeId, SPTree[EdgeId]]]:
+    """The surviving nodes and the endpoints and provenance tree of every surviving edge.
+
+    Surviving edges come in slot order, which is the order the worklist leaves
+    them in. An operation below ``leaf_count`` is a leaf and its edge keeps its
+    input edge id; every other surviving edge is one a move produced.
+    """
+    nodes, edge_ids = kernel.nodes, kernel.edge_ids
+    endpoints: dict[EdgeId | VirtualEdgeId, tuple[int, int]] = {}
+    provenance: dict[EdgeId | VirtualEdgeId, SPTree[EdgeId]] = {}
+    for operation, from_index, to_index in zip(
+        log.residual_op.tolist(), log.residual_u.tolist(), log.residual_v.tolist(), strict=True
+    ):
+        edge_id: EdgeId | VirtualEdgeId = (
+            edge_ids[leaf_edges[operation]] if operation < leaf_count else virtual_id_of[operation]
+        )
+        endpoints[edge_id] = (nodes[from_index], nodes[to_index])
+        provenance[edge_id] = trees[operation]
+    surviving = [nodes[index] for index in log.surviving_nodes.tolist()]
+    return MultiGraph(surviving, endpoints), provenance
+
+
+def _joined(first: list[int] | None, second: list[int] | None) -> list[int]:
+    """Union of two subtree interior node lists, extending the longer one so a chain stays linear.
+
+    Order does not matter: the pendant move that reads the list sorts it.
+    """
+    if first is None:
+        return [] if second is None else second
+    if second is None:
+        return first
+    if len(first) >= len(second):
+        first.extend(second)
+        return first
+    second.extend(first)
+    return second
+
+
 def reduce(
     graph: MultiGraph[EdgeId],
     terminals: AbstractSet[int],
@@ -752,6 +921,7 @@ def reduce(
     *,
     fold_leaves: bool = True,
     order: Sequence[int] | None = None,
+    engine: Literal["c", "python"] = "c",
 ) -> Reduced[EdgeId]:
     """Closure under the three simple reductions with a terminal set.
 
@@ -770,8 +940,21 @@ def reduce(
     order dependent. Terminals and protected nodes must be nodes of the
     graph. The residual of a reduction is a fixpoint: reducing it again with
     the same terminals and protected nodes changes nothing.
+
+    The ``"c"`` engine runs the structural loop in the C tier and folds its
+    operation log here; the ``"python"`` engine runs the worklist in Python.
+    Both produce the same ``Reduced``. A caller-supplied ``order`` is a
+    Python-engine feature and selects it whatever ``engine`` says, since the
+    C work queue is fixed to increasing node index.
     """
-    return _Reduction(graph, terminals, protected, fold_leaves=fold_leaves, order=order).run()
+    node_set = set(graph.nodes)
+    unknown = sorted(node_id for node_id in {*terminals, *protected} if node_id not in node_set)
+    if unknown:
+        message = f"terminals and protected nodes must be nodes of the graph, unknown: {unknown}"
+        raise ValueError(message)
+    if engine == "python" or order is not None:
+        return _reduce_python(graph, terminals, protected, fold_leaves=fold_leaves, order=order)
+    return _reduce_c(graph, terminals, protected, fold_leaves=fold_leaves)
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `int`, while parameters taking edge indices still accept any `int`. Id
   parameters accept any `Sequence`. `NodeIdT`, `BranchIdT` and `EdgeIndex` are
   exported; `NodeId` and `BranchId` stay as `int` aliases.
+- `series_parallel_reduce(terminal_mask, protected_mask, *, fold_leaves=True)`
+  on `Graph` and `GraphView`: the structural loop of the terminal-preserving
+  reduction in C, returning a `ReductionLog` of twelve int32 `memoryview`s.
+  Eight hold one entry per operation in move order (`op_kind` as leaf,
+  series, parallel or pendant, the two child operation ids, the oriented
+  endpoints of the virtual edge an operation produces, the eliminated or
+  removed node, the input edge index of a leaf and the neighbour a pendant
+  payload moves to); three hold the residual as operation id and both
+  endpoint node indices per surviving edge; one holds the surviving node
+  indices. A parallel merge of more than two edges is a left-deep chain of
+  binary operations of which only the last carries endpoints. The two masks
+  mark membership by a non-zero byte, one byte per node index.
+- `reduce(..., engine="c" | "python")` in `pygraphc.reduction`. The new
+  default `"c"` runs the loop above and folds its log into the same
+  `Leaf`/`Series`/`Parallel` trees and the same `Reduced`; `"python"` runs
+  the worklist, which stays the reference semantics and is what a
+  caller-supplied `order` selects. On 20 000 nodes, 25 000 edges and 200
+  terminals the C engine takes 0.022 s against 0.087 s for the Python engine
+  and 0.146 s for a straightforward networkx implementation of the same three
+  moves, so 6.7x networkx and 3.9x the Python engine, and it reduces a million
+  nodes with 1.25 million edges in 3.3 s, of which 0.29 s is the C loop and
+  the rest the fold that builds the trees.
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 - `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx
@@ -141,6 +163,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   shortest paths exist. `shortest_path_lengths`,
   `multi_source_shortest_path_lengths` and `eccentricity` keep using the
   single-source search.
+- `Leaf` in `pygraphc.reduction` no longer caches its hash. A leaf has no
+  children, so neither its equality nor its hash can recurse and the generated
+  ones over the edge id are enough; `Series` and `Parallel` keep their cached
+  structural hash. One leaf exists per input edge, which makes this the
+  reduction's busiest constructor and cuts about a seventh off the C engine's
+  time on 25 000 edges.
 - Rebuilds through `with_edges` and `split_node` keep every base edge at its
   original index, keep excluded edges masked, and append added edges and new
   nodes. Edge indices and branch ids of the base graph therefore stay valid on
