@@ -9,7 +9,7 @@ passage is shut. The maze here is the perfect maze of ``test_maze_solving``
 with three walls knocked out -- the same layout, braided -- so the two cases
 can be read side by side; the drawing is given in full in
 ``BRAIDED_MAZE_DRAWING`` and the cell graph comes from that drawing through
-``parse_maze`` of ``maze_grid``, the same parser the perfect maze uses, so
+``parse_maze`` of ``maze_geometry``, the same parser the perfect maze uses, so
 picture and graph cannot drift apart.
 
 What this case adds over the perfect maze: everything that only exists once a
@@ -23,10 +23,11 @@ loops and dead ends are handled together.
 """
 
 import pytest
-from maze_grid import COLUMNS, ROWS, cell_id, parse_maze, passage_id
+from maze_geometry import COLUMNS, ROWS, cell_id, parse_maze, passage_id
 
 from pygraphc.reduction import (
     MultiGraph,
+    Parallel,
     Partition,
     SPTree,
     leaves,
@@ -147,11 +148,27 @@ def dead_end_cells(maze: MultiGraph[str]) -> frozenset[int]:
     return frozenset(cell for cell, count in passage_count.items() if count == 1 and cell not in terminals)
 
 
-def route_tree(maze: MultiGraph[str]) -> SPTree[str]:
-    """Provenance tree of the single edge the braided maze reduces to between entrance and exit."""
-    solved = reduce(maze, terminals=frozenset({cell_id(ENTRANCE_CELL), cell_id(EXIT_CELL)}))
+def route_tree(
+    maze: MultiGraph[str],
+    from_cell: tuple[int, int] = ENTRANCE_CELL,
+    to_cell: tuple[int, int] = EXIT_CELL,
+) -> SPTree[str]:
+    """Provenance tree of the single edge the braided maze reduces to between two cells."""
+    solved = reduce(maze, terminals=frozenset({cell_id(from_cell), cell_id(to_cell)}))
     (residual_passage,) = solved.graph.endpoints
     return solved.provenance[residual_passage]
+
+
+def single_passage_cuts(maze: MultiGraph[str], from_cell: tuple[int, int], to_cell: tuple[int, int]) -> list[str]:
+    """Every passage that on its own separates the two cells, found by blocking each one in turn."""
+    from_id, to_id = cell_id(from_cell), cell_id(to_cell)
+    all_passages = frozenset(maze.endpoints)
+    separating = []
+    for passage in sorted(all_passages):
+        blocked = scenario(maze, active=all_passages, removed=frozenset({passage}))
+        if blocked.block_of[from_id] != blocked.block_of[to_id]:
+            separating.append(passage)
+    return separating
 
 
 def test_the_drawing_is_a_braided_maze_and_not_a_perfect_one() -> None:
@@ -295,7 +312,7 @@ def test_blocking_a_passage_on_a_loop_leaves_the_maze_solvable() -> None:
     assert len(scenario(maze, active=all_passages, removed=frozenset()).blocks()) == 1
 
 
-def test_the_cheapest_set_of_passages_that_makes_the_maze_unsolvable() -> None:
+def test_one_passage_is_enough_when_the_entrance_has_a_single_door() -> None:
     """The question a designer actually asks about a braided maze: how much
     walling up does it take to make it unsolvable -- one passage, or does the
     braiding force several? That is a minimal cut between entrance and exit, and
@@ -303,24 +320,30 @@ def test_the_cheapest_set_of_passages_that_makes_the_maze_unsolvable() -> None:
     provenance tree of the one surviving edge, with every passage starting out
     walkable and the target state the one where nothing gets through any more
     (the fold's flag is True when a piece of the maze lets a walker through, so
-    a walkable passage goes in as True and the target goes in as False). A
-    series step needs all of its passages, so the cheapest way to break one is
-    to break its cheapest single passage; a ring needs both of its sides broken,
-    so a ring costs two. Here the answer is one passage, (0, 0)-(0, 1): the
-    entrance cell S has exactly one door in the drawing, so walling that door up
-    traps the walker in S, and no set smaller than a single passage exists. That
-    is the honest lesson of this drawing -- three loops bought eight routes and
-    not one bit of robustness, because none of the loops is anywhere near the
-    entrance. It is also not the only cheapest answer: each of the thirty
-    passages that all eight routes share would do just as well, and
-    ``minimal_toggles`` returns one of them, the lowest-numbered, rather than
-    all thirty, so a designer who wants the full list of choke points has to
-    find it another way; the framework does not offer that. The test establishes
-    the answer and then checks it without using the reduction at all: blocking
-    exactly that set with ``scenario`` separates S from E, and blocking any
-    strict subset of it -- for a one-passage cut, only the empty set -- leaves
-    them connected. A reader can check it on the drawing by looking at the cell
-    marked S and counting its open sides.
+    a walkable passage goes in as True and the target goes in as False). Here
+    the answer is one passage, (0, 0)-(0, 1): the entrance cell S has exactly
+    one door in the drawing, so walling that door up traps the walker in S, and
+    no set smaller than a single passage exists. That is the honest lesson of
+    this drawing -- three loops bought eight routes and not one bit of
+    robustness, because none of the loops is anywhere near the entrance. It is
+    also not the only cheapest answer: each of the thirty passages that all
+    eight routes share would do just as well, and ``minimal_toggles`` returns
+    one of them, the lowest-numbered, rather than all thirty, so a designer who
+    wants the full list of choke points has to find it another way; the
+    framework does not offer that.
+
+    What this test does *not* establish is the parallel half of the fold. With
+    a one-door entrance a single passage is always the cheapest cut, so the
+    answer would be a one-element set whatever a ring cost, and the strict-subset
+    check below reduces to "the empty set does not separate". The claim that a
+    ring costs two is tested by
+    ``test_severing_a_route_through_a_ring_costs_two_passages`` instead, on a
+    terminal pair whose minimum cut really does have two members.
+
+    The test establishes the answer and then checks it without using the
+    reduction at all: blocking exactly that set with ``scenario`` separates S
+    from E. A reader can check it on the drawing by looking at the cell marked S
+    and counting its open sides.
     """
     # --- Input ---
     maze = parse_maze(BRAIDED_MAZE_DRAWING)
@@ -339,12 +362,76 @@ def test_the_cheapest_set_of_passages_that_makes_the_maze_unsolvable() -> None:
     # Checked independently of the reduction: that set does separate S from E.
     with_cut_blocked = scenario(maze, active=all_passages, removed=must_be_walled_up)
     assert with_cut_blocked.block_of[entrance] != with_cut_blocked.block_of[exit_cell]
-    # And nothing less does: every strict subset leaves them connected.
-    strict_subsets = [frozenset(must_be_walled_up - {left_out}) for left_out in must_be_walled_up]
-    assert strict_subsets == [frozenset()]
-    for subset in strict_subsets:
-        with_subset_blocked = scenario(maze, active=all_passages, removed=subset)
-        assert with_subset_blocked.block_of[entrance] == with_subset_blocked.block_of[exit_cell]
+    # Blocking nothing leaves them connected, which is the only strict subset a
+    # one-passage cut has -- so minimality is trivial here, not demonstrated.
+    with_nothing_blocked = scenario(maze, active=all_passages, removed=frozenset())
+    assert with_nothing_blocked.block_of[entrance] == with_nothing_blocked.block_of[exit_cell]
+
+
+# The top-left ring, the one closed by the braid passage (1, 2)-(1, 3). Taking
+# two diagonally opposite cells of it as the terminals puts one arc of the ring
+# on either side of every route between them, which is the situation the one-door
+# entrance never produces.
+RING_TERMINAL_CELLS = ((0, 3), (1, 2))
+RING_ARC_VIA_TOP_LEFT = (((0, 2), (0, 3)), ((0, 2), (1, 2)))
+RING_ARC_VIA_BOTTOM_RIGHT = (((0, 3), (1, 3)), ((1, 2), (1, 3)))
+
+
+def test_severing_a_route_through_a_ring_costs_two_passages() -> None:
+    """The half of the fold the entrance-to-exit cut cannot reach: what a ring
+    costs. A series step needs all of its passages, so the cheapest way to break
+    one is to break its cheapest single passage, and a one-passage answer is the
+    right answer whenever any single passage separates the two cells. A ring is
+    the other case -- a walker who loses one side of it simply goes round the
+    other -- so both sides have to be broken and the cheapest cut has two
+    members. The terminals here are (0, 3) and (1, 2), the two diagonally
+    opposite cells of the ring that the braid passage (1, 2)-(1, 3) closed in the
+    top left. Every way from one to the other runs round one arc of that ring or
+    the other, so no single passage anywhere in the maze separates them, and the
+    provenance ``reduce`` produces between them is a ``Parallel`` of the two
+    arcs. The test establishes that ``minimal_toggles`` answers with two
+    passages, one drawn from each arc, and it fails if the library ever answers
+    with one: the size is asserted directly, and independently of the reduction
+    every one of the hundred and two passages is blocked in turn with
+    ``scenario`` and none of them on its own separates the pair. Then the answer
+    itself is checked the same way -- blocking both does separate them, and
+    blocking either one alone does not. A reader can check it on the drawing by
+    finding the four open cells of the top-left ring and tracing the two ways
+    round it.
+    """
+    # --- Input ---
+    maze = parse_maze(BRAIDED_MAZE_DRAWING)
+    from_cell, to_cell = RING_TERMINAL_CELLS
+    from_id, to_id = cell_id(from_cell), cell_id(to_cell)
+    all_passages = frozenset(maze.endpoints)
+    tree = route_tree(maze, from_cell, to_cell)
+    every_passage_walkable = dict.fromkeys(leaves(tree), True)
+    must_be_walled_up = minimal_toggles(tree, every_passage_walkable, target_closed=False)
+
+    # --- Assert ---
+    # The reduced route between the two cells is the ring: two arcs side by side.
+    assert isinstance(tree, Parallel)
+    assert len(tree.children) == 2
+    # A ring costs two, and the library does not get away with saying one.
+    assert len(must_be_walled_up) == 2
+    # One passage from each arc -- breaking two of the same arc leaves the other open.
+    arc_via_top_left = {passage_id(*cells) for cells in RING_ARC_VIA_TOP_LEFT}
+    arc_via_bottom_right = {passage_id(*cells) for cells in RING_ARC_VIA_BOTTOM_RIGHT}
+    assert len(must_be_walled_up & arc_via_top_left) == 1
+    assert len(must_be_walled_up & arc_via_bottom_right) == 1
+    # The exact answer, ties broken by edge id order as the fold documents.
+    assert must_be_walled_up == frozenset({passage_id((0, 2), (1, 2)), passage_id((1, 2), (1, 3))})
+
+    # Checked without the reduction: no single passage in the whole maze separates
+    # the pair, so two really is the minimum and not an over-count.
+    assert single_passage_cuts(maze, from_cell, to_cell) == []
+    # And the pair the fold named does separate them.
+    with_cut_blocked = scenario(maze, active=all_passages, removed=must_be_walled_up)
+    assert with_cut_blocked.block_of[from_id] != with_cut_blocked.block_of[to_id]
+    # While each strict subset -- either passage on its own -- leaves them joined.
+    for left_out in must_be_walled_up:
+        with_subset_blocked = scenario(maze, active=all_passages, removed=must_be_walled_up - {left_out})
+        assert with_subset_blocked.block_of[from_id] == with_subset_blocked.block_of[to_id]
 
 
 def test_dead_ends_are_pruned_and_kept_in_the_folded_material() -> None:

@@ -80,9 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   edge, `paths`, `scenario`) and the same maze braided with three extra
   passages (the parallel move, `paths` returning eight routes, `scenario` on a
   passage that lies on a loop, `minimal_toggles` as the minimal cut that makes
-  the maze unsolvable, dead ends pruned into the folded material). The two maze
-  cases share the grid geometry and the drawing parser through
-  `tests/integration_tests/maze_grid.py`.
+  the maze unsolvable — one passage at the one-door entrance, two across a ring
+  — dead ends pruned into the folded material). The two maze
+  cases share the cell geometry and the drawing parser through
+  `tests/integration_tests/maze_geometry.py`.
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 - `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx

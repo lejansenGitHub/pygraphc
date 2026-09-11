@@ -1,6 +1,6 @@
-"""Grid geometry shared by the maze integration cases: cell ids, passage ids, and the drawing parser.
+"""Cell geometry shared by the maze integration cases: cell ids, passage ids, and the drawing parser.
 
-Both maze cases use the same ten by ten grid of cells and the same ASCII
+Both maze cases use the same ten by ten field of cells and the same ASCII
 convention for drawing it, so the parser lives here once instead of twice: the
 perfect maze of ``test_maze_solving`` and the braided maze of
 ``test_braided_maze`` are then guaranteed to be read the same way.

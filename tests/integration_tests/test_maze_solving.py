@@ -5,7 +5,7 @@ the standard ones about perfect mazes -- a maze with no loops and no closed-off
 cells, which is to say a spanning tree of its cells, so any two of them are
 joined by exactly one corridor. The maze used here is drawn in full in
 ``MAZE_DRAWING`` below and the cell graph is derived from that drawing by
-``parse_maze`` of ``maze_grid``, the grid geometry this case shares with the
+``parse_maze`` of ``maze_geometry``, the cell geometry this case shares with the
 braided maze of ``test_braided_maze``, so the picture and the graph cannot
 drift apart: a reader checks the picture, and the code cannot disagree with it.
 
@@ -17,7 +17,7 @@ series, and the one edge that survives carries the unique route.
 """
 
 import pytest
-from maze_grid import COLUMNS, ROWS, cell_id, parse_maze, passage_id
+from maze_geometry import COLUMNS, ROWS, cell_id, parse_maze, passage_id
 
 from pygraphc.reduction import Partition, leaves, paths, reduce, scenario, tree_records
 
