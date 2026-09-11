@@ -712,6 +712,12 @@ log = state.log()                    # the same ReductionLog as the loop above
 state.free()                         # the handle goes inert, not dangling
 ```
 
+The primitives write into raw arrays, so every index handed back is checked
+first: an edge must be live and run between the two distinct live nodes named,
+a series move must name two distinct edges, the members of a parallel merge
+must be live and in increasing slot order, and no move may remove a terminal.
+Anything else raises `ValueError` before a single array is written.
+
 On 20 000 nodes, 25 000 edges and 200 terminals: 0.022 s for `engine="c"`,
 **0.025 s** for `"moves"` and **0.023 s** for `"rounds"`; at a million nodes
 2.02 s, 2.19 s and 1.92 s. Only a tenth of a call is the structural work and

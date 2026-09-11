@@ -46,7 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   one flat int32 buffer and `apply_batch(kind, batch)` applies the whole
   buffer, `log()` reads the same `ReductionLog` the monolithic loop returns.
   The handle carries the graph it was built from and goes inert on `free()`,
-  so a released state raises `ValueError` instead of dangling.
+  so a released state raises `ValueError` instead of dangling. Every index a
+  caller hands back is validated before anything is written: an edge must be
+  live and run between the two distinct live nodes named, a series move must
+  name two distinct edges, and a pendant or series move must not name a
+  terminal.
 - `reduce(..., engine="moves" | "rounds")`: the reduction fixpoint driven
   from Python over those primitives, one boundary crossing per move and one
   per kind per round. The state survives every move, so no graph is rebuilt

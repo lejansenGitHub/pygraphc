@@ -4600,6 +4600,7 @@ typedef struct {
     Py_ssize_t op_capacity;
     int heap_size;
     int edge_slots;
+    Py_ssize_t edge_capacity;
 } SPState;
 
 static void sp_free(SPState *state) {
@@ -4640,6 +4641,7 @@ static int sp_alloc(SPState *state, int n, Py_ssize_t edge_capacity) {
         PyErr_NoMemory();
         return -1;
     }
+    state->edge_capacity = edge_capacity;
     for (size_t i = 0; i < nodes; i++) { state->node_head[i] = -1; state->loop_head[i] = -1; }
     return 0;
 }
@@ -4688,7 +4690,18 @@ static void sp_unlink(SPState *state, int edge) {
     state->edge_alive[edge] = 0;
 }
 
+/* A new virtual edge, or -1 with an exception set when the slots are spent.
+ *
+ * Every move that reduces the live edge count keeps ``edge_slots`` inside the
+ * allocation, so the bound holding is an invariant rather than a case to
+ * handle; it is checked anyway, because the array writes below are what a
+ * broken invariant would run past.
+ */
 static int sp_add_edge(SPState *state, int from_node, int to_node, int op) {
+    if (state->edge_slots >= state->edge_capacity) {
+        PyErr_SetString(PyExc_ValueError, "the reduction state has no edge slot left");
+        return -1;
+    }
     int edge = state->edge_slots++;
     state->edge_u[edge] = from_node;
     state->edge_v[edge] = to_node;
@@ -4758,8 +4771,7 @@ static int sp_merge_parallel(SPState *state, int from_node, int to_node, const i
         if (combined < 0) return -1;
     }
     for (int index = 0; index < count; index++) sp_unlink(state, members[index]);
-    sp_add_edge(state, from_node, to_node, combined);
-    return 0;
+    return sp_add_edge(state, from_node, to_node, combined) < 0 ? -1 : 0;
 }
 
 static int sp_compare_ints(const void *left, const void *right) {
@@ -5394,21 +5406,47 @@ static PyObject *py_sp_next_move(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-/* A live edge between two live nodes, or -1 with an exception set.
+/* A live edge between two distinct live nodes, or -1 with an exception set.
  *
  * Indices a caller hands back are checked before anything is written, so a
  * wrong one raises instead of corrupting the incidence structure or reading
- * past an array. The edge must run between exactly the two given nodes.
+ * past an array. The edge must run between exactly the two given nodes, and
+ * the two must differ: a self-loop is never linked into the incidence lists,
+ * so its half-edge slots hold nothing and unlinking one would read them.
  */
 static int sp_check_edge(SPHandle *handle, int edge, int node, int neighbour) {
     SPState *state = &handle->state;
     int n = handle->node_count;
-    if (node >= 0 && node < n && neighbour >= 0 && neighbour < n && edge >= 0 && edge < state->edge_slots
+    if (node != neighbour
+        && node >= 0 && node < n && neighbour >= 0 && neighbour < n && edge >= 0 && edge < state->edge_slots
         && state->edge_alive[edge] && state->node_alive[node]
         && ((state->edge_u[edge] == node && state->edge_v[edge] == neighbour)
             || (state->edge_v[edge] == node && state->edge_u[edge] == neighbour)))
         return 0;
     PyErr_SetString(PyExc_ValueError, "the move must name a live edge between two live nodes of the state");
+    return -1;
+}
+
+/* The two edges of a series move must be distinct, or -1 with an exception set.
+ *
+ * One edge named twice is unlinked twice and replaced by one new edge, which
+ * leaves the live edge count unchanged while consuming a slot, so a caller
+ * could repeat it until the slot allocation is spent.
+ */
+static int sp_check_distinct_edges(int edge_a, int edge_b) {
+    if (edge_a != edge_b) return 0;
+    PyErr_SetString(PyExc_ValueError, "a series move must name two distinct edges");
+    return -1;
+}
+
+/* The node a pendant or series move removes must not be a terminal.
+ *
+ * Terminals survive the reduction by contract and neither reporting
+ * primitive ever offers one, so a move naming one comes from the caller.
+ */
+static int sp_check_node_removable(SPHandle *handle, int node) {
+    if (node >= 0 && node < handle->node_count && !handle->terminal_mask[node]) return 0;
+    PyErr_SetString(PyExc_ValueError, "a pendant or series move must name a live non-terminal node");
     return -1;
 }
 
@@ -5454,6 +5492,8 @@ static PyObject *py_sp_apply_move(PyObject *self, PyObject *args) {
     SPState *state = &handle->state;
     if (sp_check_edge(handle, edge_a, node, neighbour_a) < 0) return NULL;
     if (kind == SP_OP_SERIES && sp_check_edge(handle, edge_b, node, neighbour_b) < 0) return NULL;
+    if (kind == SP_OP_SERIES && sp_check_distinct_edges(edge_a, edge_b) < 0) return NULL;
+    if (sp_check_node_removable(handle, node) < 0) return NULL;
     if (kind == SP_OP_PENDANT) {
         if (sp_apply_pendant(state, node, edge_a) < 0) return NULL;
         if (!handle->terminal_mask[neighbour_a]) sp_push(state, neighbour_a);
@@ -5663,6 +5703,8 @@ static PyObject *py_sp_apply_batch(PyObject *self, PyObject *args) {
             position += 5;
             status = sp_check_edge(handle, edge_a, node, neighbour_a);
             if (status == 0 && kind == SP_OP_SERIES) status = sp_check_edge(handle, edge_b, node, neighbour_b);
+            if (status == 0 && kind == SP_OP_SERIES) status = sp_check_distinct_edges(edge_a, edge_b);
+            if (status == 0) status = sp_check_node_removable(handle, node);
             if (status < 0) break;
             if (kind == SP_OP_PENDANT) {
                 status = sp_apply_pendant(state, node, edge_a);

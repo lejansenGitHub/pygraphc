@@ -15,6 +15,7 @@ case rather than leaving it to the differential test.
 """
 
 import random
+import struct
 from typing import Literal
 
 import pytest
@@ -281,3 +282,71 @@ def test_the_state_refuses_a_directed_graph() -> None:
     graph = pygraphc.Graph([0, 1], [(0, 1)], directed=True)
     with pytest.raises(TypeError, match="series_parallel_state is not defined for directed graphs"):
         graph.series_parallel_state(bytes(2), bytes(2))
+
+
+def test_a_move_naming_a_self_loop_is_refused() -> None:
+    """A self-loop is never linked into the incidence lists, so its two half-edge slots are never
+    written. Unlinking one would read them and write through whatever they happen to hold, so every
+    entry point must refuse a move whose node and neighbour coincide."""
+    graph = pygraphc.Graph([0, 1, 2], [(1, 1), (1, 1), (0, 1), (1, 2)])
+    loops = struct.pack("<2i", 0, 1)
+    with graph.series_parallel_state(bytes([1, 0, 1]), bytes(3)) as state:
+        # --- Assert ---
+        with pytest.raises(ValueError, match="live edge between two live nodes"):
+            state.apply_move((ReductionState.PENDANT, 1, 0, -1, 1, -1))
+        with pytest.raises(ValueError, match="live edge between two live nodes"):
+            state.apply_move((ReductionState.SERIES, 1, 0, 1, 1, 1))
+        with pytest.raises(ValueError, match="live edge between two live nodes"):
+            state.apply_batch(ReductionState.PENDANT, struct.pack("<5i", 1, 0, -1, 1, -1))
+        with pytest.raises(ValueError, match="live edge between two live nodes"):
+            state.apply_parallel(1, 1, loops)
+        with pytest.raises(ValueError, match="live edge between two live nodes"):
+            state.apply_batch(ReductionState.PARALLEL, struct.pack("<3i", 1, 1, 2) + loops)
+        # Nothing was written: the series move at node 1 is still the one that applies.
+        move = state.next_move()
+        assert move == (ReductionState.SERIES, 1, 2, 3, 0, 2)
+        assert state.apply_move(move) == (4, 0)
+        log = state.log()
+        assert log.surviving_nodes.tolist() == [0, 2]
+
+
+def test_a_series_move_naming_one_edge_twice_is_refused() -> None:
+    """One edge named twice is unlinked twice and replaced by one new edge, so the live edge count
+    does not fall while a slot is spent. Repeating that walks ``edge_slots`` past its allocation,
+    which is why both entry points must require the two edges to differ."""
+    graph = pygraphc.Graph([0, 1, 2], [(0, 1), (1, 2)])
+    with graph.series_parallel_state(bytes([1, 0, 1]), bytes(3)) as state:
+        # --- Assert ---
+        with pytest.raises(ValueError, match="two distinct edges"):
+            state.apply_move((ReductionState.SERIES, 1, 0, 0, 0, 0))
+        with pytest.raises(ValueError, match="two distinct edges"):
+            state.apply_batch(ReductionState.SERIES, struct.pack("<5i", 1, 0, 0, 0, 0))
+        # No slot was spent: the honest move still lands on the first virtual slot.
+        assert state.apply_move((ReductionState.SERIES, 1, 0, 1, 0, 2)) == (2, 0)
+
+
+def test_a_move_that_would_remove_a_terminal_is_refused() -> None:
+    """Terminals survive the reduction by contract and neither reporting primitive ever offers one,
+    so a pendant or series move naming a terminal node comes from the caller and must raise."""
+    graph = pygraphc.Graph([0, 1, 2], [(0, 1), (1, 2)])
+    with graph.series_parallel_state(bytes([1, 0, 1]), bytes(3)) as state:
+        # --- Assert ---
+        with pytest.raises(ValueError, match="live non-terminal node"):
+            state.apply_move((ReductionState.PENDANT, 0, 0, -1, 1, -1))
+        with pytest.raises(ValueError, match="live non-terminal node"):
+            state.apply_batch(ReductionState.PENDANT, struct.pack("<5i", 2, 1, -1, 1, -1))
+        assert state.apply_move(state.next_move()) == (2, 0)
+        log = state.log()
+        assert log.surviving_nodes.tolist() == [0, 2]
+
+
+def test_the_edges_of_a_parallel_merge_must_be_in_increasing_slot_order() -> None:
+    """Increasing order is what rules out unlinking one edge twice, and both reporting primitives
+    produce it, so a decreasing list is a caller defect."""
+    graph = pygraphc.Graph([0, 1, 2], [(0, 1), (0, 1), (1, 2)])
+    with graph.series_parallel_state(bytes([1, 0, 1]), bytes(3)) as state:
+        # --- Assert ---
+        with pytest.raises(ValueError, match="increasing slot order"):
+            state.apply_parallel(0, 1, struct.pack("<2i", 1, 0))
+        with pytest.raises(ValueError, match="increasing slot order"):
+            state.apply_parallel(0, 1, struct.pack("<2i", 0, 0))
