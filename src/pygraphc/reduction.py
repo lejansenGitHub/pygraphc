@@ -763,8 +763,6 @@ def _structural_log_c(
     kernel: _KernelGraph[EdgeId],
     terminals: AbstractSet[int],
     protected: AbstractSet[int],
-    *,
-    fold_leaves: bool,
 ) -> pygraphc.ReductionLog:
     """The structural half of the ``"c"`` engine: one crossing for the whole fixpoint loop.
 
@@ -779,7 +777,7 @@ def _structural_log_c(
         terminal_mask[bisect_left(kernel.nodes, node_id)] = 1
     for node_id in protected:
         protected_mask[bisect_left(kernel.nodes, node_id)] = 1
-    return kernel.graph.series_parallel_reduce(terminal_mask, protected_mask, fold_leaves=fold_leaves)
+    return kernel.graph.series_parallel_reduce(terminal_mask, protected_mask)
 
 
 def _reduce_c(
@@ -795,7 +793,7 @@ def _reduce_c(
     ``Parallel`` trees and the same bookkeeping the Python worklist builds.
     """
     kernel = graph._kernel
-    log = _structural_log_c(kernel, terminals, protected, fold_leaves=fold_leaves)
+    log = _structural_log_c(kernel, terminals, protected)
     return _fold_operation_log(graph, kernel, log, fold_leaves=fold_leaves)
 
 
@@ -942,7 +940,8 @@ def reduce(
 
     Components without a terminal are removed whole first. Pendant deletion
     removes a non-terminal with exactly one non-loop incidence and, with
-    ``fold_leaves``, records its material on the neighbour. Series merge
+    ``fold_leaves``, records its material on the neighbour; ``protected``
+    does not block that move, only the series and parallel merges. Series merge
     replaces a non-terminal, non-protected node with exactly two non-loop
     incidences to two distinct neighbours by one edge (loops do not count).
     Parallel merge replaces the edges between one endpoint pair, neither

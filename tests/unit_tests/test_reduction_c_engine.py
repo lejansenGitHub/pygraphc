@@ -213,3 +213,24 @@ def test_the_loop_refuses_a_directed_graph() -> None:
     graph = pygraphc.Graph([0, 1], [(0, 1)], directed=True)
     with pytest.raises(TypeError, match="series_parallel_reduce"):
         graph.series_parallel_reduce(bytes(2), bytes(2))
+
+
+def test_the_loop_refuses_a_missing_terminal_mask() -> None:
+    """With no terminal mask every component is terminal-free and the whole graph goes, which is
+    what no caller means by leaving the argument out. An all-zero mask still says it deliberately."""
+    graph = pygraphc.Graph([0, 1, 2], [(0, 1), (1, 2)])
+
+    with pytest.raises(TypeError, match="requires a terminal mask"):
+        graph.series_parallel_reduce(None, bytes(3))  # type: ignore[arg-type] — the runtime guard is the subject
+    with pytest.raises(TypeError, match="requires a terminal mask"):
+        graph.without_nodes([2]).series_parallel_reduce(None, bytes(3))  # type: ignore[arg-type] — same guard
+    assert graph.series_parallel_reduce(bytes(3), bytes(3)).surviving_nodes.tolist() == []
+
+
+def test_a_node_mask_is_a_buffer_and_not_a_list_of_node_ids() -> None:
+    """Both masks are read as buffers of one byte per node index, so the list that the earlier
+    ``Collection[int]`` annotation invited is a TypeError rather than a mask of two terminals."""
+    graph = pygraphc.Graph([0, 1, 2], [(0, 1), (1, 2)])
+
+    with pytest.raises(TypeError):
+        graph.series_parallel_reduce([0, 2], bytes(3))  # type: ignore[arg-type] — the runtime guard is the subject

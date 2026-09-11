@@ -4793,6 +4793,12 @@ static void sp_eliminate(SPState *state, int node) {
     state->node_alive[node] = 0;
 }
 
+/* Queue a node for another look, at most once.
+ *
+ * ``heap`` is sized for the node count and ``sp_push`` has no bound check, so
+ * the ``queued`` test is what keeps the heap in bounds, not just what keeps
+ * the work down. Python's worklist has no such test; matching it here would
+ * overflow the heap, not merely repeat work. */
 static void sp_push(SPState *state, int node) {
     if (state->queued[node]) return;
     state->queued[node] = 1;
@@ -5005,7 +5011,7 @@ static int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const
 }
 
 /* series_parallel_reduce_ctx(capsule, terminal_mask, protected_mask
- *                           [, edge_mask, node_mask, fold_leaves])
+ *                           [, edge_mask, node_mask])
  *     -> twelve int32 byte buffers
  *
  * ``terminal_mask`` and ``protected_mask`` hold one byte per node index and
@@ -5021,19 +5027,26 @@ static int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const
  * surviving edge in slot order: its operation id and its two endpoint node
  * indices. The last is the surviving node indices in increasing order.
  *
- * ``fold_leaves`` is accepted so that the call mirrors ``reduce``. The log
- * does not depend on it: it reports which neighbour absorbs a pendant
- * payload either way and the Python fold decides whether to apply it.
+ * A terminal mask of ``None`` is rejected: no terminal means every component
+ * is terminal-free and the whole graph goes. ``None`` for the other three is
+ * the neutral empty mask.
+ *
+ * There is no ``fold_leaves``: the log reports which neighbour absorbs a
+ * pendant payload either way and the Python fold decides whether to apply it.
  */
 static PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject *keywords) {
     static char *names[] = {"capsule", "terminal_mask", "protected_mask",
-                            "edge_mask", "node_mask", "fold_leaves", NULL};
+                            "edge_mask", "node_mask", NULL};
     PyObject *capsule, *terminal_obj, *protected_obj, *emask_obj = Py_None, *nmask_obj = Py_None;
-    int fold_leaves = 1;
-    if (!PyArg_ParseTupleAndKeywords(args, keywords, "OOO|OOp", names, &capsule, &terminal_obj,
-                                     &protected_obj, &emask_obj, &nmask_obj, &fold_leaves))
+    if (!PyArg_ParseTupleAndKeywords(args, keywords, "OOO|OO", names, &capsule, &terminal_obj,
+                                     &protected_obj, &emask_obj, &nmask_obj))
         return NULL;
-    (void)fold_leaves;
+    if (terminal_obj == Py_None) {
+        PyErr_SetString(PyExc_TypeError,
+                        "series_parallel_reduce requires a terminal mask: with no terminal every "
+                        "component is terminal-free and the whole graph is deleted");
+        return NULL;
+    }
     GraphCtx *graph = get_graphctx(capsule);
     if (!graph) return NULL;
     if (graph->directed) {
@@ -5058,15 +5071,14 @@ static PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, P
         release_mask(&edge_buf); release_mask(&protected_buf); release_mask(&terminal_buf); return NULL;
     }
     uint8_t *no_members = NULL;
-    if (!terminal_mask || !protected_mask) {
+    if (!protected_mask) {
         no_members = (uint8_t *)calloc((size_t)(n > 0 ? n : 1), 1);
         if (!no_members) {
             release_mask(&node_buf); release_mask(&edge_buf);
             release_mask(&protected_buf); release_mask(&terminal_buf);
             return PyErr_NoMemory();
         }
-        if (!terminal_mask) terminal_mask = no_members;
-        if (!protected_mask) protected_mask = no_members;
+        protected_mask = no_members;
     }
 
     /* Every virtual edge consumes at least two live edges and leaves one, so
@@ -5364,7 +5376,7 @@ static PyMethodDef methods[] = {
      "int32 biconnected component id per edge index; bridges are singleton components,\n"
      "masked edges, edges at excluded nodes and self-loops get -1."},
     {"series_parallel_reduce_ctx", (PyCFunction)py_series_parallel_reduce_ctx, METH_VARARGS | METH_KEYWORDS,
-     "series_parallel_reduce_ctx(capsule, terminal_mask, protected_mask[, edge_mask, node_mask, fold_leaves])\n"
+     "series_parallel_reduce_ctx(capsule, terminal_mask, protected_mask[, edge_mask, node_mask])\n"
      "    -> twelve int32 byte buffers\n\n"
      "Terminal-preserving series-parallel reduction as a flat operation log: op_kind, left, right,\n"
      "endpoint_u, endpoint_v, interior_node, leaf_edge_index and pendant_absorber per operation, then\n"

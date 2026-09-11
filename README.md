@@ -521,10 +521,15 @@ engine. A million nodes with 1.25 million edges reduce in 3.3 s, of which
 are the fold, which allocates one tree node per operation because the residual
 provenance trees are the kernel's output.
 
-`Graph.series_parallel_reduce(terminal_mask, protected_mask, *, fold_leaves=True)`
+`Graph.series_parallel_reduce(terminal_mask, protected_mask)`
 exposes the loop on its own and returns a `ReductionLog` of twelve int32
 `memoryview`s. The two masks hold one byte per node index and mark membership by
-a non-zero byte; `GraphView` reduces under its own edge and node masks.
+a non-zero byte, and are read as buffers, so a list of node ids is not a mask;
+`None` in place of the terminal mask raises `TypeError`, because a reduction
+without a terminal deletes every component. `GraphView` reduces under its own
+edge and node masks. There is no `fold_leaves` here: the log records which
+neighbour absorbs a pendant payload either way and `reduce` decides whether to
+apply it.
 
 ```python
 graph = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3)])

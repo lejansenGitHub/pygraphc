@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   parameters accept any `Sequence`. `NodeIdT`, `BranchIdT` and `EdgeIndex` are
   exported; `NodeId` and `BranchId` stay as `int` aliases.
 - `series_parallel_reduce(terminal_mask, protected_mask, *, fold_leaves=True)`
+- `series_parallel_reduce(terminal_mask, protected_mask)`
   on `Graph` and `GraphView`: the structural loop of the terminal-preserving
   reduction in C, returning a `ReductionLog` of twelve int32 `memoryview`s.
   Eight hold one entry per operation in move order (`op_kind` as leaf,
@@ -26,7 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   endpoint node indices per surviving edge; one holds the surviving node
   indices. A parallel merge of more than two edges is a left-deep chain of
   binary operations of which only the last carries endpoints. The two masks
-  mark membership by a non-zero byte, one byte per node index.
+  mark membership by a non-zero byte, one byte per node index, and are read as
+  buffers rather than iterated, so a list of node ids is not a mask. `None` in
+  place of the terminal mask raises `TypeError`: with no terminal every
+  component is terminal-free and the whole graph would be deleted.
 - `reduce(..., engine="c" | "python")` in `pygraphc.reduction`. The new
   default `"c"` runs the loop above and folds its log into the same
   `Leaf`/`Series`/`Parallel` trees and the same `Reduced`; `"python"` runs
