@@ -8,24 +8,53 @@ Edges use **original node IDs** — no manual index mapping needed. A C-side has
 
 ### vs networkx (graph algorithms)
 
-End-to-end from domain objects using split lists (gather + algorithm). Sparse random graphs, ~3 edges per node.
+Sparse random graphs, ~3 edges per node. Algorithm time only: node ids, edge
+lists and the networkx graph are built before the timer starts. Measured on an
+Apple M3 Pro (12 cores, macOS 26.6), CPython 3.11.11, networkx 3.6.1, best of 3
+runs after one warm-up. `tests/performance_tests/test_networkx_baselines.py`
+guards the connected-components rows from 10K up and every row of the second
+table: it asserts that pygraphc and networkx return the same result and that
+pygraphc is faster. The per-algorithm files in the same directory re-measure
+the remaining rows and print the ratio, but assert an absolute time limit
+rather than the ratio.
 
 | Algorithm | Nodes | pygraphc | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
-| Connected Components | 1K | 0.0001s | 0.001s | **17x** |
-| Connected Components | 10K | 0.001s | 0.011s | **21x** |
-| Connected Components | 100K | 0.011s | 0.313s | **29x** |
-| Connected Components | 1M | 0.150s | 6.83s | **46x** |
-| Bridges | 1M | 0.401s | 21.42s | **53x** |
-| Articulation Points | 1M | 0.350s | 8.97s | **26x** |
-| BFS | 1M | 0.165s | 13.62s | **82x** |
-| Dijkstra | 1M | 0.390s | 11.11s | **29x** |
-| Edge paths (cutoff=5) | 80 | 0.00005s | 0.006s | **~100x** |
-| SCC (directed) | 1M | 0.154s | 6.16s | **40x** |
-| WCC (directed) | 1M | 0.033s | 2.06s | **62x** |
-| Topological sort | 1M | 0.084s | 2.17s | **26x** |
-| DAG longest path | 1M | 0.175s | 5.66s | **32x** |
-| Cycle basis | 100K | 0.019s | 18.9s | **989x** |
+| Connected Components | 1K | 0.00007s | 0.0005s | **6.5x** |
+| Connected Components | 10K | 0.0004s | 0.003s | **6.0x** |
+| Connected Components | 100K | 0.004s | 0.061s | **14x** |
+| Connected Components | 1M | 0.059s | 1.15s | **20x** |
+| Bridges | 1M | 0.223s | 12.88s | **58x** |
+| Articulation Points | 1M | 0.204s | 3.55s | **17x** |
+| BFS | 1M | 0.073s | 6.94s | **95x** |
+| Dijkstra (single-source lengths) | 1M | 0.356s | 5.00s | **14x** |
+| Edge paths (cutoff=5) | 80 | 0.000001s | 0.0001s | **91x** |
+| SCC (directed) | 1M | 0.129s | 4.64s | **36x** |
+| WCC (directed) | 1M | 0.029s | 1.97s | **69x** |
+| Topological sort | 1M | 0.070s | 1.86s | **27x** |
+| DAG longest path | 1M | 0.090s | 4.49s | **50x** |
+| Cycle basis | 100K | 0.018s | 17.89s | **979x** |
+
+Further networkx baselines, same machine and discipline, from
+`tests/performance_tests/test_networkx_baselines.py`:
+
+| Algorithm | Nodes | pygraphc | networkx | Speedup |
+|-----------|------:|-------:|---------:|--------:|
+| Articulation Points | 100K | 0.007s | 0.153s | **21x** |
+| Biconnected Components | 100K | 0.015s | 0.276s | **18x** |
+| Multi-source Dijkstra lengths | 100K | 0.014s | 0.262s | **18x** |
+| Eccentricity (weighted) | 100K | 0.015s | 0.257s | **17x** |
+| Two-edge-connected components | 10K | 0.005s | 0.087s | **18x** |
+| `nodes_on_simple_paths` | 24 | 0.00001s | 0.008s | **677x** |
+| Connected Components, edge-masked view | 100K | 0.003s | 0.059s | **21x** |
+| Single-pair `shortest_path` vs `nx.dijkstra_path` | 100K | 0.009s | 0.198s | **23x** |
+| Single-pair `shortest_path` vs `nx.shortest_path` | 100K | 0.009s | 0.0014s | **0.16x — networkx is faster** |
+
+The last row is the one operation where networkx wins: for a single
+source-target pair `nx.shortest_path` dispatches to bidirectional Dijkstra and
+settles a small fraction of the nodes, while pygraphc runs one search from the
+source. Against the same one-directional algorithm (`nx.dijkstra_path`)
+pygraphc stays 23x ahead.
 
 ### vs pgmpy (DAG structure learning)
 
@@ -43,7 +72,7 @@ Hill-climb with K2 scoring on binary variables. Both produce identical DAGs.
 | 20 vars, 500 samples | 0.0005s | 0.192s | **~420x** |
 | 20 vars, 1000 samples | 0.0007s | 0.192s | **~290x** |
 
-**17x–900x faster** than the standard Python packages, with identical results. Zero construction overhead for directed graphs (forward + reverse CSR uses the same 2m memory as undirected).
+**6x–980x faster** than networkx and **~170x–900x faster** than pgmpy, with identical results — the one exception is single-pair `shortest_path`, noted above. Zero construction overhead for directed graphs (forward + reverse CSR uses the same 2m memory as undirected).
 
 ## Installation
 
@@ -587,6 +616,7 @@ Split lists is faster because building two flat lists avoids creating 1.5M tuple
 pip install -e ".[benchmark]"
 pip install networkx pgmpy
 pytest tests/performance_tests/ -v -s -k speedup
+pytest tests/performance_tests/test_networkx_baselines.py -v -s  # networkx baseline per operation
 python benchmarks/bench_all.py       # structured cost breakdown + topology scenarios
 python benchmarks/bench_dag_learn.py  # hill-climb K2: pygraphc vs pgmpy
 ```
@@ -597,3 +627,9 @@ python benchmarks/bench_dag_learn.py  # hill-climb K2: pygraphc vs pgmpy
 pip install -e ".[dev]"
 pytest tests/unit_tests/ -v
 ```
+
+`tests/performance_tests/test_networkx_baselines.py` holds one networkx
+baseline per graph operation, each asserting identical results and a speedup.
+It needs `networkx` installed and is skipped otherwise; it carries the
+`performance` marker like the other files there, so `-m "not performance"`
+excludes it.

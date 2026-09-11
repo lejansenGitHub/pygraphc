@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
+- `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx
+  baseline for every operation the other performance tests left uncovered:
+  `connected_components`, `articulation_points`, `biconnected_components`,
+  `shortest_path`, `multi_source_shortest_path_lengths`, `eccentricity`,
+  `two_edge_connected_components`, `nodes_on_simple_paths` and masked
+  connected components. Each test times both sides best-of-3, prints the
+  ratio, asserts identical results and asserts pygraphc is faster, so a fast
+  wrong answer fails too.
 
 ### Fixed
 - Weighted algorithms (`shortest_path`, `shortest_path_lengths`,
@@ -30,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Duplicate node ids raise `ValueError` instead of creating a phantom isolated node.
 
 ### Changed
+- README benchmark table re-measured on one machine with networkx 3.6.1 and
+  now states the hardware, the networkx version and the timing discipline.
+  Several speedups are lower than the previously published ones (connected
+  components at 1M: 20x, not 46x; articulation points at 1M: 17x, not 26x;
+  Dijkstra at 1M: 14x, not 29x). The table also records the one operation
+  where networkx is faster: for a single source-target pair `nx.shortest_path`
+  uses bidirectional Dijkstra and beats `shortest_path` by about 6x, while
+  against the one-directional `nx.dijkstra_path` pygraphc stays 23x ahead.
 - Rebuilds through `with_edges` and `split_node` keep every base edge at its
   original index, keep excluded edges masked, and append added edges and new
   nodes. Edge indices and branch ids of the base graph therefore stay valid on
