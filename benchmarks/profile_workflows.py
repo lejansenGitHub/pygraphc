@@ -487,7 +487,7 @@ def structural_log(
 ) -> pygraphc.ReductionLog:
     """The structural half of one log-producing engine, with none of the payload algebra in it."""
     if engine == "c":
-        return reduction._structural_log_c(kernel, terminals, frozenset(), fold_leaves=True)
+        return reduction._structural_log_c(kernel, terminals, frozenset())
     if engine == "moves":
         return reduction._structural_log_moves(kernel, terminals, frozenset())
     return reduction._structural_log_rounds(kernel, terminals, frozenset())
