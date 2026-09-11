@@ -492,7 +492,7 @@ def workflow_reduce_engine(timer: PhaseTimer, size: int, engine: str) -> str:
     engine interleaves those two, so its fold is recorded as zero rather than
     omitted and the four tables line up row by row.
     """
-    with timer.phase(PHASE_GENERATE):
+    with timer.phase(PHASE_GENERATE, setup=True):
         nodes, endpoints, terminals = engine_input(size)
     with timer.phase(PHASE_KERNEL):
         graph = reduction.MultiGraph(nodes, endpoints)
@@ -1163,6 +1163,13 @@ def phase_table_lines(by_engine: dict[str, Measurement]) -> list[str]:
         for engine in ENGINE_NAMES
     ]
     lines.append("| vs `c` | " + " | ".join(relative) + " |")
+    python_note = (
+        f"The `python` column is not phased like the other three: that engine interleaves the structural work "
+        f"and the fold, so its `{PHASE_STRUCTURAL}` cell holds both and its `{PHASE_FOLD}` cell is zero by "
+        f"construction rather than by measurement. Compare it against the sum of the two rows in the C-backed "
+        f"columns, never against `{PHASE_STRUCTURAL}` alone."
+    )
+    lines.extend(["", python_note])
     return lines
 
 
@@ -1271,9 +1278,16 @@ def fold_noise_floor(comparison: EngineComparison, size: int) -> float:
     """How far two identical fold workloads drift apart at this size, as a share of the fold.
 
     ``"moves"`` applies the moves in the monolith's order and hands the fold
-    the very same log, so the two fold phases do byte-identical work. What is
-    left between them is measurement noise, which is the only honest yardstick
-    for reading a difference between any two engines at the same size.
+    the very same log, so the two fold phases do byte-identical work and what
+    is left between them is measurement noise.
+
+    It is one paired difference of two best-of-N minima, not a distribution:
+    an estimate of the order of the noise, good enough to say that a few
+    percent between two engines is not a ranking, and not good enough to
+    quote as an interval. It is also measured on the fold phase, which is
+    several times the structural phase here, so it bounds a difference between
+    two folds and says nothing about a difference between two structural
+    phases; those are compared against the monolith's own warm call instead.
     """
     monolith = comparison.measurements[size]["c"].phase_seconds.get(PHASE_FOLD, 0.0)
     moves = comparison.measurements[size]["moves"].phase_seconds.get(PHASE_FOLD, 0.0)
@@ -1369,7 +1383,8 @@ def moves_verdict_lines(comparison: EngineComparison) -> list[str]:
         f"as a whole moves further ("
         + ", ".join(f"{cost * 100:+.1f}% at {size:,}" for size, cost in warm_costs.items())
         + "), and the extra is not boundary cost at all: `moves` and the monolith fold byte-identical logs, so "
-        "every difference in their fold phases is measurement noise, and the noise floor of that phase is "
+        "every difference in their fold phases is measurement noise, whose order — one paired difference of "
+        "two minima, not an interval — is "
         + ", ".join(f"±{fold_noise_floor(comparison, size) * 100:.1f}% at {size:,}" for size in ENGINE_COMPARISON_SIZES)
         + ". The 15 to 20 percent wall-time figure is therefore the right order of magnitude but reads the noise "
         "as signal: what `moves` demonstrably pays for its crossings is the structural delta, not the whole gap."
