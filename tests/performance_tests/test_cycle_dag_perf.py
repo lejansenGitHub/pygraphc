@@ -60,8 +60,14 @@ def test_cycle_basis_performance(exponent: int, time_limit_seconds: float) -> No
     assert elapsed < time_limit_seconds, f"cycle_basis took {elapsed:.3f}s, limit {time_limit_seconds}s"
 
 
-@pytest.mark.parametrize("exponent", [3, 4, 5, 6], ids=["1K", "10K", "100K", "1M"])
+@pytest.mark.parametrize("exponent", [3, 4, 5], ids=["1K", "10K", "100K"])
 def test_cycle_basis_speedup_vs_networkx(exponent: int) -> None:
+    """Stops at 100K because networkx's cycle_basis is quadratic on this generator.
+
+    It takes 1.13s at 25K nodes, 4.63s at 50K and 19.71s at 100K — x4.1 per doubling — which
+    puts 1M at tens of minutes per call, and this test calls it twice. The 1M size stays covered
+    by test_cycle_basis_performance, which measures pygraphc alone and calls no networkx.
+    """
     nx = pytest.importorskip("networkx")
 
     n = 10**exponent

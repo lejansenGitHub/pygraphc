@@ -28,6 +28,9 @@ dev = [
     "pytest-mock>=3.0",
     "pytest-cov>=6.0",
     "diff-cover>=9.0",
+    # networkx is the differential reference for the comparison tests; without it
+    # every one of them skips instead of comparing.
+    "networkx>=3.4",
     "ruff>=0.15",
     "mypy>=1.14",
     "pre-commit>=4.0",

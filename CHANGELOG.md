@@ -37,6 +37,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   request targets instead of always against `origin/main`. On a stacked pull
   request the hardcoded base measured the whole stack's diff and reported a
   number about work the pull request did not contain.
+- The `test` and `performance` matrices set `fail-fast: false`. A failure in one
+  matrix leg cancelled the rest, so legs that never finished were reported as
+  failures on results they had not produced.
+- The `performance` job reads its matrix from the contents of
+  `tests/performance_tests/` instead of a hand-written list of file names. The
+  list had fallen two files behind the directory, so `test_cycle_dag_perf.py`
+  and `test_directed_perf.py` had never run. A file now runs because it is
+  there. The matrix stays one job per file rather than one job for the whole
+  directory: on the last green run of this branch the parallel jobs finished in
+  about three minutes while their durations summed to about seven, so the
+  directory in one job would put roughly four extra minutes on the critical
+  path. Per-file jobs cost the slowest single file plus the few seconds the
+  listing job takes.
+- `networkx>=3.4` is part of the `dev` extra. Every comparison test in the
+  performance suite opens with `pytest.importorskip("networkx")`, so with no
+  extra providing it they all skipped and the comparison they exist for was
+  never made. They now run: the speedup measurements against networkx in the
+  BFS, bridges, Dijkstra, cycle/DAG and directed suites, and the path-count
+  equality assertion in `test_phase6_perf.py`, the one of them that gates a job.
+  `test_cycle_basis_speedup_vs_networkx` stops at 100K, because networkx's
+  `cycle_basis` is quadratic on that generator and the 1M point would cost tens
+  of minutes per call; `test_cycle_basis_performance` keeps 1M covered on the
+  pygraphc side, where no networkx call is involved.
 
 ### Changed
 - Rebuilds through `with_edges` and `split_node` keep every base edge at its
