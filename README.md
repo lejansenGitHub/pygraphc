@@ -496,7 +496,17 @@ unknown endpoints), edge ids are opaque hashable values that keep their identity
 every operation, and every result is deterministic by id order.
 
 ```python
-from pygraphc import MultiGraph, Parallel, Partition, minimal_toggles, paths, quotient, reduce, scenario
+from pygraphc import (
+    MultiGraph,
+    Parallel,
+    Partition,
+    PendantPolicy,
+    minimal_toggles,
+    paths,
+    quotient,
+    reduce,
+    scenario,
+)
 
 # Edges are identified by id, never by endpoint pair: parallel edges survive.
 graph = MultiGraph([1, 2, 3, 4], {"e1": (1, 2), "p1": (2, 3), "p2": (2, 3), "e2": (3, 4)})
@@ -526,25 +536,58 @@ isinstance(tree, Parallel)                              # True: Parallel({Leaf("
 paths(tree)                                             # {frozenset({"p1"}), frozenset({"p2"})}
 minimal_toggles(tree, {"p1": True, "p2": True}, target_closed=False)
 # frozenset({"p1", "p2"}): opening the residual edge needs both leaves
+
+# Per-node knobs. A keep action saves a pendant node, a series-ineligible node
+# is not merged away between its two neighbours.
+star = MultiGraph([0, 1, 2], {"a": (0, 1), "b": (0, 2)})
+reduce(star, terminals={0}, pendant=PendantPolicy("absorb", {2: "keep"})).graph.nodes
+# [0, 2]: node 1 folds into node 0, node 2 stays with its edge
+path = MultiGraph([0, 1, 2], {"a": (0, 1), "b": (1, 2)})
+reduce(path, terminals={0, 2}).graph.nodes                  # [0, 2]: node 1 merged in series
+reduce(path, terminals={0, 2}, series_ineligible={1}).graph.nodes
+# [0, 1, 2]: both input edges survive, node 1 keeps them apart
 ```
 
-`reduce(graph, terminals, protected=frozenset(), *, fold_leaves=True, order=None, engine="c")`:
+`reduce(graph, terminals, protected=frozenset(), *, pendant=None, series_ineligible=frozenset(), order=None, engine="c")`:
 
-- Terminals and protected nodes must be nodes of the graph; unknown ids raise `ValueError`.
-- Components without a terminal are removed whole before any move.
-- Terminals always survive. Protected nodes keep their incident edges unmerged
-  (no series merge at them, no parallel merge of edges touching them); they may
-  still be deleted as pendants.
+- Every node named in `terminals`, `protected`, `series_ineligible` or the pendant
+  policy's exceptions must be a node of the graph; unknown ids raise `ValueError`.
+- Components without a terminal are removed whole before any move, whatever the
+  pendant policy says: a component with no terminal carries no question.
+- Four per-node notions answer four different questions:
+
+  | node is | pendant move at it | series merge at it | parallel merge of its edges |
+  | --- | --- | --- | --- |
+  | a terminal | no | no | yes |
+  | `protected` | yes | no | no |
+  | in `series_ineligible` | yes | no | yes |
+  | a `keep` node of `pendant` | no | yes | yes |
+
+  So a terminal is the only notion that survives every move; `protected` is
+  `series_ineligible` plus the parallel block, and the two compose by union on
+  the series question; a `keep` node is not a terminal, since it may still be
+  merged away in series, and a protected node is not preserved, since it may
+  still be deleted as a pendant.
+- `pendant=PendantPolicy(default, exceptions)` decides per node what the pendant
+  move does: `"absorb"` hands the removed node's material to the neighbour,
+  `"discard"` drops it, `"keep"` leaves the node in the graph with its one
+  incidence. The action of a pendant move is the action of the node it removes,
+  so material absorbed into a node earlier is discarded with it if that node
+  discards. A default plus exceptions rather than a mapping over every node,
+  because the decision is uniform for most of a graph.
+- `fold_leaves=True | False` is the deprecated shorthand for a uniform `"absorb"`
+  or `"discard"` policy. Giving both it and `pendant` raises `ValueError`.
 - Self-loops take part in no move and leave with their node. Degree counts
   non-loop incidences, so a node with a loop and one further edge is a pendant,
   and a series merge needs exactly two non-loop incidences to two distinct neighbours.
-- With `fold_leaves`, every eliminated node appears exactly once in the output:
+- Under a uniform `"absorb"` policy, every eliminated node appears exactly once in the output:
   in `Reduced.folded_nodes` of a surviving node, as `Series.interior_nodes` of a
   residual tree, or in `Reduced.folded_interior` of such an interior node (the
   material folded into it before its series move). A pendant move passes the
   pendant node, its folded material and the interior nodes of the dropped edge's
-  tree with their folded material on to the neighbour. With `fold_leaves=False`
-  pendant material is dropped.
+  tree with their folded material on to the neighbour. A `"discard"` action drops
+  that material, a `"keep"` action leaves the node in the residual with its
+  `folded_nodes` entry.
 - Every pendant move also records `(neighbour, tree)` in `Reduced.dropped`, the
   provenance tree of the removed edge, so edge material merged before its attachment
   became pendant (a dead-end cycle returning to one node) stays available.
@@ -552,9 +595,16 @@ minimal_toggles(tree, {"p1": True, "p2": True}, target_closed=False)
   sort after every input edge id and start above any virtual id already present in
   the input, so a residual can be reduced again (with the same terminals it is a fixpoint).
 - Deterministic: candidates are processed in increasing node id (or in `order`),
-  ties among edges by id order. Without protected nodes the residual and the folded
-  material are the same for every order; a protected node can make them order
-  dependent, in which case the id order is the documented answer.
+  ties among edges by id order. With no protected node and no `keep` action the
+  residual and the folded material are the same for every order. A protected node
+  makes them order dependent through its parallel block, which can leave one of two
+  competing nodes inert; a `keep` action makes them order dependent because it
+  blocks the pendant move while leaving the series move that removes the node, so
+  whether the node is reached at degree one or at degree two decides its fate. In
+  both cases the id order is the documented answer. A series-ineligible node does
+  not make them order dependent: a node offers the pendant move at degree one and
+  the series move at degree two, never both, and degrees only fall, so removing the
+  series move leaves a degree-two node inert rather than creating a competing pair.
 
 Tree folds: `leaves(tree)`, `paths(tree, cutoff=None)` (series is the product,
 parallel the union, the cutoff prunes inside the product), `closed(tree, state)`
@@ -623,15 +673,17 @@ engine. A million nodes with 1.25 million edges reduce in 3.3 s, of which
 are the fold, which allocates one tree node per operation because the residual
 provenance trees are the kernel's output.
 
-`Graph.series_parallel_reduce(terminal_mask, protected_mask)`
-exposes the loop on its own and returns a `ReductionLog` of twelve int32
-`memoryview`s. The two masks hold one byte per node index and mark membership by
-a non-zero byte, and are read as buffers, so a list of node ids is not a mask;
-`None` in place of the terminal mask raises `TypeError`, because a reduction
-without a terminal deletes every component. `GraphView` reduces under its own
-edge and node masks. There is no `fold_leaves` here: the log records which
-neighbour absorbs a pendant payload either way and `reduce` decides whether to
-apply it.
+`Graph.series_parallel_reduce(terminal_mask, protected_mask, *,
+pendant_keep_mask=None, series_blocked_mask=None)` exposes the loop on its own and
+returns a `ReductionLog` of twelve int32 `memoryview`s. The four masks hold one byte
+per node index and mark membership by a non-zero byte, and are read as buffers, so a
+list of node ids is not a mask. A missing `protected_mask`, `pendant_keep_mask` or
+`series_blocked_mask` is the empty set; `None` in place of the terminal mask raises
+`TypeError`, because a reduction without a terminal deletes every component.
+`GraphView` reduces under its own edge and node masks. Only the structural half of
+the pendant policy is a mask: whether a removed pendant's material is absorbed or
+discarded changes no move, so the log reports the absorbing neighbour either way and
+`reduce` reads the action off the policy per removed node while folding the log.
 
 ```python
 graph = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3)])

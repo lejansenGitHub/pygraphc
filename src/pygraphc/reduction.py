@@ -39,6 +39,8 @@ __all__ = [
     "Parallel",
     "Partition",
     "Payload",
+    "PendantAction",
+    "PendantPolicy",
     "Reduced",
     "SPTree",
     "Series",
@@ -693,16 +695,54 @@ def _interior_nodes(tree: SPTree[EdgeId]) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
+PendantAction: TypeAlias = Literal["absorb", "discard", "keep"]
+
+_PENDANT_ACTIONS: frozenset[str] = frozenset({"absorb", "discard", "keep"})
+
+
+@dataclass(frozen=True)
+class PendantPolicy:
+    """What the pendant move does at a node: absorb its material, discard it, or leave the node alone.
+
+    ``absorb`` removes the pendant and hands its material to the neighbour,
+    ``discard`` removes it and drops the material, ``keep`` makes the node
+    ineligible for the pendant move so it survives with its one incidence. The
+    action of a pendant move is the action of the node it removes, so material
+    absorbed into a node earlier is discarded with it if that node discards.
+
+    A default plus exceptions, not a mapping over every node: the decision is
+    uniform for most of a graph and a caller reducing 20 000 nodes should name
+    the handful that differ, not build a dict of 20 000 entries. An exception
+    for a node that never becomes a pendant is harmless.
+    """
+
+    default: PendantAction = "absorb"
+    exceptions: Mapping[int, PendantAction] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _check_node_ids(self.exceptions.keys())
+        for action in (self.default, *self.exceptions.values()):
+            if action not in _PENDANT_ACTIONS:
+                message = f"pendant action must be one of {sorted(_PENDANT_ACTIONS)}, got {action!r}"
+                raise ValueError(message)
+
+    def action_at(self, node_id: int) -> PendantAction:
+        """The action at one node, the default where no exception names it."""
+        return self.exceptions.get(node_id, self.default)
+
+
 @dataclass(frozen=True)
 class Reduced(Generic[EdgeId]):
     """Residual multigraph, the provenance tree of every residual edge and the folded node material.
 
     ``folded_nodes`` holds, per surviving node, the pendant material folded
     into it. ``folded_interior`` holds, per node recorded in a series node of a
-    residual tree, the material folded into it before its series move. With
-    ``fold_leaves`` every eliminated node of a component with a terminal
-    appears exactly once: as a series interior node, in ``folded_nodes`` or in
-    ``folded_interior``. Without it pendant material is dropped.
+    residual tree, the material folded into it before its series move. Under a
+    uniform ``absorb`` policy every eliminated node of a component with a
+    terminal appears exactly once: as a series interior node, in
+    ``folded_nodes`` or in ``folded_interior``. A ``discard`` action drops the
+    material of the pendant it removes, a ``keep`` action leaves the node in
+    the residual and its ``folded_nodes`` entry with it.
 
     ``dropped`` lists, per pendant move in processing order, the neighbour the
     pendant hung on and the provenance tree of the removed edge, so edge
@@ -739,13 +779,15 @@ class _Reduction(Generic[EdgeId]):
         terminals: AbstractSet[int],
         protected: AbstractSet[int],
         *,
-        fold_leaves: bool,
+        pendant: PendantPolicy,
+        series_ineligible: AbstractSet[int],
         order: Sequence[int] | None,
     ) -> None:
         self.graph = graph
         self.terminals = terminals
         self.protected = protected
-        self.fold_leaves = fold_leaves
+        self.pendant = pendant
+        self.series_ineligible = series_ineligible
         self.rank: dict[int, int] = {} if order is None else {node_id: rank for rank, node_id in enumerate(order)}
         self.unranked = len(self.rank)
         self.endpoints: dict[EdgeId | VirtualEdgeId, tuple[int, int]] = {}
@@ -802,9 +844,11 @@ class _Reduction(Generic[EdgeId]):
         """Apply the pendant or series move at the node if one applies; return the nodes whose incidences changed."""
         incident = self.incident[node_id]
         if len(incident) == 1:
+            if self.pendant.action_at(node_id) == "keep":
+                return ()
             (edge_id,) = incident
             return (self._pendant(node_id, edge_id),)
-        if len(incident) == 2 and node_id not in self.protected:
+        if len(incident) == 2 and node_id not in self.protected and node_id not in self.series_ineligible:
             first, second = sorted(incident, key=_order_key)
             neighbour_first = _other_end(self.endpoints[first], node_id)
             neighbour_second = _other_end(self.endpoints[second], node_id)
@@ -813,11 +857,11 @@ class _Reduction(Generic[EdgeId]):
         return ()
 
     def _pendant(self, node_id: int, edge_id: EdgeId | VirtualEdgeId) -> int:
-        """Remove the pendant node and its edge; with folding, its material moves to the neighbour.
+        """Remove the pendant node and its edge; under ``absorb``, its material moves to the neighbour.
 
         The material is the node, what was folded into it, and every interior
         node of the removed edge's tree with what was folded into that. The
-        tree itself is reported in ``dropped``.
+        tree itself is reported in ``dropped`` whatever the action.
         """
         neighbour = _other_end(self.endpoints[edge_id], node_id)
         tree = self.provenance[edge_id]
@@ -827,7 +871,7 @@ class _Reduction(Generic[EdgeId]):
         absorbed = [node_id, *self.folded_nodes.pop(node_id)]
         for interior_node in interior:
             absorbed.extend([interior_node, *self.folded_interior.pop(interior_node)])
-        if self.fold_leaves:
+        if self.pendant.action_at(node_id) == "absorb":
             self.folded_nodes[neighbour].extend(absorbed)
         self._eliminate(node_id)
         return neighbour
@@ -907,11 +951,14 @@ def _reduce_python(
     terminals: AbstractSet[int],
     protected: AbstractSet[int],
     *,
-    fold_leaves: bool,
+    pendant: PendantPolicy,
+    series_ineligible: AbstractSet[int],
     order: Sequence[int] | None,
 ) -> Reduced[EdgeId]:
     """The worklist over candidate nodes, in Python. The reference semantics of ``reduce``."""
-    return _Reduction(graph, terminals, protected, fold_leaves=fold_leaves, order=order).run()
+    return _Reduction(
+        graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible, order=order
+    ).run()
 
 
 _OPERATION_LEAF = 0
@@ -924,21 +971,37 @@ def _structural_log_c(
     kernel: _KernelGraph[EdgeId],
     terminals: AbstractSet[int],
     protected: AbstractSet[int],
+    *,
+    pendant: PendantPolicy,
+    series_ineligible: AbstractSet[int],
 ) -> pygraphc.ReductionLog:
     """The structural half of the ``"c"`` engine: one crossing for the whole fixpoint loop.
 
-    C receives the cached compressed sparse row graph plus a terminal and a
-    protected byte mask over node indices and returns a flat operation log.
-    It is a function of its own so that the structural work and the fold over
-    its log can be called, and therefore measured, apart.
+    C receives the cached compressed sparse row graph plus four byte masks over
+    node indices and returns a flat operation log. It is a function of its own
+    so that the structural work and the fold over its log can be called, and
+    therefore measured, apart.
+
+    Only the structural half of the pendant policy reaches C, as the keep mask:
+    whether a removed pendant's material is absorbed or discarded changes no
+    move, so the fold reads that off the policy per removed node.
     """
-    terminal_mask = bytearray(len(kernel.nodes))
-    protected_mask = bytearray(len(kernel.nodes))
+    node_count = len(kernel.nodes)
+    terminal_mask = bytearray(node_count)
+    protected_mask = bytearray(node_count)
+    series_blocked_mask = bytearray(node_count)
+    keep_mask = bytearray(b"\x01" * node_count if pendant.default == "keep" else node_count)
     for node_id in terminals:
         terminal_mask[bisect_left(kernel.nodes, node_id)] = 1
     for node_id in protected:
         protected_mask[bisect_left(kernel.nodes, node_id)] = 1
-    return kernel.graph.series_parallel_reduce(terminal_mask, protected_mask)
+    for node_id in series_ineligible:
+        series_blocked_mask[bisect_left(kernel.nodes, node_id)] = 1
+    for node_id, action in pendant.exceptions.items():
+        keep_mask[bisect_left(kernel.nodes, node_id)] = 1 if action == "keep" else 0
+    return kernel.graph.series_parallel_reduce(
+        terminal_mask, protected_mask, pendant_keep_mask=keep_mask, series_blocked_mask=series_blocked_mask
+    )
 
 
 def _reduce_c(
@@ -946,7 +1009,8 @@ def _reduce_c(
     terminals: AbstractSet[int],
     protected: AbstractSet[int],
     *,
-    fold_leaves: bool,
+    pendant: PendantPolicy,
+    series_ineligible: AbstractSet[int],
 ) -> Reduced[EdgeId]:
     """The same reduction with the structural loop in C and the payload algebra folded here.
 
@@ -954,8 +1018,8 @@ def _reduce_c(
     ``Parallel`` trees and the same bookkeeping the Python worklist builds.
     """
     kernel = graph._kernel
-    log = _structural_log_c(kernel, terminals, protected)
-    return _fold_operation_log(graph, kernel, log, fold_leaves=fold_leaves)
+    log = _structural_log_c(kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible)
+    return _fold_operation_log(graph, kernel, log, pendant=pendant)
 
 
 def _fold_operation_log(
@@ -963,7 +1027,7 @@ def _fold_operation_log(
     kernel: _KernelGraph[EdgeId],
     log: pygraphc.ReductionLog,
     *,
-    fold_leaves: bool,
+    pendant: PendantPolicy,
 ) -> Reduced[EdgeId]:
     """Build the provenance trees and the folded node material from one pass over the log.
 
@@ -1030,7 +1094,7 @@ def _fold_operation_log(
             absorbed = [removed_node, *folded_nodes.pop(removed_node, ())]
             for interior_node in sorted(subtree_interior.pop(first, ())):
                 absorbed.extend([interior_node, *folded_interior.pop(interior_node)])
-            if not fold_leaves:
+            if pendant.action_at(removed_node) != "absorb":
                 continue
             material = folded_nodes.get(neighbour)
             if material is None:
@@ -1093,28 +1157,67 @@ def reduce(
     terminals: AbstractSet[int],
     protected: AbstractSet[int] = frozenset(),
     *,
-    fold_leaves: bool = True,
+    pendant: PendantPolicy | None = None,
+    series_ineligible: AbstractSet[int] = frozenset(),
+    fold_leaves: bool | None = None,
     order: Sequence[int] | None = None,
     engine: Literal["c", "python"] = "c",
 ) -> Reduced[EdgeId]:
     """Closure under the three simple reductions with a terminal set.
 
-    Components without a terminal are removed whole first. Pendant deletion
-    removes a non-terminal with exactly one non-loop incidence and, with
-    ``fold_leaves``, records its material on the neighbour; ``protected``
-    does not block that move, only the series and parallel merges. Series merge
-    replaces a non-terminal, non-protected node with exactly two non-loop
-    incidences to two distinct neighbours by one edge (loops do not count).
-    Parallel merge replaces the edges between one endpoint pair, neither
-    protected, by one edge. Self-loops take part in no move and leave with
-    their node.
+    Components without a terminal are removed whole first, before any move and
+    whatever the pendant policy says: a component with no terminal carries no
+    question, so nothing in it is kept. Pendant deletion removes a non-terminal
+    with exactly one non-loop incidence unless its ``pendant`` action is
+    ``keep``, and records its material on the neighbour if that action is
+    ``absorb``. Series merge replaces a non-terminal, non-protected,
+    series-eligible node with exactly two non-loop incidences to two distinct
+    neighbours by one edge (loops do not count). Parallel merge replaces the
+    edges between one endpoint pair, neither protected, by one edge. Self-loops
+    take part in no move and leave with their node.
+
+    Four per-node notions answer four different questions:
+
+    ======================  =======  =========  ======================
+    node is                 pendant  series     parallel at its edges
+    ======================  =======  =========  ======================
+    a terminal              no       no         yes
+    ``protected``           yes      no         no
+    ``series_ineligible``   yes      no         yes
+    ``pendant`` ``keep``    no       yes        yes
+    ======================  =======  =========  ======================
+
+    So a terminal is the only notion that both survives every move and keeps
+    its parallel edges mergeable; ``protected`` is ``series_ineligible`` plus
+    the parallel block, and the two compose by union on the series question; a
+    ``keep`` node is not a terminal, since it may still be merged away in
+    series, and a protected node is not preserved, since it may still be
+    deleted as a pendant.
+
+    ``pendant`` is a default action plus exceptions, see ``PendantPolicy``.
+    ``fold_leaves`` is the deprecated shorthand for a uniform policy
+    (``True`` is ``absorb``, ``False`` is ``discard``); giving both raises
+    ``ValueError``.
 
     Candidates are processed in increasing node id, or in the given ``order``
-    (unlisted nodes last). With no protected nodes the residual and the folded
-    material do not depend on that order; protected nodes can make them
-    order dependent. Terminals and protected nodes must be nodes of the
-    graph. The residual of a reduction is a fixpoint: reducing it again with
-    the same terminals and protected nodes changes nothing.
+    (unlisted nodes last). With no protected node and no ``keep`` action the
+    residual and the folded material do not depend on that order, and the id
+    order is the documented answer where they do.
+
+    A protected node makes them order dependent through its parallel block,
+    which can leave one of two competing nodes inert. A ``keep`` action makes
+    them order dependent because it blocks the move that fires at degree one
+    while leaving the series move that removes the node at degree two, so
+    whether the node is reached before or after a neighbour's move decides its
+    fate. A series-ineligible node does not: a node offers the pendant move at
+    degree one and the series move at degree two, never both, and degrees only
+    fall, so taking the series move away leaves a degree-two node inert instead
+    of creating a competing pair.
+
+    Every node named in ``terminals``, ``protected``, ``series_ineligible`` or
+    the policy's exceptions must be a node of the graph. The residual of a
+    reduction is a fixpoint: reducing it again with the same arguments changes
+    nothing.
 
     The ``"c"`` engine runs the structural loop in the C tier and folds its
     operation log here; the ``"python"`` engine runs the worklist in Python.
@@ -1122,14 +1225,25 @@ def reduce(
     Python-engine feature and selects it whatever ``engine`` says, since the
     C work queue is fixed to increasing node index.
     """
+    if pendant is not None and fold_leaves is not None:
+        message = "give either pendant or the deprecated fold_leaves, not both"
+        raise ValueError(message)
+    if pendant is None:
+        pendant = PendantPolicy("discard" if fold_leaves is False else "absorb")
     node_set = set(graph.nodes)
-    unknown = sorted(node_id for node_id in {*terminals, *protected} if node_id not in node_set)
+    named = {*terminals, *protected, *series_ineligible, *pendant.exceptions}
+    unknown = sorted(node_id for node_id in named if node_id not in node_set)
     if unknown:
-        message = f"terminals and protected nodes must be nodes of the graph, unknown: {unknown}"
+        message = (
+            "terminals, protected nodes, series-ineligible nodes and pendant policy exceptions "
+            f"must be nodes of the graph, unknown: {unknown}"
+        )
         raise ValueError(message)
     if engine == "python" or order is not None:
-        return _reduce_python(graph, terminals, protected, fold_leaves=fold_leaves, order=order)
-    return _reduce_c(graph, terminals, protected, fold_leaves=fold_leaves)
+        return _reduce_python(
+            graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible, order=order
+        )
+    return _reduce_c(graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible)
 
 
 # ---------------------------------------------------------------------------

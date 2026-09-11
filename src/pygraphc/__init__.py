@@ -57,6 +57,8 @@ from pygraphc.reduction import (
     MultiGraph,
     Parallel,
     Partition,
+    PendantAction,
+    PendantPolicy,
     Reduced,
     Series,
     SeriesStep,
@@ -89,6 +91,8 @@ __all__ = [
     "NodeMask",
     "Parallel",
     "Partition",
+    "PendantAction",
+    "PendantPolicy",
     "Reduced",
     "ReductionLog",
     "SPTree",
@@ -1101,20 +1105,33 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         result: bytes = _degrees_ctx(self._ctx)
         return memoryview(result).cast("i")
 
-    def series_parallel_reduce(self, terminal_mask: NodeMask, protected_mask: NodeMask) -> ReductionLog:
+    def series_parallel_reduce(
+        self,
+        terminal_mask: NodeMask,
+        protected_mask: NodeMask,
+        *,
+        pendant_keep_mask: NodeMask | None = None,
+        series_blocked_mask: NodeMask | None = None,
+    ) -> ReductionLog:
         """Terminal-preserving series-parallel reduction as a flat operation log.
 
         Pendant deletion, series merge and parallel merge are applied to a
         fixpoint in increasing node index, self-loops take part in no move
         and leave with their node, and components without a terminal go
-        whole before any move. The two masks hold one byte per node index and
-        mark membership by a non-zero byte; they are read as buffers, so a
-        list of node ids is not a mask. ``None`` in place of the terminal mask
-        raises ``TypeError``, because a reduction without a terminal deletes
-        every component. Undirected graphs only.
+        whole before any move. The four masks hold one byte per node index and
+        mark membership by a non-zero byte; they are read as buffers, so a list
+        of node ids is not a mask. A node in ``pendant_keep_mask`` takes no
+        pendant move, one in ``series_blocked_mask`` no series move (parallel
+        merges at it stay allowed, unlike ``protected_mask``). A missing
+        ``protected_mask``, ``pendant_keep_mask`` or ``series_blocked_mask`` is
+        the empty set; ``None`` in place of the terminal mask raises
+        ``TypeError``, because a reduction without a terminal deletes every
+        component. Undirected graphs only.
         """
         self._require_undirected("series_parallel_reduce")
-        raw: tuple[bytes, ...] = _series_parallel_reduce_ctx(self._ctx, terminal_mask, protected_mask, None, None)
+        raw: tuple[bytes, ...] = _series_parallel_reduce_ctx(
+            self._ctx, terminal_mask, protected_mask, None, None, pendant_keep_mask, series_blocked_mask
+        )
         return ReductionLog.from_buffers(raw)
 
     def bcc_edge_labels(self) -> memoryview:
@@ -1647,7 +1664,14 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         """Split the unmasked edges by endpoint label, see ``Graph.quotient_edges``; excluded edges are skipped."""
         return _quotient_edge_views(_quotient_edges_ctx(self._graph._ctx, labels, self._excluded_edges))
 
-    def series_parallel_reduce(self, terminal_mask: NodeMask, protected_mask: NodeMask) -> ReductionLog:
+    def series_parallel_reduce(
+        self,
+        terminal_mask: NodeMask,
+        protected_mask: NodeMask,
+        *,
+        pendant_keep_mask: NodeMask | None = None,
+        series_blocked_mask: NodeMask | None = None,
+    ) -> ReductionLog:
         """Reduce under the view's masks, see ``Graph.series_parallel_reduce``; excluded nodes and edges never move."""
         self._require_undirected("series_parallel_reduce")
         raw: tuple[bytes, ...] = _series_parallel_reduce_ctx(
@@ -1656,6 +1680,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             protected_mask,
             self._excluded_edges,
             self._excluded_nodes,
+            pendant_keep_mask,
+            series_blocked_mask,
         )
         return ReductionLog.from_buffers(raw)
 
