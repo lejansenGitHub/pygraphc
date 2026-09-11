@@ -184,10 +184,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   generation, which is a third to nine tenths of these workflows at any size —
   and the absolute per-phase gate is what covers the C kernels, which are single
   digit percentages of their workflows and which a share can only catch once
-  they are an order of magnitude slower. An absolute gate never fails on one
-  run: a workflow that trips is measured again and only what survives the
-  fastest of three fresh runs is reported. The baseline records the machine,
-  interpreter, date and revision it came from. A CI job runs the harness at the
+  they are an order of magnitude slower. No gate fails on one run: a workflow
+  that trips is measured again and only what survives the fastest of three
+  fresh runs is reported, which the share gate needs as much as the absolute
+  ones because the harness reports the phases of the round with the best total.
+  The baseline records the machine, interpreter, date and the revision the tree
+  was at when the numbers were taken. A CI job runs the harness at the
   small sizes and uploads `profiles/` as an artifact without gating a merge.
 
 ### Fixed

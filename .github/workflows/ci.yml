@@ -116,8 +116,8 @@ jobs:
     runs-on: ubuntu-latest
     # Off the critical path on purpose: the uploaded artifact is the point, the
     # timing on a shared runner is not, so this job never gates a merge. The
-    # guard against a phase taking over a workflow lives in the unit suite,
-    # where it compares shares against benchmarks/baseline.json.
+    # guard lives in the unit suite, where it compares both phase shares and
+    # absolute phase times against benchmarks/baseline.json.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

@@ -9,13 +9,13 @@ margin below is wide enough that machine-to-machine variation and CI noise
 cannot reach it, and each one says what it can and cannot catch.
 
 **Shares are taken over the library time, not the workflow total.** Each
-workflow generates its own random inputs, and that generation is between a
-third and nine tenths of the wall time at any size — 87% of
-``connected_components`` at 5,000 nodes and 79% at 200,000, so it does not
-scale away and raising the guard sizes would not change a single share. Shares
-of the total would therefore be mostly statements about ``random``; the harness
-reports shares of the total without the generation phases, and this file
-compares those.
+workflow generates its own random inputs, and at the guard sizes that
+generation is 14% of one workflow and between a third and nine tenths of the
+other eight — 87% of ``connected_components`` at 5,000 nodes and still 79% at
+200,000, so it does not scale away and raising the guard sizes would not change
+a single share. Shares of the total would therefore be mostly statements about
+``random``; the harness reports shares of the total without the generation
+phases, and this file compares those.
 
 **What the share test can catch.** A phase that grows takes share from every
 other phase, so the multiple needed to move it by ``SHARE_MARGIN`` depends on
@@ -23,7 +23,10 @@ where it started. Solving for it, a phase at library share ``s`` fires when it
 becomes ``k`` times slower:
 
     s      0.50   0.30   0.10   0.05   0.02   0.01
-    k       2.3    2.3    3.9    6.3     14     26
+    k       2.4    2.4    3.9    6.4   14.0   26.4
+
+(the exact thresholds are 2.34, 2.34, 3.86, 6.34, 13.8 and 26.3; the row above
+is rounded up to a multiple that fires)
 
 and above a share of 0.80 it can never fire by growing, because there are not
 20 points left to gain. Sharpest in the middle, blunt at both ends, which is
@@ -34,21 +37,27 @@ bridge kernel 4.9% — so the share test would need a sixfold to an eighteenfold
 regression in them before saying anything.
 
 **What the absolute test can catch.** ``PHASE_MULTIPLE`` on the phase itself,
-which is an order-of-magnitude regression in any library phase above
-``PHASE_FLOOR_SECONDS`` whatever its share, and that is the gate that covers
-the kernels. The guard sizes of ``graph_build``, ``framework_pipeline``,
-``reduction_log`` and ``structural_queries`` are chosen to keep their kernels
-above the floor; the phases still below it are a handful of microseconds of
-Python bookkeeping and stay unguarded, namely ``path_enumeration``'s graph
+in any library phase above ``PHASE_FLOOR_SECONDS`` whatever its share, and that
+is the gate that covers the kernels. An injected tenfold regression in the
+label, degree and bridge kernels fails it every time; in the C reduction loop,
+a phase of about 100 microseconds, ten times fails about two runs in three and
+twelve times fails every run, because both sides of the comparison are minima
+and a minimum of a slowed phase drifts down towards the gate. The guard sizes
+of ``graph_build``, ``framework_pipeline``, ``reduction_log`` and
+``structural_queries`` are chosen to keep their kernels above the floor; the
+phases still below it are a handful of microseconds of Python bookkeeping and
+stay unguarded, namely ``path_enumeration``'s graph
 construction and release, ``dag_structure_learning``'s CPD estimate and
 release, and ``reduction_log``'s reduction-graph build and log scan.
 
-Absolute times, unlike shares, are the part a shared runner can move, so
-neither absolute gate fails on a single run: a workflow that trips is measured
-again and only what survives the fastest of ``CONFIRMATION_ROUNDS`` fresh runs
-is reported. One phase of one round was measured at eleven times its baseline
-on a machine deliberately oversubscribed by a third, and no phase came close to
-the gate twice.
+**No gate fails on a single run.** A workflow that trips is measured again and
+only what survives the fastest of ``CONFIRMATION_ROUNDS`` fresh runs is
+reported. Absolute times are the obvious reason — one phase of one round was
+measured at eleven times its baseline on a machine oversubscribed by a third —
+but shares need it just as much, for a subtler reason: the harness reports the
+phases of the round with the best *total*, so one stall inside one phase of
+that round skews every share in that workflow. Without confirmation the share
+test failed ten runs in twenty under that load; with it, none in twenty.
 
 Run the harness yourself to see the numbers::
 
@@ -69,13 +78,13 @@ HARNESS_PATH = REPOSITORY_ROOT / "benchmarks" / "profile_workflows.py"
 BASELINE_PATH = REPOSITORY_ROOT / "benchmarks" / "baseline.json"
 
 # A phase's share of its workflow's library time may move by this many percentage
-# points. Shares are ratios, so a uniformly slower machine does not move them at
-# all; what does move them is a phase that scales differently from the rest
-# (memory bandwidth against branch prediction, a different allocator, a GC pause
-# landing in one phase). Measured drift between this laptop and a CI runner is a
-# few points. 20 points still catches a phase that doubles out of half the
-# library time, which is the leak this guard is for; the table in the module
-# docstring says what it costs at the other shares.
+# points. Shares are ratios, so a machine that is uniformly slower does not move
+# them; what moves them is a phase that scales differently from the rest (memory
+# bandwidth against branch prediction, a different allocator, a GC pause landing
+# in one phase) and, measured rather than assumed, a single preempted round —
+# see the confirmation pass on the share test. 20 points still catches a phase
+# that doubles out of half the library time, which is the leak this guard is
+# for; the table in the module docstring says what it costs at other shares.
 SHARE_MARGIN = 0.20
 
 # A phase is compared only when it is at least this share of its workflow's
@@ -107,13 +116,14 @@ PHASE_FLOOR_SECONDS = 50e-6
 
 # The phases of a workflow must account for at least this share of the wall time
 # measured around the whole body. The harness attributes even the teardown of a
-# workflow's own inputs to a phase, so the baseline reports 98.5% at worst and
-# 99.6% or better on all but the two smallest workflows; the remainder is the
-# result string and the frame teardown of a few small locals. This floor
-# therefore only notices unphased work above about four percent of a workflow,
-# which is enough to catch a whole step left uninstrumented — the failure that
-# would make the table a lie about where the time goes — and not enough to
-# notice a stray line or two.
+# workflow's own inputs to a phase, so the baseline reports 98.44% at worst
+# (`structural_queries`) and 99.4% or better on six of the nine; the remainder
+# is the result string and the frame teardown of a few small locals. Observed
+# over fifteen runs the worst goes to 97.9%, so this floor has about three
+# points of room and only notices unphased work above roughly that — enough to
+# catch a whole step left uninstrumented, which is the failure that would make
+# the table a lie about where the time goes, and not enough to notice a stray
+# line or two.
 MINIMUM_ACCOUNTED_SHARE = 0.95
 
 
@@ -162,73 +172,26 @@ def share_guard_fires(baseline_share: float, multiple: float) -> bool:
     return abs(new_share - baseline_share) > SHARE_MARGIN
 
 
-def test_baseline_covers_every_workflow_and_phase(
-    harness: ModuleType,
+def library_shares_of(setup_phases: set[str], phase_seconds: dict[str, float]) -> dict[str, float]:
+    """Each library phase's share of the library time, from one set of phase timings."""
+    library = {name: seconds for name, seconds in phase_seconds.items() if name not in setup_phases}
+    total = sum(library.values())
+    if total <= 0.0:
+        return dict.fromkeys(library, 0.0)
+    return {name: seconds / total for name, seconds in library.items()}
+
+
+def share_problems(
     baseline: dict[str, Any],
-    measurements: list[Any],
-) -> None:
-    """A new workflow or a renamed phase needs a regenerated baseline, not a silent pass."""
-    baselined = baseline["workflows"]
-    problems = [
-        f"{measurement.name}: no baseline, regenerate with --size guard --write-baseline"
-        for measurement in measurements
-        if measurement.name not in baselined
-    ]
-    for measurement in measurements:
-        entry = baselined.get(measurement.name)
-        if entry is None:
-            continue
-        new_phases = [name for name in measurement.phase_seconds if name not in entry["phase_seconds"]]
-        gone_phases = [name for name in entry["phase_seconds"] if name not in measurement.phase_seconds]
-        if new_phases or gone_phases:
-            problems.append(f"{measurement.name}: phases added {new_phases}, phases gone {gone_phases}")
-        if sorted(measurement.setup_phases) != entry["setup_phases"]:
-            problems.append(
-                f"{measurement.name}: setup phases are {sorted(measurement.setup_phases)}, "
-                f"baseline has {entry['setup_phases']} — every share below is relative to the rest"
-            )
-        if measurement.size != entry["size"]:
-            problems.append(f"{measurement.name}: guard size {measurement.size}, baseline {entry['size']}")
-    stale = [name for name in baselined if name not in {measurement.name for measurement in measurements}]
-    if stale:
-        problems.append(f"baseline holds workflows the registry no longer has: {stale}")
-    # --- Assert ---
-    assert not problems, report(harness, measurements, problems)
-
-
-def test_phases_account_for_the_measured_total(harness: ModuleType, measurements: list[Any]) -> None:
-    """Self-consistency: the phases must add up to the wall time of the workflow.
-
-    Without this the table could attribute a tenth of a workflow and stay
-    silent about the rest, which is exactly the failure it exists to prevent.
-    """
-    problems = [
-        f"{measurement.name}: phases account for {measurement.accounted_share * 100:.1f}% of "
-        f"{measurement.total_seconds:.4f}s, below {MINIMUM_ACCOUNTED_SHARE * 100:.0f}%"
-        for measurement in measurements
-        if measurement.accounted_share < MINIMUM_ACCOUNTED_SHARE
-    ]
-    problems.extend(
-        f"{measurement.name}: phases sum to more than the total ({measurement.accounted_share * 100:.1f}%)"
-        for measurement in measurements
-        if measurement.accounted_share > 1.0
-    )
-    # --- Assert ---
-    assert not problems, report(harness, measurements, problems)
-
-
-def test_phase_shares_stay_near_the_baseline(
-    harness: ModuleType,
-    baseline: dict[str, Any],
-    measurements: list[Any],
-) -> None:
-    """A phase taking over its workflow is the leak this guard is for."""
+    seconds_by_workflow: dict[str, dict[str, float]],
+) -> list[tuple[str, str]]:
+    """Phases whose share of the library time has drifted past ``SHARE_MARGIN``."""
     problems = []
-    for measurement in measurements:
-        entry = baseline["workflows"].get(measurement.name)
+    for name, phase_seconds in seconds_by_workflow.items():
+        entry = baseline["workflows"].get(name)
         if entry is None:
             continue
-        shares = measurement.library_shares
+        shares = library_shares_of(set(entry["setup_phases"]), phase_seconds)
         for phase_name, baseline_share in entry["library_shares"].items():
             if phase_name not in shares:
                 continue
@@ -236,12 +199,14 @@ def test_phase_shares_stay_near_the_baseline(
                 continue
             drift = shares[phase_name] - baseline_share
             if abs(drift) > SHARE_MARGIN:
-                problems.append(
-                    f"{measurement.name} / {phase_name}: {shares[phase_name] * 100:.1f}% of the library time, "
-                    f"baseline {baseline_share * 100:.1f}%, drift {drift * 100:+.1f} points"
-                )
-    # --- Assert ---
-    assert not problems, report(harness, measurements, problems)
+                problems.append((
+                    name,
+                    (
+                        f"{name} / {phase_name}: {shares[phase_name] * 100:.1f}% of the library time, "
+                        f"baseline {baseline_share * 100:.1f}%, drift {drift * 100:+.1f} points"
+                    ),
+                ))
+    return problems
 
 
 def library_time_problems(
@@ -319,6 +284,83 @@ def fastest_phase_seconds(harness: ModuleType, names: set[str]) -> dict[str, dic
             for phase_name, seconds in measurement.phase_seconds.items():
                 phases[phase_name] = min(phases[phase_name], seconds)
     return fastest
+
+
+def test_baseline_covers_every_workflow_and_phase(
+    harness: ModuleType,
+    baseline: dict[str, Any],
+    measurements: list[Any],
+) -> None:
+    """A new workflow or a renamed phase needs a regenerated baseline, not a silent pass."""
+    baselined = baseline["workflows"]
+    problems = [
+        f"{measurement.name}: no baseline, regenerate with --size guard --write-baseline"
+        for measurement in measurements
+        if measurement.name not in baselined
+    ]
+    for measurement in measurements:
+        entry = baselined.get(measurement.name)
+        if entry is None:
+            continue
+        new_phases = [name for name in measurement.phase_seconds if name not in entry["phase_seconds"]]
+        gone_phases = [name for name in entry["phase_seconds"] if name not in measurement.phase_seconds]
+        if new_phases or gone_phases:
+            problems.append(f"{measurement.name}: phases added {new_phases}, phases gone {gone_phases}")
+        if sorted(measurement.setup_phases) != entry["setup_phases"]:
+            problems.append(
+                f"{measurement.name}: setup phases are {sorted(measurement.setup_phases)}, "
+                f"baseline has {entry['setup_phases']} — every share below is relative to the rest"
+            )
+        if measurement.size != entry["size"]:
+            problems.append(f"{measurement.name}: guard size {measurement.size}, baseline {entry['size']}")
+    stale = [name for name in baselined if name not in {measurement.name for measurement in measurements}]
+    if stale:
+        problems.append(f"baseline holds workflows the registry no longer has: {stale}")
+    # --- Assert ---
+    assert not problems, report(harness, measurements, problems)
+
+
+def test_phases_account_for_the_measured_total(harness: ModuleType, measurements: list[Any]) -> None:
+    """Self-consistency: the phases must add up to the wall time of the workflow.
+
+    Without this the table could attribute a tenth of a workflow and stay
+    silent about the rest, which is exactly the failure it exists to prevent.
+    """
+    problems = [
+        f"{measurement.name}: phases account for {measurement.accounted_share * 100:.1f}% of "
+        f"{measurement.total_seconds:.4f}s, below {MINIMUM_ACCOUNTED_SHARE * 100:.0f}%"
+        for measurement in measurements
+        if measurement.accounted_share < MINIMUM_ACCOUNTED_SHARE
+    ]
+    problems.extend(
+        f"{measurement.name}: phases sum to more than the total ({measurement.accounted_share * 100:.1f}%)"
+        for measurement in measurements
+        if measurement.accounted_share > 1.0
+    )
+    # --- Assert ---
+    assert not problems, report(harness, measurements, problems)
+
+
+def test_phase_shares_stay_near_the_baseline(
+    harness: ModuleType,
+    baseline: dict[str, Any],
+    measurements: list[Any],
+) -> None:
+    """A phase taking over its workflow is the leak this guard is for.
+
+    Confirmed before it fails, like the absolute gates and for a reason that
+    took a loaded machine to find: the harness reports the phases of the round
+    with the best *total*, so one stall inside one phase of that round skews
+    every share in the workflow. Under a third of oversubscription that failed
+    ten runs in twenty; re-measuring and taking each phase's own fastest round
+    leaves one.
+    """
+    suspected = share_problems(baseline, phase_seconds_of(measurements))
+    if not suspected:
+        return
+    confirmed = share_problems(baseline, fastest_phase_seconds(harness, {name for name, _ in suspected}))
+    # --- Assert ---
+    assert not confirmed, report(harness, measurements, [message for _, message in confirmed])
 
 
 def test_library_time_stays_within_a_generous_multiple_of_the_baseline(
