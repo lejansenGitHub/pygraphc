@@ -492,7 +492,31 @@ Tree folds: `leaves(tree)`, `paths(tree, cutoff=None)` (series is the product,
 parallel the union, the cutoff prunes inside the product), `closed(tree, state)`
 (series is AND, parallel is OR) and `minimal_toggles(tree, state, target_closed=...)`
 (union where the node type needs every child, cheapest child otherwise, ties by
-edge id). `Series` and `Parallel` compare by identity (every tree node is created once,
+edge id).
+
+`minimal_toggles(..., togglable_leaves=None)` restricts the fold to the leaves that
+may be flipped; the default is every leaf, which is the behaviour without the
+parameter. A leaf outside the set keeps the state `edge_closed` gives it, so a node
+that needs every child (series to closed, parallel to open) is out of reach as soon
+as one child is, and a node that needs one child picks the cheapest among the
+reachable children only. The result distinguishes two answers: `frozenset()` means
+the tree already takes the target state and nothing has to be toggled, `None` means
+no subset of the permitted leaves makes it take the target state.
+
+`series_chain(tree, endpoints, start_node)` walks a series chain and returns one
+`SeriesStep(from_node, subtree, to_node)` per position, in order. `endpoints` is the
+endpoint pair of the tree in the order its children run, which is what
+`Reduced.graph.endpoints` records for the residual edge; the interior nodes of a
+series node sit between its children. A `Leaf` is a chain of one step. A series node
+nested in a series node is a sub-chain and is flattened into the sequence, so index
+`i` addresses the `i`-th subtree along the whole chain and the length is the number of
+positions on it; a `Parallel` child is one position, because its children are
+unordered alternatives. Starting from the to-endpoint returns the reversed sequence
+with every step reversed, so the two walks of a chain are mutual reverses. A
+`Parallel` tree and a start node that is not an endpoint of the tree raise
+`ValueError`.
+
+`Series` and `Parallel` compare by identity (every tree node is created once,
 by the move that produces it) and hash by cached structure; the folds, `repr` and
 `tree_records(tree)` / `tree_from_records(records)` are iterative, so chains deeper than
 the recursion limit are fine. `tree_records` is the canonical serialisable form (a

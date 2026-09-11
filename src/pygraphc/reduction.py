@@ -42,6 +42,7 @@ __all__ = [
     "Reduced",
     "SPTree",
     "Series",
+    "SeriesStep",
     "TreeKind",
     "TreeRecord",
     "VirtualEdgeId",
@@ -53,6 +54,7 @@ __all__ = [
     "quotient",
     "reduce",
     "scenario",
+    "series_chain",
     "tree_from_records",
     "tree_records",
 ]
@@ -492,34 +494,128 @@ def closed(tree: SPTree[EdgeId], edge_closed: Mapping[EdgeId, bool]) -> bool:
     return _closed_states(tree, edge_closed)[id(tree)]
 
 
+def _toggle_order(toggle_set: frozenset[EdgeId]) -> tuple[int, list[tuple[int, str, int | str]]]:
+    """Tie-break key of a candidate toggle set: fewer leaves first, then leaf id order."""
+    return (len(toggle_set), sorted(map(_order_key, toggle_set)))
+
+
 def minimal_toggles(
     tree: SPTree[EdgeId],
     edge_closed: Mapping[EdgeId, bool],
     *,
     target_closed: bool,
-) -> frozenset[EdgeId]:
-    """Smallest leaf set whose toggling makes the tree take the target state.
+    togglable_leaves: AbstractSet[EdgeId] | None = None,
+) -> frozenset[EdgeId] | None:
+    """Smallest set of togglable leaves whose toggling makes the tree take the target state.
 
     Series to closed needs every child closed, series to open needs one child
     open and takes the cheapest. Parallel is the dual. Ties are broken by
     edge id order.
+
+    ``togglable_leaves`` are the leaves that may be flipped; by default every
+    leaf may, which is the behaviour of the fold without it. A leaf outside the
+    set keeps the state ``edge_closed`` gives it, so a series node that must
+    become closed is unreachable as soon as one child is, while a series node
+    that must become open picks the cheapest among the reachable children only.
+    Parallel is the dual.
+
+    An empty set and ``None`` are different answers. The empty set means the
+    tree already takes the target state and nothing has to be toggled. ``None``
+    means no subset of ``togglable_leaves`` makes the tree take the target
+    state.
     """
     state = _closed_states(tree, edge_closed)
-    toggles: dict[int, frozenset[EdgeId]] = {}
+    toggles: dict[int, frozenset[EdgeId] | None] = {}
     for node in _post_order(tree):
         if state[id(node)] == target_closed:
             toggles[id(node)] = frozenset()
         elif isinstance(node, Leaf):
-            toggles[id(node)] = frozenset({node.edge_id})
-        else:
+            togglable = togglable_leaves is None or node.edge_id in togglable_leaves
+            toggles[id(node)] = frozenset({node.edge_id}) if togglable else None
+        elif isinstance(node, Series) == target_closed:
             options = [toggles[id(child)] for child in node.children]
-            needs_all = isinstance(node, Series) == target_closed
-            toggles[id(node)] = (
-                frozenset().union(*options)
-                if needs_all
-                else min(options, key=lambda option: (len(option), sorted(map(_order_key, option))))
-            )
+            reachable = [option for option in options if option is not None]
+            toggles[id(node)] = frozenset[EdgeId]().union(*reachable) if len(reachable) == len(options) else None
+        else:
+            candidates = [toggles[id(child)] for child in node.children]
+            reachable = [candidate for candidate in candidates if candidate is not None]
+            toggles[id(node)] = min(reachable, key=_toggle_order) if reachable else None
     return toggles[id(tree)]
+
+
+@dataclass(frozen=True)
+class SeriesStep(Generic[EdgeId]):
+    """One position along a series chain: the node stepped from, the subtree crossed, the node reached."""
+
+    from_node: int
+    subtree: SPTree[EdgeId]
+    to_node: int
+
+
+def _has_chain_order(tree: SPTree[EdgeId]) -> bool:
+    """A leaf and a series node run along a chain; the children of a parallel node are alternatives."""
+    return not isinstance(tree, Parallel)
+
+
+def _chain_nodes(node: Series[EdgeId], from_node: int, to_node: int) -> list[int]:
+    """Nodes along a series node: its two endpoints with its interior nodes between them."""
+    if len(node.interior_nodes) != len(node.children) - 1:
+        message = (
+            f"a series node with {len(node.children)} children needs {len(node.children) - 1} "
+            f"interior nodes, got {len(node.interior_nodes)}"
+        )
+        raise ValueError(message)
+    return [from_node, *node.interior_nodes, to_node]
+
+
+def series_chain(
+    tree: SPTree[EdgeId],
+    endpoints: tuple[int, int],
+    start_node: int,
+) -> list[SeriesStep[EdgeId]]:
+    """Ordered steps along a series chain, walked from ``start_node``, one step per position.
+
+    ``endpoints`` is the endpoint pair of the tree in the order its children
+    run, which is what ``Reduced.graph.endpoints`` records for the residual
+    edge the tree belongs to; the interior nodes of every series node sit
+    between its children. A ``Leaf`` is a chain of one step.
+
+    A series node nested in a series node is a sub-chain and is flattened into
+    the sequence, so index ``i`` addresses the ``i``-th subtree along the whole
+    chain and the length is the number of positions on it. A ``Parallel`` child
+    is one position: its children carry no order, so the step names the whole
+    parallel subtree.
+
+    Walking from the to-endpoint returns the reversed sequence with every step
+    reversed, so the two walks of a chain are mutual reverses.
+
+    Raises ``ValueError`` for a ``Parallel`` tree, whose children have no
+    order, for a start node that is not an endpoint of the tree, and for a
+    series node whose interior nodes do not number one fewer than its children,
+    which leaves the chain ambiguous.
+    """
+    if not _has_chain_order(tree):
+        message = "a parallel tree has no chain order: its children are unordered alternatives, not a sequence"
+        raise ValueError(message)
+    from_node, to_node = endpoints
+    if start_node not in {from_node, to_node}:
+        message = f"start node {start_node} is not an endpoint of the tree, the endpoints are {from_node} and {to_node}"
+        raise ValueError(message)
+    steps: list[SeriesStep[EdgeId]] = []
+    pending: list[tuple[SPTree[EdgeId], int, int]] = [(tree, from_node, to_node)]
+    while pending:
+        subtree, step_from, step_to = pending.pop()
+        if not isinstance(subtree, Series):
+            steps.append(SeriesStep(step_from, subtree, step_to))
+            continue
+        chain_nodes = _chain_nodes(subtree, step_from, step_to)
+        pending.extend(
+            (child, chain_nodes[position], chain_nodes[position + 1])
+            for position, child in reversed(list(enumerate(subtree.children)))
+        )
+    if start_node == from_node:
+        return steps
+    return [SeriesStep(step.to_node, step.subtree, step.from_node) for step in reversed(steps)]
 
 
 def _interior_nodes(tree: SPTree[EdgeId]) -> list[int]:
