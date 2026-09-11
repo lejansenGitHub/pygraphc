@@ -176,12 +176,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   log into provenance trees.
 - `benchmarks/baseline.json` and `tests/unit_tests/test_workflow_profiles.py`:
   a deliberately coarse guard that runs the harness at small sizes and fails
-  when a phase's share of its workflow moves by more than 20 percentage points,
-  when a workflow's total exceeds eight times its baseline, or when the phases
-  stop accounting for 95% of the measured total; the whole table is printed on
-  failure. The baseline records the machine and interpreter it came from. A CI
-  job runs the harness at the small sizes and uploads `profiles/` as an
-  artifact without gating a merge.
+  when a phase's share of its workflow's library time moves by more than 20
+  percentage points, when a phase above 50 microseconds or a workflow's library
+  time exceeds eight times its baseline, or when the phases stop accounting for
+  95% of the measured total; the whole table is printed on failure. Shares are
+  taken over the library time — the total without the harness's own input
+  generation, which is a third to nine tenths of these workflows at any size —
+  and the absolute per-phase gate is what covers the C kernels, which are single
+  digit percentages of their workflows and which a share can only catch once
+  they are an order of magnitude slower. An absolute gate never fails on one
+  run: a workflow that trips is measured again and only what survives the
+  fastest of three fresh runs is reported. The baseline records the machine,
+  interpreter, date and revision it came from. A CI job runs the harness at the
+  small sizes and uploads `profiles/` as an artifact without gating a merge.
 
 ### Fixed
 - Weighted algorithms (`shortest_path`, `shortest_path_lengths`,

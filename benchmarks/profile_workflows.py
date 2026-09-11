@@ -31,12 +31,14 @@ import json
 import platform
 import pstats
 import random
+import subprocess
 import sys
 import time
 import tracemalloc
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -59,14 +61,23 @@ def emit(message: str) -> None:
 
 
 class PhaseTimer:
-    """Accumulates wall time per phase name, in the order the phases first run."""
+    """Accumulates wall time per phase name, in the order the phases first run.
+
+    A phase marked ``setup`` is the harness generating its own random inputs.
+    That is not library work, and the reports keep it out of the shares they
+    compare so that a share says something about pygraphc rather than about
+    ``random``.
+    """
 
     def __init__(self) -> None:
         self.seconds: dict[str, float] = {}
+        self.setup_phases: set[str] = set()
 
     @contextmanager
-    def phase(self, name: str) -> Iterator[None]:
+    def phase(self, name: str, *, setup: bool = False) -> Iterator[None]:
         """Add the wall time of the block to ``name``; re-entering a name accumulates."""
+        if setup:
+            self.setup_phases.add(name)
         start = time.perf_counter()
         try:
             yield
@@ -96,6 +107,13 @@ class Workflow:
     body: WorkflowBody
     default_size: int
     guard_size: int
+    """The size the guard test measures at.
+
+    Small enough to run in a unit test suite, large enough that the phases the
+    workflow exists to watch stay above the guard's absolute floor of 50
+    microseconds; ``tests/unit_tests/test_workflow_profiles.py`` says which
+    phases fall below it anyway.
+    """
     networkx_reference: NetworkxReference | None = None
     networkx_note: str = ""
 
@@ -141,7 +159,7 @@ def discrete_samples(sample_count: int, variable_count: int, cardinality: int, s
 
 def workflow_graph_build(timer: PhaseTimer, size: int) -> str:
     """Build a Graph from node ids and edge pairs and read its degrees back."""
-    with timer.phase("generate input"):
+    with timer.phase("generate input", setup=True):
         node_ids = list(range(size))
         edge_pairs = sparse_edge_pairs(size, size * 5 // 4, seed=11)
     with timer.phase("construct graph"):
@@ -167,7 +185,7 @@ def networkx_graph_build(networkx: ModuleType, size: int) -> str:
 
 def workflow_connected_components(timer: PhaseTimer, size: int) -> str:
     """Partition a large graph into components, as int32 labels and as Python sets."""
-    with timer.phase("generate input"):
+    with timer.phase("generate input", setup=True):
         node_ids = list(range(size))
         edge_pairs = sparse_edge_pairs(size, size * 5 // 4, seed=23)
     with timer.phase("construct graph"):
@@ -204,7 +222,7 @@ def scenario_count_for(size: int) -> int:
 
 def workflow_scenario_sweep(timer: PhaseTimer, size: int) -> str:
     """Build one graph, then mask a different edge set many times and re-partition."""
-    with timer.phase("generate input"):
+    with timer.phase("generate input", setup=True):
         nodes = list(range(size))
         endpoints = dict(enumerate(sparse_edge_pairs(size, size * 5 // 4, seed=37)))
         removals = scenario_removals(list(endpoints), scenario_count_for(size), seed=38)
@@ -251,7 +269,7 @@ def meta_graph_of(
     workflows run this, which is what makes their tails comparable line by
     line: the trees against the raw operation log.
     """
-    with timer.phase("generate input"):
+    with timer.phase("generate input", setup=True):
         nodes = list(range(size))
         endpoints = dict(enumerate(sparse_edge_pairs(size, size * 5 // 4, seed=47)))
         removed = frozenset(edge_id for edge_id in endpoints if edge_id % 5 == 0)
@@ -314,7 +332,7 @@ def workflow_reduction_log(timer: PhaseTimer, size: int) -> str:
 
 def workflow_weighted_queries(timer: PhaseTimer, size: int) -> str:
     """Single-source shortest path lengths and one source-to-target path."""
-    with timer.phase("generate input"):
+    with timer.phase("generate input", setup=True):
         node_ids = list(range(size))
         edge_pairs = ring_with_chords(size, size // 4, seed=53)
         weights = [1.0 + (index % 17) for index in range(len(edge_pairs))]
@@ -343,7 +361,7 @@ def networkx_weighted_queries(networkx: ModuleType, size: int) -> str:
 
 def workflow_structural_queries(timer: PhaseTimer, size: int) -> str:
     """Bridges, biconnected components and the nodes on any simple source-target path."""
-    with timer.phase("generate input"):
+    with timer.phase("generate input", setup=True):
         node_ids = list(range(size))
         edge_pairs = ring_with_chords(size, size // 4, seed=59)
     with timer.phase("construct graph"):
@@ -376,7 +394,7 @@ PATH_TARGET_FRACTION = 10
 
 def workflow_path_enumeration(timer: PhaseTimer, size: int) -> str:
     """Enumerate every node-simple source-to-target path up to a cutoff."""
-    with timer.phase("generate input"):
+    with timer.phase("generate input", setup=True):
         node_ids = list(range(size))
         edge_pairs = ring_with_chords(size, size, seed=61)
     with timer.phase("construct graph"):
@@ -405,7 +423,7 @@ DAG_CARDINALITY = 2
 
 def workflow_dag_structure_learning(timer: PhaseTimer, size: int) -> str:
     """Learn a DAG from discrete samples by hill climb, then estimate its CPDs."""
-    with timer.phase("generate samples"):
+    with timer.phase("generate samples", setup=True):
         samples = discrete_samples(size, DAG_VARIABLE_COUNT, DAG_CARDINALITY, seed=67)
         cardinalities = [DAG_CARDINALITY] * DAG_VARIABLE_COUNT
     with timer.phase("hill climb"):
@@ -424,7 +442,7 @@ WORKFLOWS: tuple[Workflow, ...] = (
         description="build a Graph from node ids and edge pairs, then read its degrees",
         body=workflow_graph_build,
         default_size=200_000,
-        guard_size=5_000,
+        guard_size=50_000,
         networkx_reference=networkx_graph_build,
     ),
     Workflow(
@@ -450,14 +468,14 @@ WORKFLOWS: tuple[Workflow, ...] = (
         description="partition, quotient, lift, reduce, then expand the provenance trees to paths",
         body=workflow_framework_pipeline,
         default_size=20_000,
-        guard_size=2_000,
+        guard_size=5_000,
     ),
     Workflow(
         name="reduction_log",
         description="the same reduction consumed through the raw operation log instead of the trees",
         body=workflow_reduction_log,
         default_size=20_000,
-        guard_size=2_000,
+        guard_size=10_000,
     ),
     Workflow(
         name="weighted_queries",
@@ -472,7 +490,7 @@ WORKFLOWS: tuple[Workflow, ...] = (
         description="bridges, biconnected components and the nodes on any simple source-target path",
         body=workflow_structural_queries,
         default_size=100_000,
-        guard_size=5_000,
+        guard_size=10_000,
         networkx_reference=networkx_structural_queries,
         networkx_note="the reference covers bridges and biconnected components, it has no block-cut path form",
     ),
@@ -510,6 +528,7 @@ class Measurement:
     size: int
     total_seconds: float
     phase_seconds: dict[str, float] = field(default_factory=dict)
+    setup_phases: frozenset[str] = frozenset()
     peak_bytes: int = 0
     outcome: str = ""
     networkx_seconds: float | None = None
@@ -521,6 +540,29 @@ class Measurement:
         if self.total_seconds <= 0.0:
             return dict.fromkeys(self.phase_seconds, 0.0)
         return {name: seconds / self.total_seconds for name, seconds in self.phase_seconds.items()}
+
+    @property
+    def library_seconds(self) -> float:
+        """The measured total without the phases that only generate the harness's inputs."""
+        return sum(seconds for name, seconds in self.phase_seconds.items() if name not in self.setup_phases)
+
+    @property
+    def library_shares(self) -> dict[str, float]:
+        """Share of the library time per library phase, as a fraction.
+
+        These are the shares the guard compares. Dividing by the workflow total
+        instead would make most of them statements about ``random``, which
+        generates between a third and nine tenths of these workflows, and that
+        does not scale away: at forty times the size every generation share is
+        within a few points of the one measured here.
+        """
+        library_seconds = self.library_seconds
+        library_phase_seconds = {
+            name: seconds for name, seconds in self.phase_seconds.items() if name not in self.setup_phases
+        }
+        if library_seconds <= 0.0:
+            return dict.fromkeys(library_phase_seconds, 0.0)
+        return {name: seconds / library_seconds for name, seconds in library_phase_seconds.items()}
 
     @property
     def accounted_share(self) -> float:
@@ -557,6 +599,7 @@ def measure(
         workflow.body(PhaseTimer(), size)
     best_total = float("inf")
     best_phases: dict[str, float] = {}
+    best_setup_phases: frozenset[str] = frozenset()
     outcome = ""
     for _ in range(rounds):
         timer = PhaseTimer()
@@ -566,6 +609,7 @@ def measure(
         if elapsed < best_total:
             best_total = elapsed
             best_phases = dict(timer.seconds)
+            best_setup_phases = frozenset(timer.setup_phases)
     peak_bytes = 0
     if with_peak:
         tracemalloc.start()
@@ -581,6 +625,7 @@ def measure(
         size=size,
         total_seconds=best_total,
         phase_seconds=best_phases,
+        setup_phases=best_setup_phases,
         peak_bytes=peak_bytes,
         outcome=outcome,
         networkx_seconds=networkx_seconds,
@@ -621,6 +666,29 @@ def machine_description() -> dict[str, str]:
     }
 
 
+def source_revision() -> str:
+    """The commit these numbers were taken at, marked when the tree was not clean."""
+    directory = Path(__file__).parent
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=directory,
+        ).stdout.strip()
+        modified = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=directory,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return f"{revision} (dirty)" if modified else revision
+
+
 def summary_payload(measurements: list[Measurement], profile_name: str) -> dict[str, object]:
     """The machine-readable form of a harness run, the shape ``baseline.json`` uses too."""
     return {
@@ -628,13 +696,18 @@ def summary_payload(measurements: list[Measurement], profile_name: str) -> dict[
         "rounds": MEASUREMENT_ROUNDS,
         "warmups": MEASUREMENT_WARMUPS,
         "machine": machine_description(),
+        "taken_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "revision": source_revision(),
         "workflows": {
             measurement.name: {
                 "description": measurement.description,
                 "size": measurement.size,
                 "total_seconds": measurement.total_seconds,
+                "library_seconds": measurement.library_seconds,
                 "phase_seconds": measurement.phase_seconds,
                 "phase_shares": measurement.phase_shares,
+                "library_shares": measurement.library_shares,
+                "setup_phases": sorted(measurement.setup_phases),
                 "accounted_share": measurement.accounted_share,
                 "peak_bytes": measurement.peak_bytes,
                 "outcome": measurement.outcome,
@@ -664,6 +737,13 @@ drops its own objects. Freeing a few hundred thousand tuples and a C graph is
 wall time the caller pays, and attributing it is what lets the phases sum to
 the total instead of leaving a constant unexplained remainder.
 
+**The first phase, and why it has its own column.** The phase that generates a
+workflow's random inputs is the harness, not the library, and on the smaller
+workflows it is most of the wall time. Every table therefore carries both the
+share of the workflow and the share of the *library* time, which is the total
+without the generation phases. The second is the number to read when asking
+where pygraphc spends its time, and it is what the guard compares.
+
 Size profile `{profile_name}` on {platform}, {implementation} {python}.
 
 """
@@ -683,8 +763,8 @@ def summary_markdown(measurements: list[Measurement], profile_name: str) -> str:
         ),
         "## Workflows",
         "",
-        "| Workflow | Size | Total | Peak | networkx | vs networkx | Phases accounted |",
-        "|----------|-----:|------:|-----:|---------:|------------:|-----------------:|",
+        "| Workflow | Size | Total | Library | Peak | networkx | vs networkx | Phases accounted |",
+        "|----------|-----:|------:|--------:|-----:|---------:|------------:|-----------------:|",
     ]
     for measurement in measurements:
         reference = measurement.networkx_seconds
@@ -695,14 +775,30 @@ def summary_markdown(measurements: list[Measurement], profile_name: str) -> str:
             ratio_cell = f"{reference / measurement.total_seconds:.1f}x"
         lines.append(
             f"| `{measurement.name}` | {measurement.size:,} | {measurement.total_seconds:.4f}s | "
+            f"{measurement.library_seconds:.4f}s | "
             f"{measurement.peak_bytes / 2**20:.1f} MiB | {reference_cell} | {ratio_cell} | "
             f"{measurement.accounted_share * 100:.1f}% |"
         )
-    lines.extend(["", "## Phases", "", "| Workflow | Phase | Time | Share |", "|----------|-------|-----:|------:|"])
+    lines.extend([
+        "",
+        "## Phases",
+        "",
+        "| Workflow | Phase | Time | Share of workflow | Share of library |",
+        "|----------|-------|-----:|------------------:|-----------------:|",
+    ])
     for measurement in measurements:
         shares = measurement.phase_shares
+        library_shares = measurement.library_shares
         for phase_name, seconds in measurement.phase_seconds.items():
-            lines.append(f"| `{measurement.name}` | {phase_name} | {seconds:.4f}s | {shares[phase_name] * 100:.1f}% |")
+            library_cell = (
+                "harness setup"
+                if phase_name in measurement.setup_phases
+                else f"{library_shares[phase_name] * 100:.1f}%"
+            )
+            lines.append(
+                f"| `{measurement.name}` | {phase_name} | {seconds:.4f}s | "
+                f"{shares[phase_name] * 100:.1f}% | {library_cell} |"
+            )
     lines.extend(["", "## What each workflow does", ""])
     for measurement in measurements:
         lines.append(f"- **`{measurement.name}`** — {measurement.description}. Result: {measurement.outcome}.")
@@ -714,15 +810,25 @@ def summary_markdown(measurements: list[Measurement], profile_name: str) -> str:
 
 def console_table(measurements: list[Measurement]) -> str:
     """The same numbers as plain text, printed by the harness and by the guard on failure."""
-    lines = [f"{'workflow':<24} {'phase':<26} {'seconds':>9} {'share':>7}", "-" * 69]
+    lines = [
+        f"{'workflow':<24} {'phase':<26} {'seconds':>9} {'of total':>9} {'of library':>11}",
+        "-" * 81,
+    ]
     for measurement in measurements:
         lines.append(
             f"{measurement.name:<24} {'TOTAL (phases accounted)':<26} {measurement.total_seconds:>9.4f} "
-            f"{measurement.accounted_share * 100:>6.1f}%"
+            f"{measurement.accounted_share * 100:>8.1f}%"
         )
+        lines.append(f"{'':<24} {'LIBRARY (total less setup)':<26} {measurement.library_seconds:>9.4f}")
         shares = measurement.phase_shares
+        library_shares = measurement.library_shares
         for phase_name, seconds in measurement.phase_seconds.items():
-            lines.append(f"{'':<24} {phase_name:<26} {seconds:>9.4f} {shares[phase_name] * 100:>6.1f}%")
+            library_cell = (
+                "      setup"
+                if phase_name in measurement.setup_phases
+                else f"{library_shares[phase_name] * 100:>10.1f}%"
+            )
+            lines.append(f"{'':<24} {phase_name:<26} {seconds:>9.4f} {shares[phase_name] * 100:>8.1f}% {library_cell}")
     return "\n".join(lines)
 
 

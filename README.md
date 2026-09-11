@@ -1057,6 +1057,13 @@ python benchmarks/profile_workflows.py --list         # the registry
 | `<workflow>.prof` | raw `cProfile` output — `python -m pstats` or `snakeviz profiles/<workflow>.prof` |
 | `<workflow>.txt` | that profile's top 25 entries by cumulative and by total time |
 
+**Two share columns.** The phase that generates a workflow's random inputs is
+the harness, not the library, and on the smaller workflows it is most of the
+wall time — 87% of `connected_components` at 5 000 nodes and still 79% at
+200 000, so it is not an artefact of the small sizes. Every table therefore
+carries the share of the workflow and the share of the *library* time, the
+total without those generation phases. Read the second one.
+
 **How to read them.** Start with the phase shares, not the totals. A workflow
 whose C phase is a few percent and whose Python phase is most of the runtime is
 not a slow kernel, it is a caller paying for objects — the reduction spends
@@ -1070,12 +1077,27 @@ teardown of the workflow's own inputs, attributed on purpose so the phases add
 up to the total.
 
 **The guard.** `tests/unit_tests/test_workflow_profiles.py` runs the harness at
-the small sizes and fails when a phase's share of its workflow moves by more
-than 20 percentage points, when a workflow's total exceeds eight times its
-baseline, or when the phases stop accounting for 95% of the measured total. The
-margins are wide on purpose — a guard that fires on CI noise gets deleted — so
-a failure means the shape of a workflow changed, and the failure message prints
-the whole table.
+the small sizes and fails when a phase's share of its workflow's library time
+moves by more than 20 percentage points, when a phase above 50 microseconds or
+a whole workflow's library time exceeds eight times its baseline, or when the
+phases stop accounting for 95% of the measured total. The margins are wide on
+purpose — a guard that fires on CI noise gets deleted — so a failure means the
+shape of a workflow changed, and the failure message prints the whole table.
+
+Neither absolute gate fails on a single run: a workflow that trips is measured
+again, and only what survives the fastest of three fresh runs is reported, which
+is what keeps a scheduler stall on a shared runner from reading as a regression.
+
+The two gates cover different regressions, and the file says so with the
+arithmetic. A share needs a phase to be a sizeable part of its workflow before
+20 points can move: at half the library time 2.3x fires, at a twentieth 6.3x,
+at a hundredth 26x, and above four fifths growth can never fire at all. The
+absolute gate is what covers the kernels, which are single-digit percentages of
+their workflows however large the graph: a tenfold regression in the label
+kernel, the degree kernel, the bridge kernel or the C reduction loop fails the
+suite, and each of those four was checked by injecting exactly that. Phases
+below the floor stay unguarded and the file names them; the guard sizes of four
+workflows are chosen to keep their kernels above it.
 
 **Regenerating the baseline.**
 
@@ -1089,7 +1111,7 @@ when the reference machine in `benchmarks/baseline.json` is no longer the one
 the numbers should come from. Not legitimate as a way past a red guard: if a
 phase grew and you cannot say why, the baseline is the evidence and overwriting
 it destroys the finding. Regenerate in its own commit, say which phase moved
-and why, and keep the machine block that the file records.
+and why, and keep the machine, date and revision blocks the file records.
 
 ### Run benchmarks
 
