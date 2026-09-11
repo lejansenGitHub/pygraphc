@@ -45,11 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   list had fallen two files behind the directory, so `test_cycle_dag_perf.py`
   and `test_directed_perf.py` had never run. A file now runs because it is
   there. The matrix stays one job per file rather than one job for the whole
-  directory: on the last green run of this branch the parallel jobs finished in
-  about three minutes while their durations summed to about seven, so the
-  directory in one job would put roughly four extra minutes on the critical
-  path. Per-file jobs cost the slowest single file plus the few seconds the
-  listing job takes.
+  directory: the nine jobs finish in about three minutes while their durations
+  sum to about sixteen, so folding them into one job would cost some thirteen
+  extra minutes of critical path. Per-file jobs cost the slowest single file
+  plus the few seconds the listing job takes.
 - `networkx>=3.4` is part of the `dev` extra. Every comparison test in the
   performance suite opens with `pytest.importorskip("networkx")`, so with no
   extra providing it they all skipped and the comparison they exist for was
