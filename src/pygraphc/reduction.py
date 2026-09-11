@@ -759,6 +759,29 @@ _OPERATION_PARALLEL = 2
 _OPERATION_PENDANT = 3
 
 
+def _structural_log_c(
+    kernel: _KernelGraph[EdgeId],
+    terminals: AbstractSet[int],
+    protected: AbstractSet[int],
+    *,
+    fold_leaves: bool,
+) -> pygraphc.ReductionLog:
+    """The structural half of the ``"c"`` engine: one crossing for the whole fixpoint loop.
+
+    C receives the cached compressed sparse row graph plus a terminal and a
+    protected byte mask over node indices and returns a flat operation log.
+    It is a function of its own so that the structural work and the fold over
+    its log can be called, and therefore measured, apart.
+    """
+    terminal_mask = bytearray(len(kernel.nodes))
+    protected_mask = bytearray(len(kernel.nodes))
+    for node_id in terminals:
+        terminal_mask[bisect_left(kernel.nodes, node_id)] = 1
+    for node_id in protected:
+        protected_mask[bisect_left(kernel.nodes, node_id)] = 1
+    return kernel.graph.series_parallel_reduce(terminal_mask, protected_mask, fold_leaves=fold_leaves)
+
+
 def _reduce_c(
     graph: MultiGraph[EdgeId],
     terminals: AbstractSet[int],
@@ -768,19 +791,11 @@ def _reduce_c(
 ) -> Reduced[EdgeId]:
     """The same reduction with the structural loop in C and the payload algebra folded here.
 
-    C receives the cached compressed sparse row graph plus a terminal and a
-    protected byte mask over node indices and returns a flat operation log;
-    the fold below turns that log into the very ``Leaf``/``Series``/
+    The fold turns the operation log into the very ``Leaf``/``Series``/
     ``Parallel`` trees and the same bookkeeping the Python worklist builds.
     """
     kernel = graph._kernel
-    terminal_mask = bytearray(len(kernel.nodes))
-    protected_mask = bytearray(len(kernel.nodes))
-    for node_id in terminals:
-        terminal_mask[bisect_left(kernel.nodes, node_id)] = 1
-    for node_id in protected:
-        protected_mask[bisect_left(kernel.nodes, node_id)] = 1
-    log = kernel.graph.series_parallel_reduce(terminal_mask, protected_mask, fold_leaves=fold_leaves)
+    log = _structural_log_c(kernel, terminals, protected, fold_leaves=fold_leaves)
     return _fold_operation_log(graph, kernel, log, fold_leaves=fold_leaves)
 
 
