@@ -201,3 +201,46 @@ note's conclusion stands, and is now settled from the source rather than
 inferred from timings. The incremental `PySet_Add` loop is the right code.
 Getting past this cost means not building Python sets, which changes the API
 contract the callers depend on.
+
+## What CPython is doing about it (searched 2026-09-11)
+
+The mechanism this experiment hypothesised does not exist today, and that is
+why every variant measured worse. It is being added.
+
+[PEP 839](https://peps.python.org/pep-0839/) proposes `PyFrozenSetWriter`:
+
+```c
+PyFrozenSetWriter *PyFrozenSetWriter_Create(Py_ssize_t size_hint);
+int  PyFrozenSetWriter_Add(PyFrozenSetWriter *writer, PyObject *item);
+int  PyFrozenSetWriter_Update(PyFrozenSetWriter *writer, PyObject *iterable);
+PyObject *PyFrozenSetWriter_Finish(PyFrozenSetWriter *writer);
+void PyFrozenSetWriter_Discard(PyFrozenSetWriter *writer);
+```
+
+That is exactly the missing piece: a size hint taken up front, described as a
+hint rather than a limit, with construction in a single pass, no intermediate
+container and no copy at `Finish`. Three things make it unusable here:
+
+- it is **Draft** status targeting **Python 3.16**, and this package supports
+  3.11 to 3.13;
+- it is **frozenset only**, so adopting it changes the return type of every
+  set-returning call, and read-only set algebra would still work while
+  mutation would not;
+- the PEP reports **no benchmarks**, so the size of the win is unmeasured even
+  by its authors.
+
+Two adjacent facts from the same search, worth recording for later:
+
+- `PySet_Add` is **soft deprecated on frozensets as of Python 3.14**, with the
+  writer named as its replacement. A frozenset-returning API would eventually
+  want the writer rather than the add loop.
+- There is an open [performance regression in `PySet_Add` on free-threaded
+  3.14](https://github.com/python/cpython/issues/140476): a critical section is
+  taken even when the set is uniquely referenced during construction. Relevant
+  if this package ever supports free-threaded builds, where set construction
+  is already the dominant cost.
+
+**Revisit when 3.16 is a supported target**, and only together with a decision
+about whether any call may return a frozenset. Until then the conclusion of
+this note stands unchanged: there is no faster path, and the two negative cells
+in the matrix above are cache locality on synthetic inputs, not presizing.
