@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   neighbour, `"discard"` drops it, `"keep"` makes the node ineligible for the
   pendant move so it survives with its one incidence. The action of a pendant
   move is the action of the node it removes. A `keep` node is not a terminal:
-  it is still merged away in series.
+  it is still merged away in series. The policy is frozen and hashable, and
+  copies its exceptions, so it keeps the actions it was validated with.
 - `reduce(..., series_ineligible=frozenset())` in `pygraphc.reduction`: blocks
   the series move at a node while its parallel merges stay allowed, which is
   the half of `protected` that answers the series question. `protected` keeps

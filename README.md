@@ -574,7 +574,9 @@ reduce(path, terminals={0, 2}, series_ineligible={1}).graph.nodes
   incidence. The action of a pendant move is the action of the node it removes,
   so material absorbed into a node earlier is discarded with it if that node
   discards. A default plus exceptions rather than a mapping over every node,
-  because the decision is uniform for most of a graph.
+  because the decision is uniform for most of a graph. The exceptions are copied
+  into a read-only mapping, so a policy hashes and keeps the actions it was
+  validated with.
 - `fold_leaves=True | False` is the deprecated shorthand for a uniform `"absorb"`
   or `"discard"` policy. Giving both it and `pendant` raises `ValueError`.
 - Self-loops take part in no move and leave with their node. Degree counts
@@ -678,12 +680,13 @@ pendant_keep_mask=None, series_blocked_mask=None)` exposes the loop on its own a
 returns a `ReductionLog` of twelve int32 `memoryview`s. The four masks hold one byte
 per node index and mark membership by a non-zero byte, and are read as buffers, so a
 list of node ids is not a mask. A missing `protected_mask`, `pendant_keep_mask` or
-`series_blocked_mask` is the empty set; `None` in place of the terminal mask raises
-`TypeError`, because a reduction without a terminal deletes every component.
+`series_blocked_mask` is the empty set, while `None` in place of the terminal mask
+raises `TypeError`, because a reduction without a terminal deletes every component;
 `GraphView` reduces under its own edge and node masks. Only the structural half of
 the pendant policy is a mask: whether a removed pendant's material is absorbed or
-discarded changes no move, so the log reports the absorbing neighbour either way and
-`reduce` reads the action off the policy per removed node while folding the log.
+discarded changes no move, so the log reports the absorbing neighbour either way,
+there is no `fold_leaves` here, and `reduce` reads the action off the policy per
+removed node while folding the log.
 
 ```python
 graph = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3)])

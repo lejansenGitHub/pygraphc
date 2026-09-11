@@ -13,12 +13,14 @@ merged. The last two tests are about confluence: a ``keep`` action makes the
 residual order dependent, a series-ineligible node does not.
 """
 
+import pickle
 import random
 from typing import Literal
 
 import pytest
 from test_reduction_c_engine import canonical, random_multigraph
 
+import pygraphc
 from pygraphc.reduction import (
     MultiGraph,
     Parallel,
@@ -327,3 +329,44 @@ def order_independent_part(reduced: Reduced[int]) -> str:
         sorted((node_id, sorted(material)) for node_id, material in reduced.folded_nodes.items()),
         sorted((node_id, sorted(material)) for node_id, material in reduced.folded_interior.items()),
     ))
+
+
+def test_the_two_new_masks_are_buffers_and_not_lists_of_node_ids() -> None:
+    """Both masks are read as buffers of one byte per node index, like the terminal and protected masks.
+
+    Annotating them as a collection of node ids would type-check the list this
+    rejects and leave the TypeError to the C layer, which is the shape the
+    entry point was corrected away from once already.
+    """
+    # --- Input ---
+    graph = pygraphc.Graph([0, 1, 2], [(0, 1), (1, 2)])
+
+    # --- Assert ---
+    with pytest.raises(TypeError, match="bytes-like object is required"):
+        graph.series_parallel_reduce(bytes(3), bytes(3), pendant_keep_mask=[2])  # type: ignore[arg-type] — the runtime guard is the subject
+    with pytest.raises(TypeError, match="bytes-like object is required"):
+        graph.series_parallel_reduce(bytes(3), bytes(3), series_blocked_mask=[2])  # type: ignore[arg-type] — same guard
+    with pytest.raises(TypeError, match="requires a terminal mask"):
+        graph.series_parallel_reduce(None, bytes(3), pendant_keep_mask=bytes(3))  # type: ignore[arg-type] — same guard
+
+
+def test_a_policy_hashes_and_keeps_the_exceptions_it_was_validated_with() -> None:
+    """Frozen and comparing by value, so it has to hash, and the mapping it holds has to stay put.
+
+    Without the copy an unknown action added after construction would pass no
+    validation and behave as ``discard``, which deletes material silently.
+    """
+    # --- Input ---
+    exceptions: dict[int, PendantAction] = {1: "keep"}
+    policy = PendantPolicy("absorb", exceptions)
+
+    # --- Act ---
+    exceptions[2] = "nonsense"  # type: ignore[assignment] — an unknown action is the point
+
+    # --- Assert ---
+    assert hash(policy) == hash(PendantPolicy("absorb", {1: "keep"}))
+    assert policy == PendantPolicy("absorb", {1: "keep"})
+    assert policy.action_at(2) == "absorb"
+    with pytest.raises(TypeError):
+        policy.exceptions[2] = "keep"  # type: ignore[index] — the read-only copy is the subject
+    assert pickle.loads(pickle.dumps(policy)) == policy

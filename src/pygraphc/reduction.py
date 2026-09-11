@@ -28,6 +28,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from functools import cached_property
 from itertools import count, product
+from types import MappingProxyType
 from typing import Generic, Literal, TypeAlias, TypeVar, cast
 
 import pygraphc
@@ -714,6 +715,10 @@ class PendantPolicy:
     uniform for most of a graph and a caller reducing 20 000 nodes should name
     the handful that differ, not build a dict of 20 000 entries. An exception
     for a node that never becomes a pendant is harmless.
+
+    The exceptions given are copied into a read-only mapping, so a policy is
+    hashable and stays what it was validated as; without the copy a caller
+    could add an unknown action afterwards and have it behave as ``discard``.
     """
 
     default: PendantAction = "absorb"
@@ -725,6 +730,15 @@ class PendantPolicy:
             if action not in _PENDANT_ACTIONS:
                 message = f"pendant action must be one of {sorted(_PENDANT_ACTIONS)}, got {action!r}"
                 raise ValueError(message)
+        object.__setattr__(self, "exceptions", MappingProxyType(dict(self.exceptions)))
+
+    def __hash__(self) -> int:
+        """A mapping has no hash of its own, so the exceptions hash as their item set."""
+        return hash((self.default, frozenset(self.exceptions.items())))
+
+    def __reduce__(self) -> tuple[type[PendantPolicy], tuple[PendantAction, dict[int, PendantAction]]]:
+        """Pickle and deep-copy through the constructor, since the read-only view itself is not picklable."""
+        return (PendantPolicy, (self.default, dict(self.exceptions)))
 
     def action_at(self, node_id: int) -> PendantAction:
         """The action at one node, the default where no exception names it."""

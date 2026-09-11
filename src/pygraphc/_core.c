@@ -4798,12 +4798,6 @@ static void sp_eliminate(SPState *state, int node) {
     state->node_alive[node] = 0;
 }
 
-/* Queue a node for another look, at most once.
- *
- * ``heap`` is sized for the node count and ``sp_push`` has no bound check, so
- * the ``queued`` test is what keeps the heap in bounds, not just what keeps
- * the work down. Python's worklist has no such test; matching it here would
- * overflow the heap, not merely repeat work. */
 static void sp_push(SPState *state, int node) {
     if (state->queued[node]) return;
     state->queued[node] = 1;
@@ -5022,8 +5016,8 @@ static int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const
 }
 
 /* series_parallel_reduce_ctx(capsule, terminal_mask, protected_mask
- *                           [, edge_mask, node_mask, pendant_keep_mask,
- *                            series_blocked_mask])
+ *                           [, edge_mask, node_mask,
+ *                            pendant_keep_mask, series_blocked_mask])
  *     -> twelve int32 byte buffers
  *
  * ``terminal_mask``, ``protected_mask``, ``pendant_keep_mask`` and
@@ -5042,7 +5036,7 @@ static int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const
  * indices. The last is the surviving node indices in increasing order.
  *
  * A terminal mask of ``None`` is rejected: no terminal means every component
- * is terminal-free and the whole graph goes. ``None`` for the other three is
+ * is terminal-free and the whole graph goes. ``None`` for the other five is
  * the neutral empty mask.
  *
  * There is no ``fold_leaves``: the log reports which neighbour absorbs a
@@ -5054,7 +5048,8 @@ static PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, P
     PyObject *capsule, *terminal_obj, *protected_obj, *emask_obj = Py_None, *nmask_obj = Py_None;
     PyObject *keep_obj = Py_None, *series_obj = Py_None;
     if (!PyArg_ParseTupleAndKeywords(args, keywords, "OOO|OOOO", names, &capsule, &terminal_obj,
-                                     &protected_obj, &emask_obj, &nmask_obj, &keep_obj, &series_obj))
+                                     &protected_obj, &emask_obj, &nmask_obj,
+                                     &keep_obj, &series_obj))
         return NULL;
     if (terminal_obj == Py_None) {
         PyErr_SetString(PyExc_TypeError,
@@ -5073,7 +5068,9 @@ static PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, P
 
     /* The four membership masks over node indices first, then the two
      * exclusion masks of the context call. A missing membership mask is the
-     * empty set, which one shared zero block serves. */
+     * empty set, which one shared zero block serves; the substitution starts
+     * at index one because the terminal mask is rejected above rather than
+     * defaulted, a missing one having deleted the whole graph. */
     PyObject *mask_objects[SP_MASK_COUNT] = {terminal_obj, protected_obj, keep_obj, series_obj,
                                              emask_obj, nmask_obj};
     Py_ssize_t mask_lengths[SP_MASK_COUNT] = {n, n, n, n, m, n};
@@ -5086,7 +5083,7 @@ static PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, P
     }
     const uint8_t *edge_mask = masks[4], *node_mask = masks[5];
     uint8_t *no_members = NULL;
-    for (int index = 0; index < SP_MEMBERSHIP_MASK_COUNT; index++) {
+    for (int index = 1; index < SP_MEMBERSHIP_MASK_COUNT; index++) {
         if (masks[index]) continue;
         if (!no_members && !(no_members = (uint8_t *)calloc((size_t)(n > 0 ? n : 1), 1))) {
             for (int release = 0; release < SP_MASK_COUNT; release++) release_mask(&buffers[release]);
