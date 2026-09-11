@@ -1,0 +1,244 @@
+{
+  "size_profile": "guard",
+  "rounds": 3,
+  "warmups": 1,
+  "machine": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm",
+    "python": "3.11.11",
+    "implementation": "CPython"
+  },
+  "workflows": {
+    "graph_build": {
+      "description": "build a Graph from node ids and edge pairs, then read its degrees",
+      "size": 5000,
+      "total_seconds": 0.002866333001293242,
+      "phase_seconds": {
+        "generate input": 0.002617333026137203,
+        "construct graph": 9.26670036278665e-05,
+        "degree kernel": 7.6249707490205765e-06,
+        "degrees to python": 3.254198236390948e-05,
+        "release inputs": 0.00010770797962322831
+      },
+      "phase_shares": {
+        "generate input": 0.913129432259373,
+        "construct graph": 0.03232946192436702,
+        "degree kernel": 0.002660183148845691,
+        "degrees to python": 0.011353175764723457,
+        "release inputs": 0.03757692479367619
+      },
+      "accounted_share": 0.9970491778909855,
+      "peak_bytes": 876641,
+      "outcome": "5000 nodes, 6250 edges, degree sum 12500",
+      "networkx_seconds": 0.015829834039323032,
+      "networkx_note": ""
+    },
+    "connected_components": {
+      "description": "partition a large graph into components, as int32 labels and as Python sets",
+      "size": 5000,
+      "total_seconds": 0.0029267920181155205,
+      "phase_seconds": {
+        "generate input": 0.00255162495886907,
+        "construct graph": 9.179196786135435e-05,
+        "label kernel": 8.541595889255404e-05,
+        "materialise sets": 6.775005022063851e-05,
+        "release inputs": 0.0001247500185854733
+      },
+      "phase_shares": {
+        "generate input": 0.8718162900116113,
+        "construct graph": 0.031362654842982875,
+        "label kernel": 0.02918415738592556,
+        "materialise sets": 0.023148228436218325,
+        "release inputs": 0.04262346549168067
+      },
+      "accounted_share": 0.9981347961684187,
+      "peak_bytes": 1098413,
+      "outcome": "457 labels, 457 component sets",
+      "networkx_seconds": 0.008149666944518685,
+      "networkx_note": "networkx has no label form, the reference builds the component sets"
+    },
+    "scenario_sweep": {
+      "description": "build one graph, then mask a different edge set many times and re-partition",
+      "size": 2000,
+      "total_seconds": 0.007016666000708938,
+      "phase_seconds": {
+        "generate input": 0.0009856660035438836,
+        "construct multigraph": 0.0002263330388814211,
+        "base partition": 0.0006901250453665853,
+        "scenario partitions": 0.0029034169856458902,
+        "refinement checks": 0.0020650000078603625,
+        "release inputs": 0.00013887503882870078
+      },
+      "phase_shares": {
+        "generate input": 0.1404749782082111,
+        "construct multigraph": 0.03225649316335611,
+        "base partition": 0.09835512268887497,
+        "scenario partitions": 0.41378868330807533,
+        "refinement checks": 0.2942993164633635,
+        "release inputs": 0.01979216893246299
+      },
+      "accounted_share": 0.9989667627643439,
+      "peak_bytes": 2296081,
+      "outcome": "20 scenarios, 20 refine the base partition",
+      "networkx_seconds": 0.011851791990920901,
+      "networkx_note": "the reference removes and re-adds the edges of every scenario on one graph"
+    },
+    "framework_pipeline": {
+      "description": "partition, quotient, lift, reduce, then expand the provenance trees to paths",
+      "size": 2000,
+      "total_seconds": 0.0031800830038264394,
+      "phase_seconds": {
+        "generate input": 0.0010300829890184104,
+        "partition": 0.0009994159918278456,
+        "quotient": 0.00047129200538620353,
+        "release input graph": 5.766598042100668e-05,
+        "lift": 0.00035383302019909024,
+        "reduce to trees": 0.00018608401296660304,
+        "expand trees to paths": 3.125000512227416e-05,
+        "release inputs": 3.983394708484411e-05
+      },
+      "phase_shares": {
+        "generate input": 0.3239170134172478,
+        "partition": 0.31427355532081924,
+        "quotient": 0.1482011648183776,
+        "release input graph": 0.018133482790109567,
+        "lift": 0.11126534111636086,
+        "reduce to trees": 0.05851545784896092,
+        "expand trees to paths": 0.009826789138733973,
+        "release inputs": 0.01252607150093688
+      },
+      "accounted_share": 0.9966588759515469,
+      "peak_bytes": 847601,
+      "outcome": "301 blocks, 159 meta edges, 301 lifted, 17 residual nodes, 13 paths",
+      "networkx_seconds": null,
+      "networkx_note": ""
+    },
+    "reduction_log": {
+      "description": "the same reduction consumed through the raw operation log instead of the trees",
+      "size": 2000,
+      "total_seconds": 0.0026098749949596822,
+      "phase_seconds": {
+        "generate input": 0.0009979159804061055,
+        "partition": 0.0010011250269599259,
+        "quotient": 0.0004747499478980899,
+        "release input graph": 6.220804061740637e-05,
+        "build reduction graph": 6.125017534941435e-06,
+        "build masks": 1.2416974641382694e-05,
+        "c loop": 2.4292035959661007e-05,
+        "scan log": 7.041962817311287e-06,
+        "release inputs": 1.3499986380338669e-05
+      },
+      "phase_shares": {
+        "generate input": 0.3823616005875107,
+        "partition": 0.38359117923017283,
+        "quotient": 0.1819052440499833,
+        "release input graph": 0.023835639920511735,
+        "build reduction graph": 0.0023468624155449464,
+        "build masks": 0.00475768941629885,
+        "c loop": 0.009307739262062348,
+        "scan log": 0.002698199274260671,
+        "release inputs": 0.005172656317413861
+      },
+      "accounted_share": 0.9959768104737592,
+      "peak_bytes": 847417,
+      "outcome": "306 operations, 147 moves, 17 surviving nodes",
+      "networkx_seconds": null,
+      "networkx_note": ""
+    },
+    "weighted_queries": {
+      "description": "single-source shortest path lengths and one source-to-target path",
+      "size": 5000,
+      "total_seconds": 0.001786292006727308,
+      "phase_seconds": {
+        "generate input": 0.0011100409901700914,
+        "construct graph": 8.91660456545651e-05,
+        "single source lengths": 0.0003236670163460076,
+        "source to target path": 0.00011720898328348994,
+        "release inputs": 0.00014099996769800782
+      },
+      "phase_shares": {
+        "generate input": 0.6214219097379347,
+        "construct graph": 0.04991683628363065,
+        "single source lengths": 0.18119490829441862,
+        "source to target path": 0.06561580236717862,
+        "release inputs": 0.07893444474195233
+      },
+      "accounted_share": 0.9970839014251148,
+      "peak_bytes": 1341432,
+      "outcome": "5000 reachable nodes, path of 21 nodes",
+      "networkx_seconds": 0.013143791991751641,
+      "networkx_note": ""
+    },
+    "structural_queries": {
+      "description": "bridges, biconnected components and the nodes on any simple source-target path",
+      "size": 5000,
+      "total_seconds": 0.0019909999682568014,
+      "phase_seconds": {
+        "generate input": 0.0008621669840067625,
+        "construct graph": 8.987501496449113e-05,
+        "bridges": 4.6250002924352884e-05,
+        "biconnected components": 0.0001361249596811831,
+        "nodes on simple paths": 0.0007403750205412507,
+        "release inputs": 0.00011016696225851774
+      },
+      "phase_shares": {
+        "generate input": 0.4330321435221436,
+        "construct graph": 0.04514064108357582,
+        "bridges": 0.023229534737183637,
+        "biconnected components": 0.06837014658536929,
+        "nodes on simple paths": 0.37186089017845547,
+        "release inputs": 0.05533247815919015
+      },
+      "accounted_share": 0.9969658342659179,
+      "peak_bytes": 2749976,
+      "outcome": "0 bridges, 1 blocks, 5000 nodes on simple paths",
+      "networkx_seconds": 0.03836683399276808,
+      "networkx_note": "the reference covers bridges and biconnected components, it has no block-cut path form"
+    },
+    "path_enumeration": {
+      "description": "enumerate every node-simple source-to-target path up to a cutoff",
+      "size": 200,
+      "total_seconds": 0.0002547919866628945,
+      "phase_seconds": {
+        "generate input": 8.695805445313454e-05,
+        "construct graph": 6.292015314102173e-06,
+        "enumerate paths": 0.00014775001909583807,
+        "release inputs": 1.0207993909716606e-05
+      },
+      "phase_shares": {
+        "generate input": 0.34129038197808553,
+        "construct graph": 0.024694714290315955,
+        "enumerate paths": 0.5798848740534389,
+        "release inputs": 0.04006403044073129
+      },
+      "accounted_share": 0.9859340007625718,
+      "peak_bytes": 35312,
+      "outcome": "145 paths up to 8 edges",
+      "networkx_seconds": 0.03307641699211672,
+      "networkx_note": ""
+    },
+    "dag_structure_learning": {
+      "description": "learn a DAG from discrete samples by hill climb, then estimate its CPDs",
+      "size": 300,
+      "total_seconds": 0.0007253749645315111,
+      "phase_seconds": {
+        "generate samples": 0.0003915830166079104,
+        "hill climb": 0.00029445800464600325,
+        "estimate cpds": 2.824998227879405e-05,
+        "release inputs": 7.2499969974160194e-06
+      },
+      "phase_shares": {
+        "generate samples": 0.539835306917185,
+        "hill climb": 0.4059390233245521,
+        "estimate cpds": 0.038945350556783435,
+        "release inputs": 0.009994826609570797
+      },
+      "accounted_share": 0.9947145074080913,
+      "peak_bytes": 58544,
+      "outcome": "17 learned edges, 12 cpds over 300 samples",
+      "networkx_seconds": null,
+      "networkx_note": ""
+    }
+  }
+}

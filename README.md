@@ -1033,6 +1033,64 @@ connected_components(node_ids, src, dst)
 
 Split lists is faster because building two flat lists avoids creating 1.5M tuple objects. The C parsing cost is similar — `PyLong_AsLong` per element dominates regardless of container shape.
 
+### Workflow profiles
+
+`benchmarks/profile_workflows.py` profiles the end-to-end workflows the library
+supports — build a graph, partition it, sweep scenarios, run the full
+partition/quotient/lift/reduce pipeline, the weighted and structural families,
+path enumeration, DAG structure learning — and writes a per-phase breakdown of
+every one of them. Phases, not a call tree: the split that matters here is the C
+kernel against the Python objects built around it, and a flat profile hides it.
+
+```bash
+python benchmarks/profile_workflows.py               # full sizes, writes profiles/
+python benchmarks/profile_workflows.py --size guard   # the small sizes the guard uses
+python benchmarks/profile_workflows.py --list         # the registry
+```
+
+**The artifacts** land in `profiles/` (gitignored, created on demand):
+
+| File | What it is |
+|------|------------|
+| `summary.md` | the table to open first: total wall time, every phase with its time and its share, the `tracemalloc` peak and the networkx reference per workflow |
+| `summary.json` | the same numbers machine-readably, the shape `benchmarks/baseline.json` uses |
+| `<workflow>.prof` | raw `cProfile` output — `python -m pstats` or `snakeviz profiles/<workflow>.prof` |
+| `<workflow>.txt` | that profile's top 25 entries by cumulative and by total time |
+
+**How to read them.** Start with the phase shares, not the totals. A workflow
+whose C phase is a few percent and whose Python phase is most of the runtime is
+not a slow kernel, it is a caller paying for objects — the reduction spends
+about a tenth of its `reduce` step in the C loop and the rest folding the
+operation log into provenance trees, which is why `framework_pipeline` and
+`reduction_log` run the same reduction and differ only in their tails. Times are
+best of three runs after a warm-up, with the profiler detached; the `.prof` and
+`.txt` files come from a separate run and carry the profiler's overhead, so use
+them to find *which* call, never to quote a duration. `release inputs` is the
+teardown of the workflow's own inputs, attributed on purpose so the phases add
+up to the total.
+
+**The guard.** `tests/unit_tests/test_workflow_profiles.py` runs the harness at
+the small sizes and fails when a phase's share of its workflow moves by more
+than 20 percentage points, when a workflow's total exceeds eight times its
+baseline, or when the phases stop accounting for 95% of the measured total. The
+margins are wide on purpose — a guard that fires on CI noise gets deleted — so
+a failure means the shape of a workflow changed, and the failure message prints
+the whole table.
+
+**Regenerating the baseline.**
+
+```bash
+python benchmarks/profile_workflows.py --size guard --write-baseline
+```
+
+Legitimate when the registry changed (a new workflow, a renamed or re-cut
+phase), when a deliberate optimisation moved work from one phase to another, or
+when the reference machine in `benchmarks/baseline.json` is no longer the one
+the numbers should come from. Not legitimate as a way past a red guard: if a
+phase grew and you cannot say why, the baseline is the evidence and overwriting
+it destroys the finding. Regenerate in its own commit, say which phase moved
+and why, and keep the machine block that the file records.
+
 ### Run benchmarks
 
 ```bash
