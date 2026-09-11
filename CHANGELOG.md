@@ -222,6 +222,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   The baseline records the machine, interpreter, date and the revision the tree
   was at when the numbers were taken. A CI job runs the harness at the
   small sizes and uploads `profiles/` as an artifact without gating a merge.
+- One workflow per `reduce` engine in the profile harness —
+  `reduce_engine_c`, `reduce_engine_moves`, `reduce_engine_rounds`,
+  `reduce_engine_python` — identical in the seeded graph, the terminal set,
+  the sizes and the phase names, differing in the engine and in nothing else,
+  so the comparison between them is not confounded. Phases are `generate
+  input`, `construct kernel graph`, `structural moves`, `fold provenance` and
+  `release`; an engine without a counterpart to a phase records it as zero
+  rather than omitting it, so the four tables line up row by row.
+- `python benchmarks/profile_workflows.py --compare-engines` and the
+  `profiles/engine_comparison.md` it writes: the phase table for the four
+  engines side by side at 20 000, 100 000 and 1 000 000 nodes, a `pstats`
+  diff of each interesting pair naming the functions whose time differs and
+  the functions only one profile has, the number of Python-to-C boundary
+  crossings each engine makes, and the answers with numbers to what the fold
+  costs, where `"moves"` loses its margin and why `"rounds"` matches the
+  monolith. The two smaller sizes are profiled under `cProfile`, the largest
+  is timed only, and the artifact says which is which. The measured numbers
+  land in `profiles/engine_comparison.json`, and `--rebuild-comparison`
+  rewrites the artifact from them without re-measuring. Two earlier claims do
+  not survive the profile: the fold is about nine tenths of a warm `reduce`
+  and about three quarters of a cold one rather than four fifths of either,
+  and the fold-phase noise floor — taken from two engines that fold a
+  byte-identical log — is several percent, the same order as the differences
+  between the three C-backed engines.
 
 ### Fixed
 - Weighted algorithms (`shortest_path`, `shortest_path_lengths`,

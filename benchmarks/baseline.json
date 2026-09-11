@@ -338,6 +338,102 @@
       "outcome": "17 learned edges, 12 cpds over 300 samples",
       "networkx_seconds": null,
       "networkx_note": ""
+    },
+    "reduce_engine_c": {
+      "description": "reduce one seeded graph with the 'c' engine, phased for the engine comparison",
+      "size": 2000,
+      "total_seconds": 0.004251917000146932,
+      "phase_seconds": {
+        "generate input": 0.0009575420003784529,
+        "construct kernel graph": 0.0007269589996212744,
+        "structural moves": 0.00017783299972506939,
+        "fold provenance": 0.0021814170004290645,
+        "release": 0.00020070799973836984
+      },
+      "phase_shares": {
+        "generate input": 0.22520242054239617,
+        "construct kernel graph": 0.17097205792026354,
+        "structural moves": 0.041824193585840004,
+        "fold provenance": 0.5130431756672772,
+        "release": 0.04720411986674106
+      },
+      "accounted_share": 0.9982459675825179,
+      "peak_bytes": 1898556,
+      "outcome": "769 residual nodes, 1459 residual edges, 1459 provenance trees, 769 folded payloads",
+      "networkx_seconds": null,
+      "networkx_note": ""
+    },
+    "reduce_engine_moves": {
+      "description": "reduce one seeded graph with the 'moves' engine, phased for the engine comparison",
+      "size": 2000,
+      "total_seconds": 0.004237292000198067,
+      "phase_seconds": {
+        "generate input": 0.0008324999998876592,
+        "construct kernel graph": 0.0006813749996581464,
+        "structural moves": 0.0005580000001828012,
+        "fold provenance": 0.0019630830001915456,
+        "release": 0.0001934169999913138
+      },
+      "phase_shares": {
+        "generate input": 0.19646982078382724,
+        "construct kernel graph": 0.16080435325823575,
+        "structural moves": 0.13168787993763897,
+        "fold provenance": 0.46328716550565396,
+        "release": 0.04564637036632659
+      },
+      "accounted_share": 0.9978955898516825,
+      "peak_bytes": 1898140,
+      "outcome": "769 residual nodes, 1459 residual edges, 1459 provenance trees, 769 folded payloads",
+      "networkx_seconds": null,
+      "networkx_note": ""
+    },
+    "reduce_engine_rounds": {
+      "description": "reduce one seeded graph with the 'rounds' engine, phased for the engine comparison",
+      "size": 2000,
+      "total_seconds": 0.003982875000019703,
+      "phase_seconds": {
+        "generate input": 0.0008619999998700223,
+        "construct kernel graph": 0.0007282920000761806,
+        "structural moves": 0.00019425000027695205,
+        "fold provenance": 0.0019834159998026735,
+        "release": 0.00020804099995075376
+      },
+      "phase_shares": {
+        "generate input": 0.21642657624599265,
+        "construct kernel graph": 0.18285585163294799,
+        "structural moves": 0.04877130220656965,
+        "fold provenance": 0.4979860025215106,
+        "release": 0.052233876270212996
+      },
+      "accounted_share": 0.9982736088772338,
+      "peak_bytes": 1888928,
+      "outcome": "769 residual nodes, 1459 residual edges, 1459 provenance trees, 769 folded payloads",
+      "networkx_seconds": null,
+      "networkx_note": ""
+    },
+    "reduce_engine_python": {
+      "description": "reduce one seeded graph with the 'python' engine, phased for the engine comparison",
+      "size": 2000,
+      "total_seconds": 0.009247583000160375,
+      "phase_seconds": {
+        "generate input": 0.0008821669998724246,
+        "construct kernel graph": 0.0007419580001624126,
+        "structural moves": 0.007359040999745048,
+        "fold provenance": 0.0,
+        "release": 0.0002581669996288838
+      },
+      "phase_shares": {
+        "generate input": 0.09539433167100266,
+        "construct kernel graph": 0.08023264026389872,
+        "structural moves": 0.7957799351049268,
+        "fold provenance": 0.0,
+        "release": 0.027917240604859297
+      },
+      "accounted_share": 0.9993241476446875,
+      "peak_bytes": 2998536,
+      "outcome": "769 residual nodes, 1459 residual edges, 1459 provenance trees, 769 folded payloads",
+      "networkx_seconds": null,
+      "networkx_note": ""
     }
   }
 }
