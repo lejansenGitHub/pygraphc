@@ -87,11 +87,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `connected_component(node_id)` on `Graph` and `GraphView`: the connected
   component containing one node, as a set of node ids, the single-component
   counterpart of `connected_components()`. It reads the `component_labels`
-  kernel and materialises only the requested component, so on a graph of
-  1,000,000 nodes in components of five it costs 9.7 ms and 3.8 MiB against
-  130.8 ms and 140.4 MiB for building every component and picking one. Both
-  masks of a view are respected; an unknown node and a node excluded from the
-  view raise `ValueError`.
+  kernel and materialises only the requested component. Whether that is
+  cheaper depends on the shape of the graph: both paths run the same
+  O(n + m) label pass, so the accessor only saves the set building and pays
+  one Python step per member. At 1,000,000 nodes it costs 4.1 ms and 3.8 MiB
+  against 751.6 ms and 214.1 MiB on all singletons, and 6.3 ms against
+  11.6 ms on a thousand equal components, but 159.3 ms against 10.2 ms when
+  the graph is one dominant component — so on a graph that may have one
+  dominant component, `connected_components()` is the better call. The node is
+  resolved through the graph's cached node id to index map, which the first
+  call builds (about 79 MiB at 1,000,000 nodes) and the other id-taking
+  methods share. Both masks of a view are respected; an unknown node and a
+  node excluded from the view raise `ValueError`.
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 - `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx

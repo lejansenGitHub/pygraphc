@@ -1,45 +1,84 @@
 """One component against all of them: ``connected_component`` vs ``connected_components``.
 
-The claim under test is that asking for the component of one node costs about
-one component rather than all of them. The graph has many small components, so
-the generator has to build a set per component and add every node to one, while
-the accessor builds one set from a single scan of the int32 label buffer.
+The answer depends on the shape of the graph, not only on its size, so the
+sweep covers one giant component, a thousand equal components, all singletons
+and a sparse mixture with a giant component plus a long tail. The accessor
+builds one set from a scan of the int32 label buffer; the generator builds a
+set per component and adds every node to one. Both pay the same label pass, so
+the accessor only wins back the set building.
+
+The first call on a graph also builds the cached node id to index mapping, so
+the cold and warm columns are reported separately.
 
 Run with the venv python: ``python benchmarks/bench_single_component.py``.
 """
 
+import gc
+import random
 import time
 import tracemalloc
 from collections.abc import Callable
 
 from pygraphc import Graph
 
-NODE_COUNTS = (200_000, 1_000_000)
-COMPONENT_SIZE = 5
+NODE_COUNTS = (100_000, 1_000_000)
+EQUAL_COMPONENT_COUNT = 1_000
+MIXTURE_DEGREE = 0.8
+REPEATS = 5
+SEED = 20260911
 
 
-def chain_components(node_count: int) -> Graph:
-    """A graph of paths of ``COMPONENT_SIZE`` nodes, so there are many components."""
-    edges = [(index, index + 1) for index in range(node_count - 1) if (index + 1) % COMPONENT_SIZE != 0]
-    return Graph(list(range(node_count)), edges)
+def chain_components(node_count: int, component_size: int) -> list[tuple[int, int]]:
+    """Paths of ``component_size`` nodes, so every component has the same size."""
+    if component_size <= 1:
+        return []
+    return [(index, index + 1) for index in range(node_count - 1) if (index + 1) % component_size != 0]
 
 
-def time_and_peak(call: Callable[[], set[int]]) -> tuple[float, int, int]:
-    """Wall time of one call, the tracemalloc peak of a second call, and the result size."""
-    start = time.perf_counter()
-    result = call()
-    elapsed = time.perf_counter() - start
+def sparse_mixture(node_count: int) -> list[tuple[int, int]]:
+    """Random edges at average degree 1.6: one giant component plus a long tail of small ones."""
+    rng = random.Random(SEED)
+    edge_count = int(MIXTURE_DEGREE * node_count)
+    return [(rng.randrange(node_count), rng.randrange(node_count)) for _ in range(edge_count)]
+
+
+def best_seconds(call: Callable[[], set[int]]) -> float:
+    """Wall time of the fastest of ``REPEATS`` calls."""
+    best = float("inf")
+    for _ in range(REPEATS):
+        gc.collect()
+        start = time.perf_counter()
+        call()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def peak_bytes(call: Callable[[], set[int]]) -> int:
+    """``tracemalloc`` peak of one call."""
+    gc.collect()
     tracemalloc.start()
     call()
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
-    return elapsed, peak, len(result)
+    return peak
 
 
-def measure(node_count: int) -> None:
-    """Time both paths on one graph size and print the two rows."""
-    graph = chain_components(node_count)
-    probe = node_count // 2
+def pick_probe(graph: Graph, wanted: str) -> tuple[int, int]:
+    """A node of the ``"largest"`` or of the ``"smallest"`` component, taken at the median position."""
+    size_of: dict[int, int] = {}
+    for component in graph.connected_components():
+        for member in component:
+            size_of[member] = len(component)
+    member_count = max(size_of.values()) if wanted == "largest" else min(size_of.values())
+    candidates = sorted(node_id for node_id in size_of if size_of[node_id] == member_count)
+    return candidates[len(candidates) // 2], member_count
+
+
+def measure(shape: str, node_count: int, edges: list[tuple[int, int]], wanted: str) -> None:
+    """Print one row: the accessor cold and warm against building every component."""
+    node_ids = list(range(node_count))
+    graph = Graph(node_ids, edges)
+    probe, member_count = pick_probe(graph, wanted)
 
     def one_component() -> set[int]:
         return graph.connected_component(probe)
@@ -47,27 +86,42 @@ def measure(node_count: int) -> None:
     def every_component() -> set[int]:
         return next(component for component in graph.connected_components() if probe in component)
 
-    single, single_peak, single_size = time_and_peak(one_component)
-    every, every_peak, every_size = time_and_peak(every_component)
-    if single_size != every_size:
-        message = f"the two paths disagree: {single_size} members against {every_size}"
+    gc.collect()
+    cold_graph = Graph(node_ids, edges)
+    start = time.perf_counter()
+    cold_result = cold_graph.connected_component(probe)
+    cold = time.perf_counter() - start
+    del cold_graph
+    warm = best_seconds(one_component)
+    every = best_seconds(every_component)
+    one_peak = peak_bytes(one_component)
+    every_peak = peak_bytes(every_component)
+    if cold_result != every_component():
+        message = f"{shape}: the two paths disagree"
         raise AssertionError(message)
-    rows = (
-        ("connected_component", single, single_peak, f"{every / single:.1f}"),
-        ("all, then pick one", every, every_peak, ""),
+    print(  # noqa: T201 — a benchmark reports its table on stdout
+        f"{shape:<24} {node_count:>9} {member_count:>9} {cold * 1e3:>9.1f} {warm * 1e3:>9.1f} "
+        f"{every * 1e3:>9.1f} {every / warm:>8.2f} {one_peak / 2**20:>9.2f} {every_peak / 2**20:>9.2f}"
     )
-    for name, seconds, peak, break_even in rows:
-        print(  # noqa: T201 — a benchmark reports its table on stdout
-            f"{node_count:>10} {name:>22} {seconds:>10.4f} {peak / 2**20:>10.2f} {single_size:>8} {break_even:>10}"
-        )
 
 
 def main() -> None:
     print(  # noqa: T201 — a benchmark reports its table on stdout
-        f"{'nodes':>10} {'path':>22} {'seconds':>10} {'peak MiB':>10} {'members':>8} {'break-even':>10}"
+        f"{'shape':<24} {'nodes':>9} {'members':>9} {'cold ms':>9} {'warm ms':>9} "
+        f"{'all ms':>9} {'ratio':>8} {'one MiB':>9} {'all MiB':>9}"
     )
     for node_count in NODE_COUNTS:
-        measure(node_count)
+        measure("one giant component", node_count, chain_components(node_count, node_count), "largest")
+        measure(
+            "1000 equal components",
+            node_count,
+            chain_components(node_count, node_count // EQUAL_COMPONENT_COUNT),
+            "largest",
+        )
+        measure("all singletons", node_count, [], "largest")
+        mixture = sparse_mixture(node_count)
+        measure("sparse mixture, giant", node_count, mixture, "largest")
+        measure("sparse mixture, smallest", node_count, mixture, "smallest")
 
 
 if __name__ == "__main__":

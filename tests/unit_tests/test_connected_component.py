@@ -6,6 +6,7 @@ graph, a single node, one giant component and all singletons.
 """
 
 import random
+import sys
 
 import pytest
 
@@ -118,3 +119,30 @@ def test_connected_component_agrees_with_connected_components_on_random_multigra
             else:
                 with pytest.raises(ValueError, match="excluded from this view"):
                     view.connected_component(node_id)
+
+
+def test_connected_component_skips_hits_that_straddle_two_neighbouring_labels():
+    """A label whose four bytes also occur across two neighbours must not add a member.
+
+    Node 256 is the smallest index of its component, so its label is 256 —
+    bytes ``00 01 00 00`` on a little-endian machine — sitting next to nodes
+    labelled 0, which puts four zero bytes at offsets that are not multiples
+    of four. The scan resumes at the next four-byte boundary, which skips
+    exactly those offsets and no member.
+    """
+    # --- Input ---
+    zero_component = {0, *range(257, 400)}
+    graph = Graph(list(range(600)), [(0, index) for index in range(257, 400)] + [(256, 500)])
+
+    # --- Execute ---
+    labels = graph.component_labels().cast("B").tobytes()
+    zero_label = (0).to_bytes(4, sys.byteorder, signed=True)
+    straddling_hits = sum(
+        1 for position in range(len(labels) - 3) if position % 4 and labels[position : position + 4] == zero_label
+    )
+
+    # --- Assert ---
+    assert straddling_hits > 0
+    assert graph.connected_component(0) == zero_component
+    assert graph.connected_component(300) == zero_component
+    assert graph.connected_component(256) == {256, 500}

@@ -593,17 +593,19 @@ def _connected_component_of(
     index of its component, so the members are exactly the node indices
     carrying the requested node's label. Those labels are found by searching
     the raw int32 bytes for the label's four bytes, which keeps the search for
-    the next member in C instead of comparing one label per node in Python; a
-    hit at an offset that is not a multiple of four straddles two neighbouring
-    labels and is skipped. The node itself is resolved by scanning the node
-    ids, so a lookup allocates nothing beyond the label buffer and the
-    returned set.
+    the next member in C instead of comparing one label per node in Python.
+
+    A hit that does not start on a four-byte boundary straddles two
+    neighbouring labels and is not a member. The search resumes at the next
+    four-byte boundary rather than one byte on: every position it skips sits
+    off a boundary, so it can only hold a straddling hit and no member is ever
+    passed over.
     """
     node_ids = graph._node_ids
-    try:
-        node_index = node_ids.index(node_id)
-    except ValueError:
-        raise ValueError(f"node {node_id} is not in the graph") from None  # noqa: TRY003 — the id is the whole message
+    node_id_to_index = graph._get_node_id_to_idx()
+    if node_id not in node_id_to_index:
+        raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003 — the id is the whole message
+    node_index = node_id_to_index[node_id]
     labels: bytes = _component_labels_ctx(graph._ctx, excluded_edges, excluded_nodes)
     label = labels[4 * node_index : 4 * node_index + 4]
     if label == _EXCLUDED_LABEL:
@@ -613,7 +615,7 @@ def _connected_component_of(
     while position >= 0:
         if position % 4 == 0:
             component.add(node_ids[position // 4])
-        position = labels.find(label, position + 1)
+        position = labels.find(label, position + 4 - position % 4)
     return component
 
 
@@ -974,10 +976,17 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the connected component containing ``node_id`` as a set of node IDs.
 
-        The single-component counterpart of ``connected_components``: it
-        materialises only the requested component, so one component costs one
-        component instead of all of them. Raises ``ValueError`` if the node is
-        not in the graph.
+        The single-component counterpart of ``connected_components``. It
+        materialises only the requested component but still runs the same
+        O(n + m) label pass, so it is faster only when that component is a
+        small part of the graph. On a graph with one dominant component it is
+        slower than building every component and picking one: at 1,000,000
+        nodes in a single component it takes 159 ms against 10 ms, while at
+        1,000,000 singletons it takes 4 ms against 752 ms. A caller asking for
+        the component of a node cannot know how large that component will turn
+        out to be, so prefer ``connected_components()`` whenever the graph may
+        have one dominant component. Raises ``ValueError`` if the node is not
+        in the graph.
         """
         self._require_undirected("connected_component")
         return _connected_component_of(self, node_id, None, None)
