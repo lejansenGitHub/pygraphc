@@ -1048,23 +1048,25 @@ def _sweep_parallels(state: pygraphc.ReductionState) -> None:
         state.apply_batch(_OPERATION_PARALLEL, batch)
 
 
-def _reduce_moves(
-    graph: MultiGraph[EdgeId],
+def _structural_log_moves(
+    kernel: _KernelGraph[EdgeId],
     terminals: AbstractSet[int],
     protected: AbstractSet[int],
     *,
     pendant: PendantPolicy,
     series_ineligible: AbstractSet[int],
-) -> Reduced[EdgeId]:
-    """The same reduction with the fixpoint loop here and one C primitive per move.
+) -> pygraphc.ReductionLog:
+    """The structural half of the ``"moves"`` engine: one C primitive per move.
 
     C keeps the half-edge incidence structure and the candidate queue behind
     an opaque handle, so nothing is rebuilt between moves; this loop asks for
     the next applicable move, applies it, and merges the parallel pair a
     series move reports. The moves therefore come in exactly the order the
     ``"c"`` engine applies them and the operation log is the same one.
+
+    It is a function of its own so that the structural work and the fold
+    over its log can be called, and therefore measured, apart.
     """
-    kernel = graph._kernel
     terminal_mask, protected_mask, keep_mask, series_blocked_mask = _node_masks(
         kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible
     )
@@ -1083,11 +1085,10 @@ def _reduce_moves(
                 if members is not None:
                     apply_parallel(first_neighbour, second_neighbour, members)
             move = next_move()
-        log = state.log()
-    return _fold_operation_log(graph, kernel, log, pendant=pendant)
+        return state.log()
 
 
-def _reduce_rounds(
+def _reduce_moves(
     graph: MultiGraph[EdgeId],
     terminals: AbstractSet[int],
     protected: AbstractSet[int],
@@ -1095,7 +1096,23 @@ def _reduce_rounds(
     pendant: PendantPolicy,
     series_ineligible: AbstractSet[int],
 ) -> Reduced[EdgeId]:
-    """The same reduction in rounds: one C primitive per kind per round, over the same handle.
+    """The same reduction driven from Python over the C primitives, then the fold."""
+    kernel = graph._kernel
+    log = _structural_log_moves(
+        kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible
+    )
+    return _fold_operation_log(graph, kernel, log, pendant=pendant)
+
+
+def _structural_log_rounds(
+    kernel: _KernelGraph[EdgeId],
+    terminals: AbstractSet[int],
+    protected: AbstractSet[int],
+    *,
+    pendant: PendantPolicy,
+    series_ineligible: AbstractSet[int],
+) -> pygraphc.ReductionLog:
+    """The structural half of the ``"rounds"`` engine: one C primitive per kind per round.
 
     Each round asks for every currently applicable and mutually independent
     move of one kind and applies the whole batch, so the number of boundary
@@ -1104,8 +1121,10 @@ def _reduce_rounds(
     provenance trees may differ in shape from the other engines' while
     describing the same thing; the residual, the leaves of every residual
     edge and the folded payloads are the same.
+
+    It is a function of its own so that the structural work and the fold
+    over its log can be called, and therefore measured, apart.
     """
-    kernel = graph._kernel
     terminal_mask, protected_mask, keep_mask, series_blocked_mask = _node_masks(
         kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible
     )
@@ -1121,7 +1140,22 @@ def _reduce_rounds(
                 if batch is not None:
                     apply_batch(kind, batch)
                     progressed = True
-        log = state.log()
+        return state.log()
+
+
+def _reduce_rounds(
+    graph: MultiGraph[EdgeId],
+    terminals: AbstractSet[int],
+    protected: AbstractSet[int],
+    *,
+    pendant: PendantPolicy,
+    series_ineligible: AbstractSet[int],
+) -> Reduced[EdgeId]:
+    """The same reduction driven from Python over the C primitives, then the fold."""
+    kernel = graph._kernel
+    log = _structural_log_rounds(
+        kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible
+    )
     return _fold_operation_log(graph, kernel, log, pendant=pendant)
 
 
