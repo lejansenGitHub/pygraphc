@@ -27,10 +27,11 @@ becomes ``k`` times slower:
 
 and above a share of 0.80 it can never fire by growing, because there are not
 20 points left to gain. Sharpest in the middle, blunt at both ends, which is
-why the absolute per-phase test below exists: a C kernel is a single-digit
-percentage of its workflow at every size, and at the 1.3% the reduction loop
-holds the share test would need a twenty-sixfold regression before saying
-anything.
+why the absolute per-phase test below exists. Three of the four C kernels
+measured here are a single-digit percentage of their workflow's library time
+whatever the graph size — the reduction loop 1.5%, the degree kernel 3.6%, the
+bridge kernel 4.9% — so the share test would need a sixfold to an eighteenfold
+regression in them before saying anything.
 
 **What the absolute test can catch.** ``PHASE_MULTIPLE`` on the phase itself,
 which is an order-of-magnitude regression in any library phase above
