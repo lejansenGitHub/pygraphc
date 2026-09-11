@@ -1199,11 +1199,11 @@ by side at 20,000, 100,000 and 1,000,000 nodes; a `pstats` diff of each
 interesting pair, naming the functions whose time differs, the functions only
 one profile has, and the number of calls each engine makes across the
 Python-to-C boundary; and the answers, with numbers, to what the fold costs,
-where `"moves"` loses its margin and why `"rounds"` beats the monolith. The two
-smaller sizes are profiled under `cProfile`; the largest is timed only, and the
-artifact says which is which. Where an engine has no counterpart to a phase the
-phase is recorded as zero rather than omitted, so the four tables line up row
-by row. The numbers land in `profiles/engine_comparison.json` next to the
+where `"moves"` loses its margin and why `"rounds"` matches the monolith. The
+two smaller sizes are profiled under `cProfile`; the largest is timed only, and
+the artifact says which is which. Where an engine has no counterpart to a phase
+the phase is recorded as zero rather than omitted, so the four tables line up
+row by row. The numbers land in `profiles/engine_comparison.json` next to the
 artifact, and `--rebuild-comparison` rewrites the prose from them without
 re-measuring.
 
@@ -1234,11 +1234,14 @@ it needs to be. Genuine complexity does exist and is fine where the problem
 really carries it, but that is the rarer case.
 
 Two measurements from this repository make the case better than the argument
-does. Four fifths of a `reduce` call turned out to be building provenance trees,
-not the C loop everyone assumed it was. And a shortest-path search that inspects
-a few hundred edges turned out to be dominated by converting three hundred
-thousand weights it never read — fixed by deleting ninety-six lines of C, which
-is exactly the outcome the principle predicts.
+does. Most of a `reduce` call turned out to be building provenance trees, not
+the C loop everyone assumed it was — about three quarters of it when the kernel
+graph is built on demand and about nine tenths when it is already there, which
+is the finding the engine comparison above reports. And a source-to-target
+shortest path that inspects a few hundred edges turned out to be settling every
+node nearer the source than the target: the search was answering a larger
+question than the one asked, and the fix was to stop asking it — two searches
+meeting in the middle, not a faster inner loop.
 
 The mechanism is concrete: add or update a workflow in
 `benchmarks/profile_workflows.py`, commit the artifact comparison, and state in

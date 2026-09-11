@@ -229,7 +229,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   so the comparison between them is not confounded. Phases are `generate
   input`, `construct kernel graph`, `structural moves`, `fold provenance` and
   `release`; an engine without a counterpart to a phase records it as zero
-  rather than omitting it, so the four tables line up row by row.
+  rather than omitting it, so the four tables line up row by row. The `python`
+  engine interleaves the structural work and the fold, and the harness prints
+  that caveat wherever it prints those phases — the console table, `summary.md`
+  and `engine_comparison.md` — rather than in the artifact alone.
 - `python benchmarks/profile_workflows.py --compare-engines` and the
   `profiles/engine_comparison.md` it writes: the phase table for the four
   engines side by side at 20 000, 100 000 and 1 000 000 nodes, a `pstats`

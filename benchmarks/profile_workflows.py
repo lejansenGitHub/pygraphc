@@ -36,6 +36,7 @@ import pstats
 import random
 import subprocess
 import sys
+import textwrap
 import time
 import tracemalloc
 from collections.abc import Callable, Iterator
@@ -124,6 +125,8 @@ class Workflow:
     """
     networkx_reference: NetworkxReference | None = None
     networkx_note: str = ""
+    phase_note: str = ""
+    """Caveat about how this workflow's phases are cut, printed wherever its phases are."""
 
     def size_for(self, profile_name: str) -> int:
         return self.default_size if profile_name == "default" else self.guard_size
@@ -461,6 +464,13 @@ PHASE_FOLD = "fold provenance"
 PHASE_RELEASE = "release"
 ENGINE_PHASES: tuple[str, ...] = (PHASE_GENERATE, PHASE_KERNEL, PHASE_STRUCTURAL, PHASE_FOLD, PHASE_RELEASE)
 
+PYTHON_ENGINE_PHASE_NOTE = (
+    f"The `python` engine is not phased like the other three: it interleaves the structural work and the "
+    f"fold, so its `{PHASE_STRUCTURAL}` figure holds both and its `{PHASE_FOLD}` figure is zero by "
+    f"construction rather than by measurement. Compare it against the sum of those two in a C-backed "
+    f"engine, never against `{PHASE_STRUCTURAL}` alone."
+)
+
 
 def engine_input(size: int) -> tuple[list[int], dict[int, tuple[int, int]], frozenset[int]]:
     """The one seeded graph and terminal set every engine workflow reduces, so only the engine differs."""
@@ -524,6 +534,7 @@ def engine_workflow(engine: str) -> Workflow:
         body=partial(workflow_reduce_engine, engine=engine),
         default_size=20_000,
         guard_size=2_000,
+        phase_note=PYTHON_ENGINE_PHASE_NOTE if engine == "python" else "",
     )
 
 
@@ -625,6 +636,7 @@ class Measurement:
     outcome: str = ""
     networkx_seconds: float | None = None
     networkx_note: str = ""
+    phase_note: str = ""
 
     @property
     def phase_shares(self) -> dict[str, float]:
@@ -722,6 +734,7 @@ def measure(
         outcome=outcome,
         networkx_seconds=networkx_seconds,
         networkx_note=workflow.networkx_note,
+        phase_note=workflow.phase_note,
     )
 
 
@@ -899,15 +912,31 @@ def summary_markdown(measurements: list[Measurement], profile_name: str) -> str:
         lines.append(f"- **`{measurement.name}`** — {measurement.description}. Result: {measurement.outcome}.")
         if measurement.networkx_note:
             lines.append(f"  - networkx reference: {measurement.networkx_note}.")
+        if measurement.phase_note:
+            lines.append(f"  - {measurement.phase_note}")
     lines.append("")
     return "\n".join(lines)
+
+
+CONSOLE_WIDTH = 81
+CONSOLE_NOTE_INDENT = " " * 25
+
+
+def console_note_lines(note: str) -> list[str]:
+    """A workflow's phase caveat under its own rows, so the console says what the artifacts say."""
+    return textwrap.wrap(
+        note,
+        width=CONSOLE_WIDTH,
+        initial_indent=CONSOLE_NOTE_INDENT,
+        subsequent_indent=CONSOLE_NOTE_INDENT,
+    )
 
 
 def console_table(measurements: list[Measurement]) -> str:
     """The same numbers as plain text, printed by the harness and by the guard on failure."""
     lines = [
         f"{'workflow':<24} {'phase':<26} {'seconds':>9} {'of total':>9} {'of library':>11}",
-        "-" * 81,
+        "-" * CONSOLE_WIDTH,
     ]
     for measurement in measurements:
         lines.append(
@@ -924,6 +953,8 @@ def console_table(measurements: list[Measurement]) -> str:
                 else f"{library_shares[phase_name] * 100:>10.1f}%"
             )
             lines.append(f"{'':<24} {phase_name:<26} {seconds:>9.4f} {shares[phase_name] * 100:>8.1f}% {library_cell}")
+        if measurement.phase_note:
+            lines.extend(console_note_lines(measurement.phase_note))
     return "\n".join(lines)
 
 
@@ -1125,6 +1156,7 @@ def load_engine_comparison(directory: Path) -> EngineComparison:
                 total_seconds=entry["total_seconds"],
                 phase_seconds=entry["phase_seconds"],
                 outcome=entry["outcome"],
+                phase_note=WORKFLOWS_BY_NAME[entry["name"]].phase_note,
             )
             for engine, entry in by_engine.items()
         }
@@ -1163,13 +1195,7 @@ def phase_table_lines(by_engine: dict[str, Measurement]) -> list[str]:
         for engine in ENGINE_NAMES
     ]
     lines.append("| vs `c` | " + " | ".join(relative) + " |")
-    python_note = (
-        f"The `python` column is not phased like the other three: that engine interleaves the structural work "
-        f"and the fold, so its `{PHASE_STRUCTURAL}` cell holds both and its `{PHASE_FOLD}` cell is zero by "
-        f"construction rather than by measurement. Compare it against the sum of the two rows in the C-backed "
-        f"columns, never against `{PHASE_STRUCTURAL}` alone."
-    )
-    lines.extend(["", python_note])
+    lines.extend(["", PYTHON_ENGINE_PHASE_NOTE])
     return lines
 
 
