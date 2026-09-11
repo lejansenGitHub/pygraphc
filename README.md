@@ -631,7 +631,7 @@ src, dst, edge_indices, internal = graph.quotient_edges(labels)
 #### Domain independence check
 
 The reduction kernel was designed while looking at one application, so
-`tests/integration_tests/` keeps three cases from unrelated fields as the
+`tests/integration_tests/` keeps four cases from unrelated fields as the
 standing check that nothing domain-specific leaked into the API. Each models a
 real problem and asserts statements that are true about the modelled world, not
 numbers that happen to fall out of the code:
@@ -641,6 +641,7 @@ numbers that happen to fall out of the code:
 | [Seven bridges of Konigsberg](tests/integration_tests/test_koenigsberg_bridges.py) | civil infrastructure, 1736 | `Partition`, `quotient` keeping parallel bridges distinct, `lift` of a per-district headcount, `minimal_toggles` over a parallel provenance node, and the irreducible four-node core where series and parallel moves stop |
 | [Caffeine scaffold](tests/integration_tests/test_caffeine_scaffold.py) | cheminformatics | `cycle_basis` and `bridges` to find the ring system, then `reduce` with `fold_leaves` as the side-chain stripping of a Bemis-Murcko decomposition |
 | [Perfect maze](tests/integration_tests/test_maze_solving.py) | puzzles, robot path planning | pendant and series moves collapsing a spanning tree to one edge, `paths` over the resulting series chain as the maze solution, `scenario` as a blocked-passage query |
+| [Braided maze](tests/integration_tests/test_braided_maze.py) | maze design, game level design | the same maze with three extra passages: the parallel move, `paths` returning all eight routes, `scenario` showing a passage on a loop is no longer a bridge, `minimal_toggles` as the cheapest set of passages to wall up, dead ends pruned into the folded material |
 
 ```bash
 pytest tests/integration_tests/ -v          # or: pytest tests/ -m integration
