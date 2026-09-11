@@ -244,3 +244,295 @@ Two adjacent facts from the same search, worth recording for later:
 about whether any call may return a frozenset. Until then the conclusion of
 this note stands unchanged: there is no faster path, and the two negative cells
 in the matrix above are cache locality on synthetic inputs, not presizing.
+
+---
+
+# Addendum: what PEP 839's writer could actually buy, measured (2026-09-11)
+
+The note above closes with "revisit when 3.16 is a supported target". This
+section puts a number on that decision now, so that it and the feedback sent to
+the PEP's author rest on measurement rather than on hope.
+
+Measurement script: `benchmarks/pep839/bench_presize_estimate.py` with
+`benchmarks/pep839/_presize_bench.c`. Interpreter as above,
+`3.11.11 (main, Jul 16 2025, 22:29:00) [Clang 17.0.0]`, arm64 macOS. Five
+independent full runs — three covering both insertion orders, two covering the
+scattered order only; best of seven trials per cell, median alongside. The
+tables below are one run, the last; the ranges span all of them.
+
+## What is measurable today, and why the answer is an upper bound
+
+`PyFrozenSetWriter` is `Create(size_hint)` + `Add` × N + `Finish`. None of it is
+callable on 3.11. The *insertion half* of it is, because the source above
+settles that a **set** argument and an **exact dict** argument both reach the
+presize path: `PySet_New(source)` fills a table that was sized once, up front.
+
+So the measurement is: build the source container **before the clock starts**,
+time only the `PySet_New(source)` call, and compare against the library's
+current path, `PySet_New(NULL)` followed by N `PySet_Add`. The excluded source
+construction is precisely the work the writer removes, which makes the gap
+**an upper bound on what the writer can save**. Three separate reasons the true
+win must come out smaller:
+
+1. A real writer pays its own `Create` and `Finish`. Not included here.
+2. Both presized paths **reuse a hash somebody else already computed**. The dict
+   path calls `set_add_entry(so, key, hash)` with the hash `_PyDict_Next` hands
+   back (`setobject.c:904-905`); a writer's `Add` receives a bare `PyObject *`
+   and must call `PyObject_Hash` itself.
+3. With a **set** argument the path degenerates entirely. `set_merge` copies
+   pointers slot by slot when the masks match and the source has no dummies
+   (`setobject.c:584-599`), and uses `set_insert_clean` — no duplicate check —
+   whenever the destination is merely empty (`:601-615`):
+
+```c
+584:     /* If our table is empty, and both tables have the same size, and
+585:        there are no dummies to eliminate, then just copy the pointers. */
+586:     if (so->fill == 0 && so->mask == other->mask && other->fill == other->used) {
+...
+601:     /* If our table is empty, we can use set_insert_clean() */
+602:     if (so->fill == 0) {
+```
+
+   At 800,000 members that path costs **2.7 ns per element**, which is a table
+   clone, not insertion. A writer is handed items one at a time and can never
+   do this.
+
+Two models are therefore reported:
+
+- **writer model** — the dict path plus a separately measured `PyObject_Hash`
+  per item, added back. Closest available analogue of a writer's `Add` loop:
+  presized table, one full duplicate-checking probe per item, hashing paid.
+- **loose ceiling** — the fastest presized path, as the question was posed. It
+  is a true upper bound and a useless target: it is the clone above.
+
+A control pins the third point down. Poisoning the source set with dummies
+(`fill != used`) disqualifies the clone and forces `set_insert_clean`; the
+`set_from_poisoned_set` column is that loop, and it is the floor of a writer's
+`Add` — what insertion into a presized table costs with no duplicate check and
+no hashing.
+
+## Insertion order dominates everything else
+
+For integer node ids the library hands ids to the set in **ascending** order:
+the kernel walks nodes in index order, `hash(int) == int`, so the slot index
+`hash & mask` ascends too and the writes are sequential. Resizing a table whose
+contents are laid out in ascending slot order is also a sequential walk. Both
+orders were measured; the difference is a factor of five on the largest
+component, and it decides the answer.
+
+### Per-element nanoseconds, ascending ids (faithful to this workload)
+
+| members | incremental `PySet_Add` | from set (clone) | from poisoned set (clean insert) | from exact dict (presized + probe) | `PyObject_Hash` alone |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 186.6 | 196.1 | 193.4 | 195.9 | 2.2 |
+| 2 | 100.2 | 104.7 | 102.0 | 108.8 | 2.2 |
+| 3 | 76.5 | 72.1 | 68.6 | 79.2 | 2.0 |
+| 5 | 70.4 | 42.1 | 42.5 | 51.4 | 1.9 |
+| 10 | 33.4 | 23.0 | 24.7 | 26.2 | 1.8 |
+| 100 | 21.5 | 11.7 | 11.8 | 15.5 | 1.7 |
+| 1,000 | 11.3 | 4.7 | 7.0 | 9.5 | 1.6 |
+| 100,000 | 15.5 | 6.7 | 8.0 | 7.0 | 2.2 |
+| 800,000 | 8.9 | 2.7 | 3.7 | 4.6 | 1.6 |
+
+### Per-element nanoseconds, scattered ids (node ids whose hashes are not ordered)
+
+| members | incremental `PySet_Add` | from set (clone) | from poisoned set (clean insert) | from exact dict (presized + probe) | `PyObject_Hash` alone |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 219.2 | 194.0 | 202.4 | 206.4 | 2.2 |
+| 2 | 115.8 | 105.1 | 104.1 | 114.9 | 2.2 |
+| 3 | 73.5 | 68.5 | 73.7 | 79.1 | 2.0 |
+| 5 | 60.7 | 44.7 | 44.0 | 47.6 | 1.9 |
+| 10 | 26.8 | 23.5 | 24.8 | 28.0 | 1.7 |
+| 100 | 20.8 | 11.9 | 11.9 | 15.9 | 1.7 |
+| 1,000 | 11.6 | 4.7 | 5.7 | 9.8 | 1.6 |
+| 100,000 | 28.1 | 6.7 | 8.7 | 25.6 | 2.7 |
+| 800,000 | 44.1 | 2.7 | 3.7 | 24.6 | 9.1 |
+
+### The saving per set, in nanoseconds
+
+Small sizes are reported per set over a large batch (200,000 sets at size 1
+down to 3 at size 800,000), because one tiny set is unmeasurable.
+
+| members | ascending: writer model | ascending: loose ceiling | scattered: writer model | scattered: loose ceiling |
+|---:|---:|---:|---:|---:|
+| 1 | -11 | -5 | 11 | 25 |
+| 2 | -21 | -9 | -3 | 21 |
+| 3 | -14 | 13 | -23 | 18 |
+| 5 | 85 | 142 | 56 | 80 |
+| 10 | 54 | 104 | -28 | 34 |
+| 100 | 428 | 982 | 316 | 892 |
+| 1,000 | 143 | 6,605 | 236 | 7,108 |
+| 100,000 | 628,450 | 881,350 | -23,000 | 2,136,550 |
+| 800,000 | 2,131,000 | 4,937,000 | 8,305,700 | 33,091,700 |
+
+Below about 5 members there is nothing to save and the numbers say so: the
+`smalltable` of 8 slots holds up to 4 entries without a resize, so the ~200 ns
+is object allocation and the sign of the difference is noise. Between 10 and
+1,000 members the writer model is worth 1-3% of the per-set cost. Only above
+100,000 members does it become a real fraction, and only in scattered order
+does it become a large one.
+
+## Peak memory
+
+Building one 800,000-member container in a fresh process, RSS in MB, measured
+after the member list (65.0), after the source container, and after the build:
+
+| path | + source | + built container |
+|---|---:|---:|
+| incremental `PySet_Add` | — | 126.5 |
+| from set | 126.5 | 160.1 |
+| from exact dict | 143.5 | 177.1 |
+| from poisoned set | 294.5 | 294.5 |
+
+The incremental build costs **60 to 62 MB** for a set whose final table is 33.6
+MB (2²¹ slots × 16 bytes): the extra is the doubling transient, the 2²⁰-slot
+table still alive while the 2²¹ one is filled. Every presized build costs
+**33.6 MB**, the final table and nothing else. This is the one place where the
+writer wins clearly and for a structural reason rather than by a few
+nanoseconds: roughly **28 MB less peak** on the largest component, against the
+136-163 MB peak this note records for the whole call. The presize also picks a
+smaller table than incremental growth does at middling sizes — `(used + hint) *
+2` against `used * 4` — so a 1,000-member set lands in 2,048 slots instead of
+4,096.
+
+The whole-sweep RSS figures (440 MB incremental, 416 MB from set, 433 MB from
+dict, 480 MB poisoned, 67 MB hash-only) are high-water marks over all nine
+sizes and compare the paths only loosely; the single-container table above is
+the attributable one.
+
+## The combined estimate for the real workload
+
+Same graph as above: 1,000,000 nodes, 1,000,000 random edges, reproduced here as
+**161,844 components, largest 796,524** (the note's run: 162,063 and 796,603).
+The distribution is 135,016 singletons, 18,515 pairs, 5,012 triples, a tail
+reaching 17 members — and one component holding 79.7% of all nodes.
+
+Per-size savings were interpolated log-linearly in size and summed over the real
+distribution. Because the largest component is 796,524 members and the largest
+measured size is 800,000, the estimate is dominated by a cell that was measured
+almost exactly, not by interpolation. The 161,843 small components contribute at
+or below noise, sometimes negative, within about ±1 ms of zero in total.
+
+The microbenchmark's own incremental path predicts 38-40 ms of set construction
+for this distribution in ascending order against the 49.3 ms the real call
+spends, so absolute savings are scaled by that ratio (×1.22 to ×1.30) to land on
+the real call. In scattered order it predicts 66-71 ms, scaling by ×0.69 to
+×0.74.
+
+| | upper bound on the saving | of the 49.3 ms of set construction | of the 83.8 ms call |
+|---|---:|---:|---:|
+| **writer model, ascending ids** (this workload) | **0.4 to 3.1 ms** | **1-6%** | **0.5-4%** |
+| writer model, scattered ids | 4.1 to 7.9 ms | 8-16% | 5-9% |
+| loose ceiling, ascending ids | 5.8 to 9.3 ms | 12-19% | 7-11% |
+| loose ceiling, scattered ids | 24.4 to 26.5 ms | 50-54% | 29-32% |
+
+Ranges span the independent runs — three in ascending order, five in scattered
+order — and, within each run, best-of-seven against median trial. In ascending
+order the estimate sits at the edge of measurability: the largest component
+alone accounts for 2.1 ms of saving, and the 161,843 small components cancel
+most of it with measured savings that are slightly negative.
+
+Every figure in the table is an upper bound: none of them charges the writer for
+its own `Create` and `Finish`, and none of them charges it for the table-sizing
+policy it will actually use, which has to keep a load factor below about 60% and
+so may size differently from the `(hint) * 2` the presize picks.
+
+**The answer for this library is under 1 to 3 ms of an 83.8 ms call**, because
+its node ids are integers in a contiguous range and therefore arrive in
+ascending hash order, which already makes the resizes nearly free. Node ids
+with scattered hashes — strings, UUIDs — would see 4 to 8 ms.
+
+One more cost belongs in the decision. The writer is frozenset-only, and the
+`frozen_incremental` column measures what that type change costs on today's add
+loop: **+12% to +16% at 800,000 members** and +18% to +29% at 1,000 members
+(`PySet_Add` on a frozenset takes the refcount-checking branch). A non-trivial
+slice of the writer's win would go to paying back the switch it forces.
+
+## Recommendation
+
+**No — do not plan to adopt the writer, and do not require Python 3.16 for
+it.** At most three milliseconds, possibly well under one, of an 83.8 ms call —
+for the price of dropping 3.11 through 3.15 and changing the return type of
+every set-returning call from `set` to `frozenset` — is not a trade worth
+making. The estimate is an upper bound and the real figure is smaller.
+
+Revisit only when one of these changes:
+
+- **3.16 becomes the support floor for unrelated reasons.** Then the writer costs
+  nothing to adopt and should be taken: the win is small but real, and the
+  ~28 MB lower peak on large components is the better half of it.
+- **Node ids with unordered hashes become the common case.** 4 to 8 ms, 5-9% of
+  the call, is still not large, but it is four times the ordered-id figure.
+- **Free-threaded builds become a target.** Set construction is already the
+  dominant cost there, and the open `PySet_Add` critical-section regression
+  (cpython#140476) makes the add loop worse while leaving the writer untouched.
+
+## Feedback worth sending to the PEP
+
+1. **Publish benchmarks, and vary insertion order in them.** The size of the win
+   here moves by 5× depending on whether items arrive in ascending hash order.
+   A benchmark that only inserts `range(n)` will overstate the resize cost it
+   removes for scattered inputs and understate the win for ordered ones.
+2. **The clearest benefit measured is peak memory, not time**: 33.6 MB instead
+   of about 61 MB for an 800,000-member container, because the doubling
+   transient never exists. That is worth stating in the PEP; it is a stronger
+   argument than the time saved.
+3. **Let `Add` take a precomputed hash.** A C producer often already has it, and
+   the measurements above show that reusing a stored hash is where the presized
+   paths keep their remaining advantage — 1.6 to 9.1 ns per item, which is 35%
+   to 37% of the presized insertion cost itself.
+4. **A `PySetWriter` for mutable sets would widen the audience.** A
+   frozenset-only API forces a return-type change on any library that hands back
+   mutable sets, and that change alone costs 12-29% on the current add loop
+   before the writer recovers anything.
+5. Note that `PySet_Add`'s soft deprecation on frozensets from 3.14 leaves
+   frozenset producers with no non-deprecated incremental path until 3.16.
+
+## The struct-level prototype was not attempted
+
+Part two — allocating a frozenset, sizing its table by hand through
+`PySetObject` and filling it directly — was judged not worth the risk, because
+the two paths already reached through the public API **bracket a writer's `Add`
+loop from both sides on the real interpreter**:
+
+- `set_insert_clean` via the poisoned set — presized table, no duplicate check:
+  3.7 ns per element at 800,000.
+- `set_add_entry` via the exact dict — presized table, full duplicate check:
+  4.6 ns ascending, 24.6 ns scattered.
+
+A hand-written prototype would execute one of those same two loops. It would
+not produce a number the public API cannot already produce, and it would depend
+on non-stable struct layout with a subtly-broken-object failure mode that only
+exhaustive validation can catch. The first findings note also records that
+direct `PySetObject` table manipulation was already tried on this problem and
+measured 6-15% *worse*. The upper bound from part one is unambiguous enough to
+decide on: no prototype was written, and none is needed.
+
+## Addendum: what a frozenset return would cost, and what the writer would fix
+
+A separate branch built the frozenset return change and measured it before it
+was abandoned. Recording the result here, because it changes which argument for
+PEP 839 actually applies to this package.
+
+Filling a frozenset is **not** free. `PySet_Add` on a frozenset falls through to
+an out-of-line `PyType_IsSubtype` call once per element, costing about 1.2 to
+1.7 ns more per element than the same fill into a set. In isolation that is
+**9 to 24 percent of the fill loop** from 2 to 100,000 members. End to end it is
+**1 to 3 percent of a whole components call** at a million nodes, and the same
+for biconnected components. The obvious alternative, building a set and
+converting it, is far worse at 34 to 83 percent, so an in-place fill is the
+cheaper of the two ways to return a frozenset.
+
+That reframes the PEP for us. The presize argument measured near zero on this
+package's output, because almost every container we build is a singleton or a
+pair and never resizes. But the writer would remove exactly the per-element
+type check above, which is a real cost and the only one we measured. So:
+
+- while the API returns `set`, PEP 839 buys this package nothing;
+- if the API ever returns `frozenset`, PEP 839 removes precisely the overhead
+  that choice introduces.
+
+The frozenset change was not pursued, on the grounds that a 1 to 3 percent cost
+for hashable immutable results did not justify adding to an already full
+review queue. The measurement is kept so that the decision does not have to be
+made twice.
