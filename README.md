@@ -716,7 +716,15 @@ The primitives write into raw arrays, so every index handed back is checked
 first: an edge must be live and run between the two distinct live nodes named,
 a series move must name two distinct edges, the members of a parallel merge
 must be live and in increasing slot order, and no move may remove a terminal.
-Anything else raises `ValueError` before a single array is written.
+Anything else raises `ValueError` before that move writes anything.
+
+`apply_batch` checks and applies one record at a time, so the guarantee is per
+record and not per batch: a batch whose third record is invalid raises with the
+first two applied. Every applied record was checked in full, so the state is
+valid rather than half-written, but it is not the state the batch described —
+read the log or rebuild the batch rather than assuming the call was atomic. The
+engines here only ever feed back a batch that `batch_moves` produced, which is
+why this has no caller consequence today.
 
 On 20 000 nodes, 25 000 edges and 200 terminals: 0.022 s for `engine="c"`,
 **0.025 s** for `"moves"` and **0.023 s** for `"rounds"`; at a million nodes
