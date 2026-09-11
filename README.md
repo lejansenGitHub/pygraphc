@@ -646,6 +646,10 @@ numbers that happen to fall out of the code:
 pytest tests/integration_tests/ -v          # or: pytest tests/ -m integration
 ```
 
+The pre-commit hooks deselect the marker to stay fast, so CI carries the check:
+the `integration` job in `.github/workflows/ci.yml` runs the directory on every
+supported Python version.
+
 ### DAG structure learning (Bayesian networks)
 
 Learn directed acyclic graph (DAG) structures from discrete data using greedy hill-climb search with K2 Bayesian scoring. Implemented in C — drop-in replacement for pgmpy's `HillClimbSearch` with identical results and orders of magnitude faster.

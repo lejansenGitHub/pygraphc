@@ -55,17 +55,20 @@ NORTH_BANK_LAND_LINK = "land: Altstadt-Loebenicht"
 # The seven bridges, with the district each end stood on. The Kraemerbruecke
 # and the Schmiedebruecke reached the Kneiphof from the Altstadt; the Gruene
 # Bruecke and the Koettelbruecke reached it from the Vorstadt on the south
-# bank; the Holzbruecke reached the Lomse from the north bank on the Loebenicht
-# side, the Hohe Bruecke reached it from the Vorstadt, and the Honigbruecke
-# joined the two islands directly. Only the side of the river matters for
-# Euler's argument; the district each north-bank bridge landed in matters only
-# for the layer below it, and the quotient is the same either way.
+# bank; the Holzbruecke, built by the burghers of the Altstadt in 1404, reached
+# the Lomse from the Altstadt on the north bank, the Hohe Bruecke reached it
+# from the south bank, and the Honigbruecke joined the two islands directly.
+# So the Loebenicht, alone among the three towns, had none of the seven. The
+# Hohe Bruecke's south end stood in the Haberberg quarter, which this model
+# folds into the Vorstadt because only the side of the river matters for
+# Euler's argument; the district each bridge landed in matters only for the
+# layer below it, and the quotient is the same either way.
 BRIDGES: dict[str, tuple[int, int]] = {
     "Kraemerbruecke": (ALTSTADT, KNEIPHOF),
     "Schmiedebruecke": (ALTSTADT, KNEIPHOF),
     "Gruene Bruecke": (VORSTADT, KNEIPHOF),
     "Koettelbruecke": (VORSTADT, KNEIPHOF),
-    "Holzbruecke": (LOEBENICHT, LOMSE),
+    "Holzbruecke": (ALTSTADT, LOMSE),
     "Hohe Bruecke": (VORSTADT, LOMSE),
     "Honigbruecke": (KNEIPHOF, LOMSE),
 }
