@@ -2,7 +2,7 @@
 
 ## Context
 Users have domain objects (e.g. `Branch` with `.node_a`, `.node_b`) and need
-to extract edge data for cgraph. The gathering strategy significantly impacts
+to extract edge data for pygraphc. The gathering strategy significantly impacts
 end-to-end performance.
 
 ## Gathering approaches benchmarked (1M nodes, 1.5M edges)

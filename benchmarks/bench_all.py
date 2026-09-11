@@ -2,7 +2,7 @@
 Structured benchmark: measures the 3 cost phases separately for connected_components.
 
 Phase 1 - Gather: extracting edges from domain objects (Branch instances)
-Phase 2 - Parse: cgraph hash map build + edge translation (nid_parse)
+Phase 2 - Parse: pygraphc hash map build + edge translation (nid_parse)
 Phase 3 - C algo: union-find + result set construction
 
 Tests across interfaces and graph topologies.
@@ -13,8 +13,8 @@ import time
 
 import numpy as np
 
-from cgraph import connected_components
-from cgraph._core import connected_components as _cc_index
+from pygraphc import connected_components
+from pygraphc._core import connected_components as _cc_index
 
 
 class Branch:
@@ -82,7 +82,7 @@ def run_phase_breakdown(n):
     # Phase 3: pure C algo
     t_algo = bench(lambda: _cc_index(n, edges_np))
 
-    # Total cgraph call per interface
+    # Total pygraphc call per interface
     t_nid_tuples = bench(lambda: list(connected_components(node_ids, edges_tuples)))
     t_split_list = bench(lambda: list(connected_components(node_ids, src_list, dst_list)))
     t_nid_np2d = bench(lambda: list(connected_components(node_ids, edges_np)))

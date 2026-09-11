@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   lint:
@@ -32,6 +31,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      # Every interpreter reports: a failure on one version must not cancel the others.
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
@@ -50,22 +51,32 @@ jobs:
           name: coverage
           path: coverage.xml
 
+  # Reads the performance matrix off the directory so that adding a test file
+  # is enough to make it run. A hand-written list had silently stopped running
+  # two of the nine files.
+  performance-files:
+    runs-on: ubuntu-latest
+    outputs:
+      files: ${{ steps.list.outputs.files }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: List the performance test files
+        id: list
+        run: |
+          set -o pipefail
+          files=$(ls tests/performance_tests/test_*.py | xargs -n 1 basename |
+            jq -R -s -c 'split("\n") | map(select(. != ""))')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "$files"
+
   performance:
+    needs: performance-files
     runs-on: ubuntu-latest
     strategy:
+      # Every file reports: a failure in one must not cancel the others.
+      fail-fast: false
       matrix:
-        suite:
-          - name: graph-algorithms
-            files: test_performance.py test_bfs_perf.py
-          - name: bridges-dijkstra
-            files: test_bridges_perf.py test_dijkstra_perf.py
-          - name: masked-views
-            files: test_masked_views.py
-          - name: phase6
-            files: test_phase6_perf.py
-          - name: cc-branches
-            files: test_cc_branches_perf.py
-    name: performance (${{ matrix.suite.name }})
+        file: ${{ fromJSON(needs.performance-files.outputs.files) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -74,9 +85,11 @@ jobs:
       - name: Install
         run: pip install -e ".[dev,benchmark]" vendor/blueprint_linters-*.whl
       - name: Performance tests
+        env:
+          PERFORMANCE_FILE: ${{ matrix.file }}
         run: |
           cd tests/performance_tests
-          pytest ${{ matrix.suite.files }} -v -s
+          pytest "$PERFORMANCE_FILE" -v -s
 
   coverage:
     runs-on: ubuntu-latest
@@ -94,4 +107,8 @@ jobs:
         with:
           name: coverage
       - name: diff-cover
-        run: diff-cover coverage.xml --compare-branch=origin/main --fail-under=80
+        env:
+          # A stacked pull request must be measured against the branch it targets,
+          # not against main, or the report covers the whole stack's diff.
+          COMPARE_BRANCH: origin/${{ github.base_ref || github.ref_name }}
+        run: diff-cover coverage.xml --compare-branch="$COMPARE_BRANCH" --fail-under=80

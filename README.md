@@ -59,6 +59,24 @@ pip install git+https://github.com/lejansenGitHub/pygraphc.git
 
 Requires a C compiler (the extension is compiled at install time with `-O3`).
 
+The default build is portable across CPUs of the same architecture. To tune the
+extension for the machine it is built on, opt in with `PYGRAPHC_NATIVE=1`; the
+resulting binary is not portable:
+
+```bash
+PYGRAPHC_NATIVE=1 pip install -e .
+```
+
+### Development setup
+
+Create a virtual environment, then install the package with the dev extras and
+the vendored `blueprint-linters` wheel (not on PyPI):
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -e ".[dev]" vendor/blueprint_linters-0.9.0-py3-none-any.whl
+```
+
 ## API
 
 ### Structural algorithms
@@ -443,7 +461,7 @@ list(view.strongly_connected_components())  # [{1}, {2}, {3}]
 Detect all fundamental cycles in an undirected graph. The number of cycles equals the circuit rank: `m - n + c` where `c` is the number of connected components.
 
 ```python
-from cgraph import Graph, cycle_basis
+from pygraphc import Graph, cycle_basis
 
 # Triangle
 g = Graph([1, 2, 3], [(1, 2), (2, 3), (3, 1)])
@@ -468,7 +486,7 @@ Useful for validating radial grid topology (presence of cycles indicates mesh). 
 Find the longest path in a directed acyclic graph. Supports optional edge weights.
 
 ```python
-from cgraph import Graph, dag_longest_path
+from pygraphc import Graph, dag_longest_path
 
 # Unweighted: longest by hop count
 g = Graph([1, 2, 3, 4], [(1, 2), (1, 3), (3, 4)], directed=True)
@@ -593,7 +611,8 @@ python benchmarks/bench_dag_learn.py  # hill-climb K2: pygraphc vs pgmpy
 
 ## Tests
 
+After the [development setup](#development-setup):
+
 ```bash
-pip install -e ".[dev]"
 pytest tests/unit_tests/ -v
 ```

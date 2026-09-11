@@ -28,6 +28,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `ValueError` at construction. Several edges may share a branch id, and
   `without_branches` excludes every edge carrying the id.
 - Duplicate node ids raise `ValueError` instead of creating a phantom isolated node.
+- Continuous integration runs for every pull request, not only for those
+  targeting `main`. The `pull_request` trigger was restricted to
+  `branches: [main]`, so a pull request stacked on another branch ran no job
+  at all and reported no checks, which reads as results pending rather than
+  as nothing having run. The `push` trigger stays on `main`.
+- The coverage job's `diff-cover` step compares against the branch the pull
+  request targets instead of always against `origin/main`. On a stacked pull
+  request the hardcoded base measured the whole stack's diff and reported a
+  number about work the pull request did not contain.
+- The `test` and `performance` matrices set `fail-fast: false`. A failure in one
+  matrix leg cancelled the rest, so legs that never finished were reported as
+  failures on results they had not produced.
+- The `performance` job reads its matrix from the contents of
+  `tests/performance_tests/` instead of a hand-written list of file names. The
+  list had fallen two files behind the directory, so `test_cycle_dag_perf.py`
+  and `test_directed_perf.py` had never run. A file now runs because it is
+  there. The matrix stays one job per file rather than one job for the whole
+  directory: the nine jobs finish in about three minutes while their durations
+  sum to about sixteen, so folding them into one job would cost some thirteen
+  extra minutes of critical path. Per-file jobs cost the slowest single file
+  plus the few seconds the listing job takes.
+- `networkx>=3.4` is part of the `dev` extra. Every comparison test in the
+  performance suite opens with `pytest.importorskip("networkx")`, so with no
+  extra providing it they all skipped and the comparison they exist for was
+  never made. They now run: the speedup measurements against networkx in the
+  BFS, bridges, Dijkstra, cycle/DAG and directed suites, and the path-count
+  equality assertion in `test_phase6_perf.py`, the one of them that gates a job.
+  `test_cycle_basis_speedup_vs_networkx` stops at 100K, because networkx's
+  `cycle_basis` is quadratic on that generator and the 1M point would cost tens
+  of minutes per call; `test_cycle_basis_performance` keeps 1M covered on the
+  pygraphc side, where no networkx call is involved.
 
 ### Changed
 - Rebuilds through `with_edges` and `split_node` keep every base edge at its
@@ -38,6 +69,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `with_edges` takes `added_branch_ids`, required when the base graph carries
   `branch_ids`. `split_node` gives a rerouted edge the branch id of the edge it
   replaces.
+
+## [0.2.0] - 2026-04-28
+
+### Added
+- `Graph` class: parse node ids and edges once, run many algorithms on the
+  shared C structures (int map, edge list, CSR adjacency).
+- `GraphView` masks: `without_edges`, `without_branches`, `without_nodes`,
+  `with_edges`, chainable and without rebuilding the parsed graph;
+  `for_each_edge_excluded` helper.
+- `split_node` on `Graph` and `GraphView`: reroute selected edges to a new node.
+- Structural algorithms: `bridges`, `articulation_points`,
+  `biconnected_components`, `bfs`, `two_edge_connected_components`,
+  `nodes_on_simple_paths`, `bridges_with_branch_ids`.
+- Weighted algorithms with a C binary heap: `shortest_path`,
+  `shortest_path_lengths` (with cutoff), `multi_source_shortest_path_lengths`,
+  `eccentricity`.
+- Directed graphs (`directed=True`): `strongly_connected_components`,
+  `weakly_connected_components`, `topological_sort`; BFS and Dijkstra follow
+  edge direction.
+- `cycle_basis` (fundamental cycles) and `dag_longest_path` (optionally weighted).
+- `all_edge_paths`: enumerate edge-disjoint paths from a source to targets,
+  with `cutoff` and `node_simple` options; MultiGraph (parallel edge) support.
+- Query primitives: `neighbors`, `successors`, `predecessors`, `degree`,
+  `in_degree`, `out_degree`, `edge_indices`, `incident_edge_indices`,
+  `outgoing_edge_indices`, `incoming_edge_indices`.
+- DAG structure learning in C: `hill_climb_k2`, `k2_local_score`, `estimate_cpds`.
+- `connected_components_with_branch_ids` excludes branches and nodes by domain
+  id rather than by internal index.
+- Split `src`/`dst` list calling convention for `connected_components`.
+
+### Changed
+- Renamed the package from `cgraph` to `networkc`, then to `pygraphc` (import
+  name and distribution name).
+- Query methods run in C on the CSR adjacency (O(degree)) instead of
+  scanning the edge list in Python (O(m)).
+
+### Fixed
+- `without_nodes` stops traversal at excluded nodes, so it breaks connectivity.
+- Query methods returned empty results on graphs constructed from split
+  `src`/`dst` lists.
 
 ## [0.1.0] - 2026-04-04
 

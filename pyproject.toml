@@ -28,6 +28,9 @@ dev = [
     "pytest-mock>=3.0",
     "pytest-cov>=6.0",
     "diff-cover>=9.0",
+    # networkx is the differential reference for the comparison tests; without it
+    # every one of them skips instead of comparing.
+    "networkx>=3.4",
     "ruff>=0.15",
     "mypy>=1.14",
     "pre-commit>=4.0",
@@ -45,6 +48,8 @@ Repository = "https://github.com/lejansenGitHub/pygraphc"
 Issues = "https://github.com/lejansenGitHub/pygraphc/issues"
 
 [tool.uv]
+# Lets `uv` resolve the dev-only blueprint-linters wheel from vendor/ (not on PyPI).
+# uv-specific: pip ignores this table, so `pip install pygraphc` is unaffected.
 find-links = ["vendor/"]
 
 [build-system]
