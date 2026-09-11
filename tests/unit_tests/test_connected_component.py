@@ -131,8 +131,8 @@ def test_connected_component_skips_hits_that_straddle_two_neighbouring_labels():
     exactly those offsets and no member.
     """
     # --- Input ---
-    zero_component = {0, *range(257, 400)}
-    graph = Graph(list(range(600)), [(0, index) for index in range(257, 400)] + [(256, 500)])
+    zero_component = {0, *range(300, 340)}
+    graph = Graph(list(range(600)), [(0, index) for index in range(300, 340)] + [(256, 500)])
 
     # --- Execute ---
     labels = graph.component_labels().cast("B").tobytes()
@@ -144,5 +144,21 @@ def test_connected_component_skips_hits_that_straddle_two_neighbouring_labels():
     # --- Assert ---
     assert straddling_hits > 0
     assert graph.connected_component(0) == zero_component
-    assert graph.connected_component(300) == zero_component
+    assert graph.connected_component(320) == zero_component
     assert graph.connected_component(256) == {256, 500}
+
+
+def test_connected_component_agrees_across_both_collection_strategies():
+    """A component of more than about an eighth of the graph is collected by one pass
+    over every label and a smaller one by the byte scan; both must give the same answer."""
+    # --- Input ---
+    #  a component of 120 nodes, one of five and one singleton, in a graph of 200
+    large = set(range(120))
+    small = {150, 151, 152, 153, 154}
+    edges = [(index, index + 1) for index in range(119)] + [(index, index + 1) for index in range(150, 154)]
+    graph = Graph(list(range(200)), edges)
+
+    # --- Assert ---
+    assert graph.connected_component(60) == large
+    assert graph.connected_component(152) == small
+    assert graph.connected_component(199) == {199}

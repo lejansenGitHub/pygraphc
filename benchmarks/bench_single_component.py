@@ -7,8 +7,10 @@ builds one set from a scan of the int32 label buffer; the generator builds a
 set per component and adds every node to one. Both pay the same label pass, so
 the accessor only wins back the set building.
 
-The first call on a graph also builds the cached node id to index mapping, so
-the cold and warm columns are reported separately.
+The accessor uses the graph's cached node id to index map when another method
+has already built it and scans the node ids when it has not, so the cold column
+is what a single lookup on a fresh graph costs and the warm column is what a
+lookup costs once the map exists.
 
 Run with the venv python: ``python benchmarks/bench_single_component.py``.
 """
@@ -92,6 +94,7 @@ def measure(shape: str, node_count: int, edges: list[tuple[int, int]], wanted: s
     cold_result = cold_graph.connected_component(probe)
     cold = time.perf_counter() - start
     del cold_graph
+    graph.without_nodes([])  # the cheapest public method that builds the shared id map
     warm = best_seconds(one_component)
     every = best_seconds(every_component)
     one_peak = peak_bytes(one_component)

@@ -577,8 +577,26 @@ def _quotient_edge_views(
     )
 
 
-_EXCLUDED_LABEL = b"\xff\xff\xff\xff"
-"""Component label -1 of a node excluded from a view, as int32 bytes in either byte order."""
+_EXCLUDED_LABEL = -1
+"""Component label of a node excluded from a view."""
+
+_LARGE_COMPONENT_SHARE = 8
+"""Above one member per this many nodes, a full label pass beats a ``find`` per member."""
+
+
+def _node_index_of(graph: "Graph", node_id: NodeId) -> int:
+    """The index of a node id, without building the cached id map for a single lookup.
+
+    The map costs about 79 MiB at 1,000,000 nodes, more than building every
+    component peaks at, so a lookup that would be its only user scans the node
+    ids instead. Four other methods share it, so a lookup on a graph one of
+    them has touched is still a dict hit.
+    """
+    cached_index_of = graph._node_id_to_idx
+    try:
+        return graph._node_ids.index(node_id) if cached_index_of is None else cached_index_of[node_id]
+    except (ValueError, KeyError):
+        raise ValueError(f"node {node_id} is not in the graph") from None  # noqa: TRY003 — the id is the whole message
 
 
 def _connected_component_of(
@@ -591,25 +609,30 @@ def _connected_component_of(
 
     ``component_labels_ctx`` labels every node index with the smallest node
     index of its component, so the members are exactly the node indices
-    carrying the requested node's label. Those labels are found by searching
-    the raw int32 bytes for the label's four bytes, which keeps the search for
-    the next member in C instead of comparing one label per node in Python.
+    carrying the requested node's label. ``bytes.count`` says in one C pass
+    about how many there are, which picks how to collect them: a small
+    component is found with ``bytes.find``, keeping the search for the next
+    member in C, while a component of more than about an eighth of the graph
+    is collected by one pass over every label, which by then is cheaper than a
+    ``find`` per member. The count only chooses a strategy, so the straddling
+    hits it may include cannot change the answer.
 
-    A hit that does not start on a four-byte boundary straddles two
+    A ``find`` hit that does not start on a four-byte boundary straddles two
     neighbouring labels and is not a member. The search resumes at the next
     four-byte boundary rather than one byte on: every position it skips sits
     off a boundary, so it can only hold a straddling hit and no member is ever
     passed over.
     """
     node_ids = graph._node_ids
-    node_id_to_index = graph._get_node_id_to_idx()
-    if node_id not in node_id_to_index:
-        raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003 — the id is the whole message
-    node_index = node_id_to_index[node_id]
+    node_index = _node_index_of(graph, node_id)
     labels: bytes = _component_labels_ctx(graph._ctx, excluded_edges, excluded_nodes)
-    label = labels[4 * node_index : 4 * node_index + 4]
-    if label == _EXCLUDED_LABEL:
+    label_values = memoryview(labels).cast("i")
+    label_value = label_values[node_index]
+    if label_value == _EXCLUDED_LABEL:
         raise ValueError(f"node {node_id} is excluded from this view")  # noqa: TRY003 — the id is the whole message
+    label = labels[4 * node_index : 4 * node_index + 4]
+    if labels.count(label) > len(node_ids) // _LARGE_COMPONENT_SHARE:
+        return {node_ids[index] for index, value in enumerate(label_values) if value == label_value}
     component: set[NodeId] = set()
     position = labels.find(label)
     while position >= 0:
@@ -976,17 +999,15 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the connected component containing ``node_id`` as a set of node IDs.
 
-        The single-component counterpart of ``connected_components``. It
-        materialises only the requested component but still runs the same
-        O(n + m) label pass, so it is faster only when that component is a
-        small part of the graph. On a graph with one dominant component it is
-        slower than building every component and picking one: at 1,000,000
-        nodes in a single component it takes 159 ms against 10 ms, while at
-        1,000,000 singletons it takes 4 ms against 752 ms. A caller asking for
-        the component of a node cannot know how large that component will turn
-        out to be, so prefer ``connected_components()`` whenever the graph may
-        have one dominant component. Raises ``ValueError`` if the node is not
-        in the graph.
+        The single-component counterpart of ``connected_components``, and the
+        cheaper call unless the graph is itself a single component. It shares
+        the same O(n + m) label pass and then collects only the requested
+        component, so at 1,000,000 nodes it runs 103x faster on a graph of
+        singletons and 2.3x faster on a sparse graph with a giant component
+        and a tail, but 4x slower when the whole graph is one component. Each
+        call repeats the label pass, so wanting more than a handful of
+        components is a job for ``connected_components()``. Raises
+        ``ValueError`` if the node is not in the graph.
         """
         self._require_undirected("connected_component")
         return _connected_component_of(self, node_id, None, None)

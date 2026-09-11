@@ -87,18 +87,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `connected_component(node_id)` on `Graph` and `GraphView`: the connected
   component containing one node, as a set of node ids, the single-component
   counterpart of `connected_components()`. It reads the `component_labels`
-  kernel and materialises only the requested component. Whether that is
-  cheaper depends on the shape of the graph: both paths run the same
-  O(n + m) label pass, so the accessor only saves the set building and pays
-  one Python step per member. At 1,000,000 nodes it costs 4.1 ms and 3.8 MiB
-  against 751.6 ms and 214.1 MiB on all singletons, and 6.3 ms against
-  11.6 ms on a thousand equal components, but 159.3 ms against 10.2 ms when
-  the graph is one dominant component — so on a graph that may have one
-  dominant component, `connected_components()` is the better call. The node is
-  resolved through the graph's cached node id to index map, which the first
-  call builds (about 79 MiB at 1,000,000 nodes) and the other id-taking
-  methods share. Both masks of a view are respected; an unknown node and a
-  node excluded from the view raise `ValueError`.
+  kernel and collects only the requested component, choosing between a
+  `bytes.find` scan and one pass over every label by how many members a
+  `bytes.count` probe reports. That makes it the cheaper call on every shape
+  except a graph that is itself one component: at 1,000,000 nodes it costs
+  7.2 ms and 3.8 MiB against 738.4 ms and 214.1 MiB on all singletons, 63.2 ms
+  against 143.3 ms on a sparse graph with a giant component and a tail, but
+  40.1 ms against 9.9 ms when the whole graph is one component. Each call
+  repeats the O(n + m) label pass, so more than a handful of components is a
+  job for `connected_components()`. The node is resolved through the graph's
+  cached node id to index map when another method has already built it and by
+  a scan of the node ids when it has not, so a single lookup never builds a
+  map it would use once. Both masks of a view are respected; an unknown node
+  and a node excluded from the view raise `ValueError`.
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 - `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx

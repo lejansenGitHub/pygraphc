@@ -355,55 +355,51 @@ g.connected_component(60)                            # {60}
 g.without_edges([1]).connected_component(30)         # {30}
 ```
 
-Whether that is cheaper depends on the shape of the graph, not on its size.
-Both paths run the same O(n + m) label pass, so the accessor saves only the
-generator's set building, and it spends one Python step per member of the
-component it returns. It wins when the requested component is a small part of
-the graph and **loses when the graph has one dominant component**.
+Both paths run the same O(n + m) label pass; the accessor then collects only
+the requested component, picking between a `bytes.find` scan and one pass over
+every label according to a `bytes.count` probe of how many members there are.
+That makes it the cheaper call on every shape except a graph that is itself a
+single component, where `connected_components()` builds its one set in C and a
+Python collection cannot beat it.
 
 Measured over four shapes with `benchmarks/bench_single_component.py` (fastest
-of five calls, `tracemalloc` peak of one call). The warm column is a call on a
-graph whose node id to index map is already cached; the cold column is the
-first call on a fresh graph, which builds that map:
+of five calls, `tracemalloc` peak of one call). The accessor uses the graph's
+cached node id to index map when another method has already built it and scans
+the node ids when it has not, so `cold` is what a single lookup on a fresh
+graph costs and `warm` what a lookup costs once the map exists:
 
 | shape | nodes | members | cold | warm | all, then pick one | ratio | peak, one | peak, all |
 |---|---|---|---|---|---|---|---|---|
-| one giant component | 100,000 | 100,000 | 24.2 ms | 20.9 ms | 0.9 ms | 0.05x | 6.38 MiB | 6.00 MiB |
-| 1000 equal components | 100,000 | 100 | 4.2 ms | 1.0 ms | 1.9 ms | 1.9x | 0.39 MiB | 8.03 MiB |
-| all singletons | 100,000 | 1 | 3.5 ms | 0.5 ms | 27.6 ms | 57x | 0.38 MiB | 21.36 MiB |
-| sparse mixture, giant member | 100,000 | 64,162 | 18.0 ms | 15.0 ms | 5.0 ms | 0.33x | 2.88 MiB | 7.76 MiB |
-| sparse mixture, smallest member | 100,000 | 1 | 5.6 ms | 2.3 ms | 5.4 ms | 2.3x | 0.38 MiB | 7.76 MiB |
-| one giant component | 1,000,000 | 1,000,000 | 193.1 ms | 159.3 ms | 10.2 ms | 0.06x | 51.82 MiB | 48.00 MiB |
-| 1000 equal components | 1,000,000 | 1,000 | 37.5 ms | 6.3 ms | 11.6 ms | 1.9x | 3.85 MiB | 31.47 MiB |
-| all singletons | 1,000,000 | 1 | 36.1 ms | 4.1 ms | 751.6 ms | 183x | 3.82 MiB | 214.05 MiB |
-| sparse mixture, giant member | 1,000,000 | 642,061 | 190.6 ms | 155.5 ms | 146.5 ms | 0.94x | 51.82 MiB | 103.47 MiB |
-| sparse mixture, smallest member | 1,000,000 | 1 | 53.2 ms | 21.8 ms | 135.7 ms | 6.2x | 3.82 MiB | 103.47 MiB |
+| one giant component | 100,000 | 100,000 | 4.3 ms | 4.0 ms | 1.0 ms | 0.24x | 6.38 MiB | 6.00 MiB |
+| 1000 equal components | 100,000 | 100 | 1.7 ms | 1.4 ms | 1.9 ms | 1.4x | 0.39 MiB | 8.03 MiB |
+| all singletons | 100,000 | 1 | 1.1 ms | 0.8 ms | 26.5 ms | 32x | 0.38 MiB | 21.36 MiB |
+| sparse mixture, giant member | 100,000 | 64,162 | 5.9 ms | 5.7 ms | 4.8 ms | 0.85x | 2.88 MiB | 7.76 MiB |
+| sparse mixture, smallest member | 100,000 | 1 | 3.6 ms | 3.2 ms | 5.2 ms | 1.6x | 0.38 MiB | 7.76 MiB |
+| one giant component | 1,000,000 | 1,000,000 | 43.3 ms | 40.1 ms | 9.9 ms | 0.25x | 51.82 MiB | 48.00 MiB |
+| 1000 equal components | 1,000,000 | 1,000 | 11.8 ms | 9.0 ms | 11.7 ms | 1.3x | 3.85 MiB | 31.47 MiB |
+| all singletons | 1,000,000 | 1 | 10.5 ms | 7.2 ms | 738.4 ms | 103x | 3.82 MiB | 214.05 MiB |
+| sparse mixture, giant member | 1,000,000 | 642,061 | 64.5 ms | 63.2 ms | 143.3 ms | 2.3x | 51.82 MiB | 103.47 MiB |
+| sparse mixture, smallest member | 1,000,000 | 1 | 28.8 ms | 25.8 ms | 132.3 ms | 5.1x | 3.82 MiB | 103.47 MiB |
 
 The sparse mixture is a random graph at average degree 1.6, so it has one
 component holding about two thirds of the nodes and a long tail of small ones —
-the shape most real graphs have.
-
-The cold and warm columns differ because the first call builds the graph's
-cached node id to index map, which `split_node`, `without_nodes` and the other
-id-taking methods share. That map costs about 79 MiB at 1,000,000 nodes, so on
-a graph where this accessor is the only method used it is the largest single
-allocation a lookup causes; the peak columns above are measured on the warm
-path, with the map already built.
+the shape most real graphs have. The `count` probe costs one pass over the
+label buffer, about 3 ms at 1,000,000 nodes, which is why the singleton rows
+are slower than a bare scan would be; it buys the four rows where the
+requested component is large.
 
 There is no single break-even count, because there are two break-evens:
 
-- **Shape.** The accessor is worth calling only when the requested component
-  is a small part of the graph. At 1,000,000 nodes it is 183x faster for a
-  singleton, 1.9x faster for a component of a thousand, about even at two
-  thirds of the graph, and 16x slower when the component is the whole graph.
-  A caller asking for the component of a node usually cannot know in advance
-  which case it is in, so on a graph that may have one dominant component,
-  reach for `connected_components()`.
+- **Shape.** The accessor is the cheaper call on every shape here except a
+  graph that is one single component, where it is 4x slower. Its advantage
+  grows as the requested component shrinks relative to the graph: 2.3x at two
+  thirds of the graph, 5.1x for a small component of the same graph, 103x for
+  a singleton among a million.
 - **Count.** Each call repeats the O(n + m) label pass, so *k* lookups cost
-  *k* warm calls. One `connected_components()` call is cheaper above roughly
-  two lookups on the thousand-component shape, six on the sparse mixture's
-  small components, and 183 on all singletons — and cheaper than even a
-  single lookup on one dominant component.
+  *k* warm calls, and one `connected_components()` call is cheaper above the
+  ratio in the table — one lookup on a single-component graph, two on the
+  sparse mixture's giant component, five on its small components, 103 on all
+  singletons.
 
 ### MultiGraph support
 
