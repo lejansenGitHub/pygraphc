@@ -68,6 +68,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and a subtree whose spanned pair is not the pair of chain nodes its position
   sits between raise `ValueError`; the last of those is what makes the refusal sound,
   since subtrees that each span two nodes can still fail to meet end to end.
+- `tests/integration_tests/`: three domain integration cases behind a new
+  `integration` pytest marker, each modelling a problem from a field the
+  reduction kernel was not designed for and asserting facts about that field
+  rather than implementation output — the seven bridges of Konigsberg
+  (`Partition`, `quotient` with parallel edges, `lift`, `minimal_toggles`, the
+  irreducible series-parallel core), the caffeine molecular scaffold
+  (`cycle_basis` plus `reduce` with `fold_leaves` as a Bemis-Murcko side-chain
+  strip) and a ten by ten perfect maze (pendant and series moves down to one
+  edge, `paths`, `scenario`).
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 - `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx
