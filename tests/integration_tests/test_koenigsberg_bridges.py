@@ -55,20 +55,35 @@ NORTH_BANK_LAND_LINK = "land: Altstadt-Loebenicht"
 # The seven bridges, with the district each end stood on. The Kraemerbruecke
 # and the Schmiedebruecke reached the Kneiphof from the Altstadt; the Gruene
 # Bruecke and the Koettelbruecke reached it from the Vorstadt on the south
-# bank; the Holzbruecke, built by the burghers of the Altstadt in 1404, reached
-# the Lomse from the Altstadt on the north bank, the Hohe Bruecke reached it
-# from the south bank, and the Honigbruecke joined the two islands directly.
-# So the Loebenicht, alone among the three towns, had none of the seven. The
-# Hohe Bruecke's south end stood in the Haberberg quarter, which this model
+# bank; the Holzbruecke reached the Lomse from the north bank, the Hohe
+# Bruecke reached it from the south bank, and the Honigbruecke joined the two
+# islands directly.
+#
+# Two details where the sources do not agree, recorded rather than decided,
+# because nothing below depends on either: the district each bridge landed in
+# matters only for the layer beneath Euler's, and the quotient over the four
+# land masses is the same under every reading.
+#
+# The Holzbruecke's north end: the German article on the Pregel bridges says
+# it joined the Loebenicht to the Lomse, and the English article on the Lomse
+# lists it as running north to the Loebenicht, while the same article's prose
+# says it connected the Lomse "to Altstadt and Loebenicht" and that it was
+# built by burghers of the Altstadt in 1404. Who paid for a bridge is not
+# evidence of which district its far end stood in, so this model follows the
+# two sources that name a district and puts it in the Loebenicht. An earlier
+# commit on this branch moved it to the Altstadt and inferred from that the
+# Loebenicht had none of the seven bridges; both the move and the inference
+# are withdrawn.
+#
+# The Hohe Bruecke's south end stood in the Haberberg quarter, which this model
 # folds into the Vorstadt because only the side of the river matters for
-# Euler's argument; the district each bridge landed in matters only for the
-# layer below it, and the quotient is the same either way.
+# Euler's argument.
 BRIDGES: dict[str, tuple[int, int]] = {
     "Kraemerbruecke": (ALTSTADT, KNEIPHOF),
     "Schmiedebruecke": (ALTSTADT, KNEIPHOF),
     "Gruene Bruecke": (VORSTADT, KNEIPHOF),
     "Koettelbruecke": (VORSTADT, KNEIPHOF),
-    "Holzbruecke": (ALTSTADT, LOMSE),
+    "Holzbruecke": (LOEBENICHT, LOMSE),
     "Hohe Bruecke": (VORSTADT, LOMSE),
     "Honigbruecke": (KNEIPHOF, LOMSE),
 }
