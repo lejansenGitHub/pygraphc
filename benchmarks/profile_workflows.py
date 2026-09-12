@@ -485,12 +485,21 @@ def structural_log(
     kernel: reduction._KernelGraph[int],
     terminals: frozenset[int],
 ) -> pygraphc.ReductionLog:
-    """The structural half of one log-producing engine, with none of the payload algebra in it."""
+    """The structural half of one log-producing engine, with none of the payload algebra in it.
+
+    The default policies: every pendant absorbed, no node barred from a series
+    merge. They are what the four engines are compared under, so they are passed
+    explicitly rather than left to a default that could drift.
+    """
+    policies: dict[str, object] = {
+        "pendant": reduction.PendantPolicy("absorb"),
+        "series_ineligible": frozenset(),
+    }
     if engine == "c":
-        return reduction._structural_log_c(kernel, terminals, frozenset())
+        return reduction._structural_log_c(kernel, terminals, frozenset(), **policies)  # type: ignore[arg-type]
     if engine == "moves":
-        return reduction._structural_log_moves(kernel, terminals, frozenset())
-    return reduction._structural_log_rounds(kernel, terminals, frozenset())
+        return reduction._structural_log_moves(kernel, terminals, frozenset(), **policies)  # type: ignore[arg-type]
+    return reduction._structural_log_rounds(kernel, terminals, frozenset(), **policies)  # type: ignore[arg-type]
 
 
 def workflow_reduce_engine(timer: PhaseTimer, size: int, engine: str) -> str:
@@ -515,7 +524,7 @@ def workflow_reduce_engine(timer: PhaseTimer, size: int, engine: str) -> str:
         with timer.phase(PHASE_STRUCTURAL):
             log = structural_log(engine, kernel, terminals)
         with timer.phase(PHASE_FOLD):
-            reduced = reduction._fold_operation_log(graph, kernel, log, fold_leaves=True)
+            reduced = reduction._fold_operation_log(graph, kernel, log, pendant=reduction.PendantPolicy("absorb"))
         del log
     outcome = (
         f"{len(reduced.graph.nodes)} residual nodes, {len(reduced.graph.endpoints)} residual edges, "
