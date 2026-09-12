@@ -337,6 +337,74 @@ The key win is avoiding O(V + E) graph rebuild per edge modification.
 
 Parallel edges are supported — each edge is tracked by ID, so two edges between the same pair of nodes are handled correctly (e.g. for bridges, Dijkstra weight selection).
 
+### One component instead of all of them
+
+`connected_component(node_id)` is the single-component counterpart of the
+`connected_components()` generator: it returns the component containing one
+node as a set of node ids, so nothing about how a caller uses the result
+changes. It reads the `component_labels` kernel and builds only the requested
+component, instead of a set per component with every node added to one. Both
+masks of a view are respected; an unknown node and a node excluded from the
+view raise `ValueError`.
+
+```python
+g = Graph([10, 20, 30, 40, 50, 60], [(10, 20), (20, 30), (40, 50)])
+
+g.connected_component(30)                            # {10, 20, 30}
+g.connected_component(60)                            # {60}
+g.without_edges([1]).connected_component(30)         # {30}
+```
+
+Both paths run the same O(n + m) label pass; the accessor then collects only
+the requested component, picking between a `bytes.find` scan and one pass over
+every label according to a `bytes.count` probe of how many members there are.
+At 1,000,000 nodes that makes it the cheaper call on every shape except a graph
+that is itself a single component, where `connected_components()` builds its one
+set in C and a Python collection cannot beat it. The advantage is size-dependent
+as well as shape-dependent: on the same sparse mixture it is 2.3x at a million
+nodes and 0.85x at a hundred thousand, because the fixed cost of the probe and
+the label pass is a larger share of a smaller graph.
+
+Measured over four shapes with `benchmarks/bench_single_component.py` (fastest
+of five calls, `tracemalloc` peak of one call). The accessor uses the graph's
+cached node id to index map when another method has already built it and scans
+the node ids when it has not, so `cold` is what a single lookup on a fresh
+graph costs and `warm` what a lookup costs once the map exists:
+
+| shape | nodes | members | cold | warm | all, then pick one | ratio | peak, one | peak, all |
+|---|---|---|---|---|---|---|---|---|
+| one giant component | 100,000 | 100,000 | 4.3 ms | 4.0 ms | 1.0 ms | 0.24x | 6.38 MiB | 6.00 MiB |
+| 1000 equal components | 100,000 | 100 | 1.7 ms | 1.4 ms | 1.9 ms | 1.4x | 0.39 MiB | 8.03 MiB |
+| all singletons | 100,000 | 1 | 1.1 ms | 0.8 ms | 26.5 ms | 32x | 0.38 MiB | 21.36 MiB |
+| sparse mixture, giant member | 100,000 | 64,162 | 5.9 ms | 5.7 ms | 4.8 ms | 0.85x | 2.88 MiB | 7.76 MiB |
+| sparse mixture, smallest member | 100,000 | 1 | 3.6 ms | 3.2 ms | 5.2 ms | 1.6x | 0.38 MiB | 7.76 MiB |
+| one giant component | 1,000,000 | 1,000,000 | 43.3 ms | 40.1 ms | 9.9 ms | 0.25x | 51.82 MiB | 48.00 MiB |
+| 1000 equal components | 1,000,000 | 1,000 | 11.8 ms | 9.0 ms | 11.7 ms | 1.3x | 3.85 MiB | 31.47 MiB |
+| all singletons | 1,000,000 | 1 | 10.5 ms | 7.2 ms | 738.4 ms | 103x | 3.82 MiB | 214.05 MiB |
+| sparse mixture, giant member | 1,000,000 | 642,061 | 64.5 ms | 63.2 ms | 143.3 ms | 2.3x | 51.82 MiB | 103.47 MiB |
+| sparse mixture, smallest member | 1,000,000 | 1 | 28.8 ms | 25.8 ms | 132.3 ms | 5.1x | 3.82 MiB | 103.47 MiB |
+
+The sparse mixture is a random graph at average degree 1.6, so it has one
+component holding about two thirds of the nodes and a long tail of small ones —
+the shape most real graphs have. The `count` probe costs one pass over the
+label buffer, about 3 ms at 1,000,000 nodes, which is why the singleton rows
+are slower than a bare scan would be; it buys the four rows where the
+requested component is large.
+
+There is no single break-even count, because there are two break-evens:
+
+- **Shape.** Its advantage grows as the requested component shrinks relative
+  to the graph: at a million nodes, 2.3x at two thirds of the graph, 5.1x for a
+  small component of the same graph, 103x for a singleton. On a graph that is
+  one single component it is 4x slower. Two rows of the table are below 1x, and
+  the second is the one to keep in mind: the sparse mixture's giant component at
+  a hundred thousand nodes is 0.85x, the same shape that is 2.3x at a million.
+- **Count.** Each call repeats the O(n + m) label pass, so *k* lookups cost
+  *k* warm calls, and one `connected_components()` call is cheaper above the
+  ratio in the table — one lookup on a single-component graph, two on the
+  sparse mixture's giant component, five on its small components, 103 on all
+  singletons.
+
 ### MultiGraph support
 
 pygraphc natively supports parallel edges (multigraphs). Each duplicate edge gets a unique index — no deduplication. All algorithms handle them correctly:
