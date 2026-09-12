@@ -41,6 +41,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   moves, so 6.7x networkx and 3.9x the Python engine, and it reduces a million
   nodes with 1.25 million edges in 3.3 s, of which 0.29 s is the C loop and
   the rest the fold that builds the trees.
+- `minimal_toggles(tree, state, *, target_closed, togglable_leaves=None)` in
+  `pygraphc.reduction` restricts the fold to the leaves that may be flipped;
+  every leaf may by default, so existing callers are unaffected. A leaf outside
+  the set keeps its state, so a node that needs every child is unreachable as
+  soon as one child is and a node that needs one child picks the cheapest
+  reachable one. The return type is now `frozenset[EdgeId] | None`: the empty
+  set means the tree already takes the target state, `None` means no subset of
+  the permitted leaves reaches it. Ties among equally small candidate sets are
+  broken by edge id order, unchanged.
+- `series_chain(tree, edge_endpoints, start_node)` and `SeriesStep` in
+  `pygraphc.reduction` expose the ordered walk of a series chain as one step
+  per position, each naming the node stepped from, the subtree crossed and the
+  node reached. `edge_endpoints` is `MultiGraph.endpoints` of the graph the tree
+  was reduced from: the direction each subtree runs in is derived from the nodes
+  it spans, because the tree does not record it — a series node stores its
+  children in the direction of the merge that created it and a later merge can
+  reach it from either end, so a walk that trusts the stored order crosses a
+  nested chain backwards. Walking from the other endpoint returns the reversed
+  sequence with every step reversed, a `Leaf` is a chain of one step, a series
+  node nested in a series node is flattened into the sequence so positions along
+  the whole chain are addressable by index, and a `Parallel` child is one
+  position. A `Parallel` tree, a start node that is not an endpoint, a leaf that
+  is not an edge of the graph, a subtree that does not span exactly two nodes, a
+  series node the walk reaches at a node neither of its outer children touches
+  and a subtree whose spanned pair is not the pair of chain nodes its position
+  sits between raise `ValueError`; the last of those is what makes the refusal sound,
+  since subtrees that each span two nodes can still fail to meet end to end.
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 - `tests/performance_tests/test_networkx_baselines.py` adds a guarded networkx
