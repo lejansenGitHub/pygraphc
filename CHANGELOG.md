@@ -16,6 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   parameters accept any `Sequence`. `NodeIdT`, `BranchIdT` and `EdgeIndex` are
   exported; `NodeId` and `BranchId` stay as `int` aliases.
 - `series_parallel_reduce(terminal_mask, protected_mask, *, fold_leaves=True)`
+- `reduce(..., pendant=PendantPolicy(default, exceptions))` in
+  `pygraphc.reduction`: the pendant move's decision per node instead of once
+  per graph. `"absorb"` hands the removed pendant's material to the
+  neighbour, `"discard"` drops it, `"keep"` makes the node ineligible for the
+  pendant move so it survives with its one incidence. The action of a pendant
+  move is the action of the node it removes. A `keep` node is not a terminal:
+  it is still merged away in series. The policy is frozen and hashable, and
+  copies its exceptions, so it keeps the actions it was validated with.
+- `reduce(..., series_ineligible=frozenset())` in `pygraphc.reduction`: blocks
+  the series move at a node while its parallel merges stay allowed, which is
+  the half of `protected` that answers the series question. `protected` keeps
+  its meaning and the two compose by union on that question.
+- `series_parallel_reduce(..., pendant_keep_mask=None, series_blocked_mask=None)`
+  on `Graph` and `GraphView`: the two new per-node decisions as two more byte
+  masks over node indices, read by the C loop next to the terminal and
+  protected masks. A missing one of these two is the empty set; the terminal
+  mask has no such default and `None` in its place still raises `TypeError`.
+
 - `series_parallel_reduce(terminal_mask, protected_mask)`
   on `Graph` and `GraphView`: the structural loop of the terminal-preserving
   reduction in C, returning a `ReductionLog` of twelve int32 `memoryview`s.
@@ -228,6 +246,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   shortest paths exist. `shortest_path_lengths`,
   `multi_source_shortest_path_lengths` and `eccentricity` keep using the
   single-source search.
+- `reduce(..., fold_leaves=True | False)` in `pygraphc.reduction` is deprecated
+  in favour of `pendant=PendantPolicy("absorb" | "discard")`, which is what it
+  now maps to. It still works, the default is unchanged, and it does not warn
+  yet; giving both it and `pendant` raises `ValueError`.
+- `reduce` rejects unknown node ids in `series_ineligible` and in the pendant
+  policy's exceptions the way it already rejected them in `terminals` and
+  `protected`; the message names all four.
 - `Leaf` in `pygraphc.reduction` no longer caches its hash. A leaf has no
   children, so neither its equality nor its hash can recurse and the generated
   ones over the edge id are enough; `Series` and `Parallel` keep their cached

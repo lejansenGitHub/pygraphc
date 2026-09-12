@@ -4651,6 +4651,11 @@ static PyObject *py_bcc_edge_labels_ctx(PyObject *self, PyObject *args) {
  * die with their node.
  */
 
+/* Terminal, protected, pendant-keep and series-blocked over node indices,
+ * then the edge and node exclusion masks of the context call. */
+#define SP_MEMBERSHIP_MASK_COUNT 4
+#define SP_MASK_COUNT            6
+
 #define SP_OP_LEAF     0
 #define SP_OP_SERIES   1
 #define SP_OP_PARALLEL 2
@@ -4793,12 +4798,6 @@ static void sp_eliminate(SPState *state, int node) {
     state->node_alive[node] = 0;
 }
 
-/* Queue a node for another look, at most once.
- *
- * ``heap`` is sized for the node count and ``sp_push`` has no bound check, so
- * the ``queued`` test is what keeps the heap in bounds, not just what keeps
- * the work down. Python's worklist has no such test; matching it here would
- * overflow the heap, not merely repeat work. */
 static void sp_push(SPState *state, int node) {
     if (state->queued[node]) return;
     state->queued[node] = 1;
@@ -4952,9 +4951,15 @@ static int sp_merge_all_parallels(SPState *state, int n, const uint8_t *protecte
  * parallel pair, not a series candidate, and no move applies to it. A series
  * move merges the parallel pair it may have created at its two neighbours,
  * which is the only parallel merge after the initial sweep.
+ *
+ * ``pendant_keep_mask`` blocks the pendant move at the node, leaving it in the
+ * graph with its one incidence; ``series_blocked_mask`` blocks the series move
+ * at the node without blocking any parallel merge, which ``protected_mask``
+ * does as well.
  */
-static int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const uint8_t *protected_mask) {
-    if (state->degree[node] == 1) {
+static int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const uint8_t *protected_mask,
+                   const uint8_t *pendant_keep_mask, const uint8_t *series_blocked_mask) {
+    if (state->degree[node] == 1 && !pendant_keep_mask[node]) {
         int half = state->node_head[node];
         int edge = half >> 1;
         int neighbour = SP_OTHER_END(state, half);
@@ -4965,7 +4970,7 @@ static int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const
         if (!terminal_mask[neighbour]) sp_push(state, neighbour);
         return 0;
     }
-    if (state->degree[node] != 2 || protected_mask[node]) return 0;
+    if (state->degree[node] != 2 || protected_mask[node] || series_blocked_mask[node]) return 0;
 
     int first_half = state->node_head[node], second_half = state->half_next[first_half];
     int first = first_half >> 1, second = second_half >> 1;
@@ -5011,12 +5016,15 @@ static int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const
 }
 
 /* series_parallel_reduce_ctx(capsule, terminal_mask, protected_mask
- *                           [, edge_mask, node_mask])
+ *                           [, edge_mask, node_mask,
+ *                            pendant_keep_mask, series_blocked_mask])
  *     -> twelve int32 byte buffers
  *
- * ``terminal_mask`` and ``protected_mask`` hold one byte per node index and
- * mark membership by a non-zero byte; ``edge_mask`` and ``node_mask``
- * exclude by a non-zero byte like every other context call.
+ * ``terminal_mask``, ``protected_mask``, ``pendant_keep_mask`` and
+ * ``series_blocked_mask`` hold one byte per node index and mark membership by
+ * a non-zero byte; ``edge_mask`` and ``node_mask`` exclude by a non-zero byte
+ * like every other context call. A kept node takes no pendant move, a blocked
+ * one no series move.
  *
  * The first eight buffers are the operation log, one entry per operation in
  * the order the moves apply: ``op_kind``, ``left``, ``right``,
@@ -5028,18 +5036,20 @@ static int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const
  * indices. The last is the surviving node indices in increasing order.
  *
  * A terminal mask of ``None`` is rejected: no terminal means every component
- * is terminal-free and the whole graph goes. ``None`` for the other three is
+ * is terminal-free and the whole graph goes. ``None`` for the other five is
  * the neutral empty mask.
  *
  * There is no ``fold_leaves``: the log reports which neighbour absorbs a
  * pendant payload either way and the Python fold decides whether to apply it.
  */
 static PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject *keywords) {
-    static char *names[] = {"capsule", "terminal_mask", "protected_mask",
-                            "edge_mask", "node_mask", NULL};
+    static char *names[] = {"capsule", "terminal_mask", "protected_mask", "edge_mask", "node_mask",
+                            "pendant_keep_mask", "series_blocked_mask", NULL};
     PyObject *capsule, *terminal_obj, *protected_obj, *emask_obj = Py_None, *nmask_obj = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(args, keywords, "OOO|OO", names, &capsule, &terminal_obj,
-                                     &protected_obj, &emask_obj, &nmask_obj))
+    PyObject *keep_obj = Py_None, *series_obj = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(args, keywords, "OOO|OOOO", names, &capsule, &terminal_obj,
+                                     &protected_obj, &emask_obj, &nmask_obj,
+                                     &keep_obj, &series_obj))
         return NULL;
     if (terminal_obj == Py_None) {
         PyErr_SetString(PyExc_TypeError,
@@ -5056,38 +5066,40 @@ static PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, P
     int n = graph->nid.n;
     Py_ssize_t m = graph->nid.el.m;
 
-    const uint8_t *terminal_mask; Py_buffer terminal_buf;
-    const uint8_t *protected_mask; Py_buffer protected_buf;
-    const uint8_t *edge_mask; Py_buffer edge_buf;
-    const uint8_t *node_mask; Py_buffer node_buf;
-    if (parse_mask(terminal_obj, n, &terminal_mask, &terminal_buf) < 0) return NULL;
-    if (parse_mask(protected_obj, n, &protected_mask, &protected_buf) < 0) {
-        release_mask(&terminal_buf); return NULL;
+    /* The four membership masks over node indices first, then the two
+     * exclusion masks of the context call. A missing membership mask is the
+     * empty set, which one shared zero block serves; the substitution starts
+     * at index one because the terminal mask is rejected above rather than
+     * defaulted, a missing one having deleted the whole graph. */
+    PyObject *mask_objects[SP_MASK_COUNT] = {terminal_obj, protected_obj, keep_obj, series_obj,
+                                             emask_obj, nmask_obj};
+    Py_ssize_t mask_lengths[SP_MASK_COUNT] = {n, n, n, n, m, n};
+    Py_buffer buffers[SP_MASK_COUNT];
+    const uint8_t *masks[SP_MASK_COUNT];
+    for (int index = 0; index < SP_MASK_COUNT; index++) {
+        if (parse_mask(mask_objects[index], mask_lengths[index], &masks[index], &buffers[index]) >= 0) continue;
+        while (index-- > 0) release_mask(&buffers[index]);
+        return NULL;
     }
-    if (parse_mask(emask_obj, m, &edge_mask, &edge_buf) < 0) {
-        release_mask(&protected_buf); release_mask(&terminal_buf); return NULL;
-    }
-    if (parse_mask(nmask_obj, n, &node_mask, &node_buf) < 0) {
-        release_mask(&edge_buf); release_mask(&protected_buf); release_mask(&terminal_buf); return NULL;
-    }
+    const uint8_t *edge_mask = masks[4], *node_mask = masks[5];
     uint8_t *no_members = NULL;
-    if (!protected_mask) {
-        no_members = (uint8_t *)calloc((size_t)(n > 0 ? n : 1), 1);
-        if (!no_members) {
-            release_mask(&node_buf); release_mask(&edge_buf);
-            release_mask(&protected_buf); release_mask(&terminal_buf);
+    for (int index = 1; index < SP_MEMBERSHIP_MASK_COUNT; index++) {
+        if (masks[index]) continue;
+        if (!no_members && !(no_members = (uint8_t *)calloc((size_t)(n > 0 ? n : 1), 1))) {
+            for (int release = 0; release < SP_MASK_COUNT; release++) release_mask(&buffers[release]);
             return PyErr_NoMemory();
         }
-        protected_mask = no_members;
+        masks[index] = no_members;
     }
+    const uint8_t *terminal_mask = masks[0], *protected_mask = masks[1];
+    const uint8_t *pendant_keep_mask = masks[2], *series_blocked_mask = masks[3];
 
     /* Every virtual edge consumes at least two live edges and leaves one, so
      * there are never more virtual edges than input edges. */
     SPState state;
     if (sp_alloc(&state, n, 2 * m + 8) < 0) {
         free(no_members);
-        release_mask(&node_buf); release_mask(&edge_buf);
-        release_mask(&protected_buf); release_mask(&terminal_buf);
+        for (int index = 0; index < SP_MASK_COUNT; index++) release_mask(&buffers[index]);
         return NULL;
     }
 
@@ -5152,13 +5164,13 @@ static PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, P
         while (state.heap_size > 0 && status == 0) {
             int node = sp_pop(&state);
             if (!state.node_alive[node]) continue;
-            status = sp_move(&state, node, terminal_mask, protected_mask);
+            status = sp_move(&state, node, terminal_mask, protected_mask,
+                             pendant_keep_mask, series_blocked_mask);
         }
     }
 
     free(no_members);
-    release_mask(&node_buf); release_mask(&edge_buf);
-    release_mask(&protected_buf); release_mask(&terminal_buf);
+    for (int index = 0; index < SP_MASK_COUNT; index++) release_mask(&buffers[index]);
     if (status < 0) { sp_free(&state); return NULL; }
 
     Py_ssize_t residual_count = 0, surviving_count = 0;
@@ -5376,12 +5388,14 @@ static PyMethodDef methods[] = {
      "int32 biconnected component id per edge index; bridges are singleton components,\n"
      "masked edges, edges at excluded nodes and self-loops get -1."},
     {"series_parallel_reduce_ctx", (PyCFunction)py_series_parallel_reduce_ctx, METH_VARARGS | METH_KEYWORDS,
-     "series_parallel_reduce_ctx(capsule, terminal_mask, protected_mask[, edge_mask, node_mask])\n"
+     "series_parallel_reduce_ctx(capsule, terminal_mask, protected_mask[, edge_mask, node_mask,\n"
+     "                           pendant_keep_mask, series_blocked_mask])\n"
      "    -> twelve int32 byte buffers\n\n"
      "Terminal-preserving series-parallel reduction as a flat operation log: op_kind, left, right,\n"
      "endpoint_u, endpoint_v, interior_node, leaf_edge_index and pendant_absorber per operation, then\n"
      "the residual as operation id and both endpoint node indices per surviving edge, then the\n"
-     "surviving node indices. terminal_mask and protected_mask mark membership by a non-zero byte."},
+     "surviving node indices. The four node masks mark membership by a non-zero byte: a kept node\n"
+     "takes no pendant move, a series-blocked one no series move."},
     {NULL, NULL, 0, NULL},
 };
 
