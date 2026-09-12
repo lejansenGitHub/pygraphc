@@ -415,6 +415,95 @@ view.incident_edge_indices(1)                      # [0, 1] — base edge keeps 
 list(view.without_branches([11]).connected_components())  # [{0, 1}, {2}]
 ```
 
+### Graph reduction kernel
+
+`pygraphc.reduction` implements a terminal-preserving reduction kernel for multigraphs:
+partition by an edge mask, quotient over the blocks, and reduce to the edges that matter
+between a set of terminals while every input edge keeps its identity in a series-parallel
+provenance tree. The partition step runs in C through
+masked connected components; quotient, lift, reduction, provenance folds and scenario
+application are the Python tier on top. Node ids are non-negative integers (validated
+at construction: `TypeError` for a non-int, `ValueError` for negatives, duplicates and
+unknown endpoints), edge ids are opaque hashable values that keep their identity through
+every operation, and every result is deterministic by id order.
+
+```python
+from pygraphc import MultiGraph, Parallel, Partition, minimal_toggles, paths, quotient, reduce, scenario
+
+# Edges are identified by id, never by endpoint pair: parallel edges survive.
+graph = MultiGraph([1, 2, 3, 4], {"e1": (1, 2), "p1": (2, 3), "p2": (2, 3), "e2": (3, 4)})
+active = set(graph.endpoints)
+
+# Partition by masked connected components; block ids are the minimum member id.
+base = Partition.from_components(graph, active)        # blocks: {1: [1, 2, 3, 4]}
+base.block_of[4]                                        # 1, constant-time lookup
+
+# Scenario = mask and re-partition. Removing both parallel edges splits the
+# block although neither edge is a bridge. The C graph is built once
+# per MultiGraph; scenarios only change the byte mask.
+after = scenario(graph, active, removed={"p1", "p2"})
+after.blocks()                                          # {1: [1, 2], 3: [3, 4]}
+after.refines(base)                                     # True
+
+# Quotient over blocks: every crossing edge keeps its id; edges inside a block are internal.
+meta, internal = quotient(after, graph, crossing={"p1", "p2", "e1"})
+meta.endpoints                                          # {"p1": (1, 3), "p2": (1, 3)}
+internal                                                # {1: ["e1"]}
+
+# Terminal-preserving reduction: pendant deletion, series merge, parallel merge until
+# nothing applies. Every residual edge carries a series-parallel provenance tree.
+reduced = reduce(meta, terminals={1, 3})
+(tree,) = reduced.provenance.values()
+isinstance(tree, Parallel)                              # True: Parallel({Leaf("p1"), Leaf("p2")})
+paths(tree)                                             # {frozenset({"p1"}), frozenset({"p2"})}
+minimal_toggles(tree, {"p1": True, "p2": True}, target_closed=False)
+# frozenset({"p1", "p2"}): opening the residual edge needs both leaves
+```
+
+`reduce(graph, terminals, protected=frozenset(), *, fold_leaves=True, order=None)`:
+
+- Terminals and protected nodes must be nodes of the graph; unknown ids raise `ValueError`.
+- Components without a terminal are removed whole before any move.
+- Terminals always survive. Protected nodes keep their incident edges unmerged
+  (no series merge at them, no parallel merge of edges touching them); they may
+  still be deleted as pendants.
+- Self-loops take part in no move and leave with their node. Degree counts
+  non-loop incidences, so a node with a loop and one further edge is a pendant,
+  and a series merge needs exactly two non-loop incidences to two distinct neighbours.
+- With `fold_leaves`, every eliminated node appears exactly once in the output:
+  in `Reduced.folded_nodes` of a surviving node, as `Series.interior_nodes` of a
+  residual tree, or in `Reduced.folded_interior` of such an interior node (the
+  material folded into it before its series move). A pendant move passes the
+  pendant node, its folded material and the interior nodes of the dropped edge's
+  tree with their folded material on to the neighbour. With `fold_leaves=False`
+  pendant material is dropped.
+- Every pendant move also records `(neighbour, tree)` in `Reduced.dropped`, the
+  provenance tree of the removed edge, so edge material merged before its attachment
+  became pendant (a dead-end cycle returning to one node) stays available.
+- Edges produced by moves get `VirtualEdgeId`s numbered in creation order; they
+  sort after every input edge id and start above any virtual id already present in
+  the input, so a residual can be reduced again (with the same terminals it is a fixpoint).
+- Deterministic: candidates are processed in increasing node id (or in `order`),
+  ties among edges by id order. Without protected nodes the residual and the folded
+  material are the same for every order; a protected node can make them order
+  dependent, in which case the id order is the documented answer.
+
+Tree folds: `leaves(tree)`, `paths(tree, cutoff=None)` (series is the product,
+parallel the union, the cutoff prunes inside the product), `closed(tree, state)`
+(series is AND, parallel is OR) and `minimal_toggles(tree, state, target_closed=...)`
+(union where the node type needs every child, cheapest child otherwise, ties by
+edge id). `Series` and `Parallel` compare by identity (every tree node is created once,
+by the move that produces it) and hash by cached structure; the folds, `repr` and
+`tree_records(tree)` / `tree_from_records(records)` are iterative, so chains deeper than
+the recursion limit are fine. `tree_records` is the canonical serialisable form (a
+post-order log with parallel children ordered by smallest leaf id, independent of the
+hash seed) and the way to compare two trees structurally; `pickle` and `copy.deepcopy`
+recurse and are not suitable for deep trees.
+
+`lift(partition, attribute, combine)` combines node attributes per block in
+increasing node order, so a non-commutative `combine` still gives reproducible
+results. `Partition.compose(finer)` expresses a second quotient level.
+
 ### DAG structure learning (Bayesian networks)
 
 Learn directed acyclic graph (DAG) structures from discrete data using greedy hill-climb search with K2 Bayesian scoring. Implemented in C — drop-in replacement for pgmpy's `HillClimbSearch` with identical results and orders of magnitude faster.

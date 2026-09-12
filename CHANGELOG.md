@@ -25,6 +25,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   connected components. Each test times both sides best-of-3, prints the
   ratio, asserts identical results and asserts pygraphc is faster, so a fast
   wrong answer fails too.
+- `pygraphc.reduction`: the terminal-preserving graph reduction kernel.
+  `MultiGraph` with edge identity, `Partition` from masked connected
+  components (`from_components`, `from_groups`, `compose`, `refines`,
+  `blocks`, constant-time `block_of`), `quotient` with internal edges,
+  `lift` with a fixed combination order, `reduce` (pendant, series and
+  parallel moves with terminals, protected nodes and leaf fold or drop)
+  producing `Leaf`/`Series`/`Parallel` provenance trees with
+  `folded_nodes`, `folded_interior` and `dropped` (neighbour and tree of
+  every pendant-deleted edge) bookkeeping, the folds `leaves`,
+  `paths(cutoff)`, `closed` and `minimal_toggles`, the iterative canonical
+  serialisation `tree_records` / `tree_from_records`, and `scenario` (mask
+  and re-partition). `Series` and `Parallel` compare by identity with a
+  cached structural hash, so deep chains never recurse. `MultiGraph`
+  validates node ids (non-negative ints, no bools, no duplicates, known
+  endpoints) and `reduce` rejects unknown terminals and protected nodes.
+  Virtual edge ids start above any present in the input, so a residual can
+  be reduced again. Parallel candidates come from a pair index, so hub-heavy
+  inputs reduce in linear time. All names are re-exported from `pygraphc`.
 
 ### Fixed
 - Weighted algorithms (`shortest_path`, `shortest_path_lengths`,
