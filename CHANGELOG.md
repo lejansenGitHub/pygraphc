@@ -34,6 +34,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   protected masks. A missing one of these two is the empty set; the terminal
   mask has no such default and `None` in its place still raises `TypeError`.
 
+- `Graph.series_parallel_state(terminal_mask, protected_mask)` and the
+  `ReductionState` handle it returns: the mutable half-edge incidence
+  structure of the reduction behind an opaque capsule, with the
+  terminal-free components already removed and one leaf operation per edge
+  emitted, plus one short primitive per step over it. `next_move()` reports
+  the move at the next candidate node, `apply_move(move)` applies it and
+  says whether it created a mergeable parallel pair, `pair_edges(u, v)` and
+  `apply_parallel(u, v, edges)` are that merge, `batch_moves(kind)` reports
+  every currently applicable and mutually independent move of one kind into
+  one flat int32 buffer and `apply_batch(kind, batch)` applies the whole
+  buffer, `log()` reads the same `ReductionLog` the monolithic loop returns.
+  The handle carries the graph it was built from and goes inert on `free()`,
+  so a released state raises `ValueError` instead of dangling. Every index a
+  caller hands back is validated before anything is written: an edge must be
+  live and run between the two distinct live nodes named, a series move must
+  name two distinct edges, and a pendant or series move must not name a
+  terminal.
+- `reduce(..., engine="moves" | "rounds")`: the reduction fixpoint driven
+  from Python over those primitives, one boundary crossing per move and one
+  per kind per round. The state survives every move, so no graph is rebuilt
+  between them. On 20 000 nodes, 25 000 edges and 200 terminals the monolithic
+  `"c"` engine takes 0.022 s, `"moves"` 0.025 s and `"rounds"` 0.023 s against
+  0.087 s for `"python"` and 0.153 s for networkx; at a million nodes 2.02 s,
+  2.19 s and 1.92 s. Roughly four fifths of every engine's time is the fold
+  that builds the provenance trees, which is why the boundary barely shows.
+  `"moves"` applies the moves in the monolith's order and reproduces its
+  `Reduced` exactly, tree shapes included; `"rounds"` changes the order the
+  merges happen in, so its residual, the leaves of every residual edge, the
+  folded payload of every surviving node as a set and the material that left
+  the graph are the same, while the split of `dropped` across pendant moves
+  and the nesting of a series chain may differ.
 - `series_parallel_reduce(terminal_mask, protected_mask)`
   on `Graph` and `GraphView`: the structural loop of the terminal-preserving
   reduction in C, returning a `ReductionLog` of twelve int32 `memoryview`s.

@@ -45,6 +45,15 @@ from pygraphc._core import predecessors_ctx as _predecessors_ctx
 from pygraphc._core import quotient_edges_ctx as _quotient_edges_ctx
 from pygraphc._core import scc_ctx as _scc_ctx
 from pygraphc._core import series_parallel_reduce_ctx as _series_parallel_reduce_ctx
+from pygraphc._core import sp_apply_batch as _sp_apply_batch
+from pygraphc._core import sp_apply_move as _sp_apply_move
+from pygraphc._core import sp_apply_parallel as _sp_apply_parallel
+from pygraphc._core import sp_batch_moves as _sp_batch_moves
+from pygraphc._core import sp_next_move as _sp_next_move
+from pygraphc._core import sp_pair_edges as _sp_pair_edges
+from pygraphc._core import sp_state_free as _sp_state_free
+from pygraphc._core import sp_state_log as _sp_state_log
+from pygraphc._core import sp_state_new as _sp_state_new
 from pygraphc._core import sssp_ctx as _sssp_ctx
 from pygraphc._core import sssp_nid as _sssp_nid
 from pygraphc._core import toposort_ctx as _toposort_ctx
@@ -95,6 +104,7 @@ __all__ = [
     "PendantPolicy",
     "Reduced",
     "ReductionLog",
+    "ReductionState",
     "SPTree",
     "Series",
     "SeriesStep",
@@ -566,6 +576,99 @@ class ReductionLog:
     def from_buffers(cls, raw: tuple[bytes, ...]) -> ReductionLog:
         """The twelve int32 byte buffers of ``series_parallel_reduce_ctx`` as typed views."""
         return cls(*(memoryview(buffer).cast("i") for buffer in raw))
+
+
+class ReductionState(Generic[NodeIdT, BranchIdT]):
+    """Opaque handle on the mutable state of one terminal-preserving reduction.
+
+    ``Graph.series_parallel_state`` builds the incidence structure of the
+    masked graph once, with the terminal-free components already gone, and
+    every method below moves it one step without rebuilding anything. The
+    caller drives the fixpoint itself and reads the operation log at the end.
+
+    Move kinds are the ``ReductionLog`` operation kinds, named by the
+    ``SERIES``, ``PARALLEL`` and ``PENDANT`` attributes. Nodes and edges are
+    the node indices and edge slots of the state, never node ids.
+
+    The handle carries the ``Graph`` it was built from, so it can never be
+    paired with another one, and it goes inert on ``free``: every later call
+    raises ``ValueError`` instead of touching released memory.
+    """
+
+    __slots__ = ("_capsule", "_graph")
+
+    SERIES = 1
+    PARALLEL = 2
+    PENDANT = 3
+
+    def __init__(self, graph: Graph[NodeIdT, BranchIdT], capsule: object) -> None:
+        self._graph = graph
+        self._capsule = capsule
+
+    @property
+    def graph(self) -> Graph[NodeIdT, BranchIdT]:
+        """The graph the state was built from."""
+        return self._graph
+
+    def __enter__(self) -> ReductionState[NodeIdT, BranchIdT]:
+        return self
+
+    def __exit__(self, *_exception: object) -> None:
+        self.free()
+
+    def free(self) -> None:
+        """Release the state. Idempotent only in that a second call raises ``ValueError``."""
+        _sp_state_free(self._capsule)
+
+    def next_move(self) -> tuple[int, int, int, int, int, int] | None:
+        """The move at the next candidate node, pendant before series, or None when none applies.
+
+        Reports ``(kind, node, edge_a, edge_b, neighbour_a, neighbour_b)``,
+        the second edge and neighbour -1 for a pendant move. The node leaves
+        the candidate queue whether or not the caller applies the move.
+        """
+        move: tuple[int, int, int, int, int, int] | None = _sp_next_move(self._capsule)
+        return move
+
+    def apply_move(self, move: tuple[int, int, int, int, int, int]) -> tuple[int, int]:
+        """Apply one ``next_move`` result, returning ``(created_edge, parallel_pending)``.
+
+        ``created_edge`` is the edge a series move produced and -1 for a
+        pendant move; ``parallel_pending`` is 1 when its two endpoints now
+        carry a mergeable parallel pair.
+        """
+        applied: tuple[int, int] = _sp_apply_move(self._capsule, move)
+        return applied
+
+    def pair_edges(self, from_node: int, to_node: int) -> bytes | None:
+        """The live edges between one unprotected node pair as int32, or None when fewer than two."""
+        edges: bytes | None = _sp_pair_edges(self._capsule, from_node, to_node)
+        return edges
+
+    def apply_parallel(self, from_node: int, to_node: int, edges: bytes) -> int:
+        """Replace the given edges between one node pair by a single edge, returning it."""
+        created: int = _sp_apply_parallel(self._capsule, from_node, to_node, edges)
+        return created
+
+    def batch_moves(self, kind: int) -> bytes | None:
+        """Every currently applicable, mutually independent move of one kind, or None when none applies.
+
+        A pendant or series kind reports five int32 per move, the node and the
+        two edges and two neighbours of ``next_move``; a parallel kind reports
+        one variable-length record per endpoint pair, the two endpoints, the
+        member count and the member edges.
+        """
+        batch: bytes | None = _sp_batch_moves(self._capsule, kind)
+        return batch
+
+    def apply_batch(self, kind: int, batch: bytes) -> None:
+        """Apply every move of one ``batch_moves`` buffer, in buffer order."""
+        _sp_apply_batch(self._capsule, kind, batch)
+
+    def log(self) -> ReductionLog:
+        """The operation log, the residual edges and the surviving nodes so far."""
+        raw: tuple[bytes, ...] = _sp_state_log(self._capsule)
+        return ReductionLog.from_buffers(raw)
 
 
 def _quotient_edge_views(
@@ -1133,6 +1236,28 @@ class Graph(Generic[NodeIdT, BranchIdT]):
             self._ctx, terminal_mask, protected_mask, None, None, pendant_keep_mask, series_blocked_mask
         )
         return ReductionLog.from_buffers(raw)
+
+    def series_parallel_state(
+        self,
+        terminal_mask: NodeMask,
+        protected_mask: NodeMask,
+        *,
+        pendant_keep_mask: NodeMask | None = None,
+        series_blocked_mask: NodeMask | None = None,
+    ) -> ReductionState[NodeIdT, BranchIdT]:
+        """Reduction state of this graph, with the terminal-free components already gone.
+
+        The four masks hold one byte per node index and mark membership by a
+        non-zero byte, as in ``series_parallel_reduce``: a kept node takes no
+        pendant move, a blocked one no series move. No move is applied: the
+        caller drives the fixpoint through the returned handle. Undirected
+        graphs only.
+        """
+        self._require_undirected("series_parallel_state")
+        return ReductionState(
+            self,
+            _sp_state_new(self._ctx, terminal_mask, protected_mask, None, None, pendant_keep_mask, series_blocked_mask),
+        )
 
     def bcc_edge_labels(self) -> memoryview:
         """Biconnected component id per edge index as an int32 view.
