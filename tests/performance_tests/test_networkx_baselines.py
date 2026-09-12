@@ -177,14 +177,17 @@ def test_biconnected_components_vs_networkx() -> None:
 
 
 def test_shortest_path_vs_networkx() -> None:
-    """The one operation where networkx wins: `nx.shortest_path` searches from both ends.
+    """The single-pair query, timed through the free function.
 
-    Against `nx.dijkstra_path`, the same one-directional Dijkstra pygraphc runs,
-    pygraphc is far ahead. Against `nx.shortest_path`, which dispatches to
-    bidirectional Dijkstra for a single source-target pair and therefore settles
-    a small fraction of the nodes, pygraphc is behind. Both ratios are printed;
-    the assertion guards the like-for-like one, and the second assertion pins
-    the bidirectional gap so a further regression fails.
+    Both sides now search from both ends, so the remaining gap against
+    `nx.shortest_path` is not the algorithm: this times the free function, which
+    parses the node ids and the edge list on every call, and converts a list of
+    floats element by element. The `Graph` method on the same graph is 2.2x
+    ahead of networkx with list weights and 18x with a float64 buffer, which the
+    README table records. Against `nx.dijkstra_path`, the one-directional search,
+    the free function is far ahead even so. Both ratios are printed; the first
+    assertion guards the like-for-like comparison and the second pins the
+    bidirectional gap so a regression in either direction fails.
     """
     networkx = pytest.importorskip("networkx")
     number_of_nodes = 10**5
@@ -215,7 +218,10 @@ def test_shortest_path_vs_networkx() -> None:
         "shortest_path vs nx.shortest_path (bidirectional)", "100K", pygraphc_seconds, bidirectional_seconds
     )
     assert speedup > 1.0, f"pygraphc is not faster than nx.dijkstra_path ({speedup:.2f}x)"
-    assert bidirectional_speedup > 0.05, (
+    # 0.20 sits between the 0.16 this ratio had before the search became
+    # bidirectional and the 0.4 to 0.5 it measures after, so the floor fails if
+    # the bidirectional search is lost and tolerates ordinary variation.
+    assert bidirectional_speedup > 0.20, (
         f"pygraphc fell further behind bidirectional Dijkstra ({bidirectional_speedup:.2f}x)"
     )
 

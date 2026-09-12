@@ -28,8 +28,8 @@ rather than the ratio.
 | Articulation Points | 1M | 0.204s | 3.55s | **17x** |
 | BFS | 1M | 0.073s | 6.94s | **95x** |
 | Dijkstra (single-source lengths) | 1M | 0.356s | 5.00s | **14x** |
-| Shortest path (single pair, float64 weights) | 100K | MEASURE_BUFFER | **MEASURE_BUFFER_X** |
-| Shortest path (single pair, list weights) | 100K | MEASURE_LIST | **MEASURE_LIST_X** |
+| Shortest path, single pair, `Graph` + float64 weights | 100K | 0.00007s | 0.0013s | **18x** |
+| Shortest path, single pair, `Graph` + list weights | 100K | 0.0006s | 0.0013s | **2.2x** |
 | Edge paths (cutoff=5) | 80 | 0.000001s | 0.0001s | **91x** |
 | SCC (directed) | 1M | 0.129s | 4.64s | **36x** |
 | WCC (directed) | 1M | 0.029s | 1.97s | **69x** |
@@ -50,13 +50,19 @@ Further networkx baselines, same machine and discipline, from
 | `nodes_on_simple_paths` | 24 | 0.00001s | 0.008s | **677x** |
 | Connected Components, edge-masked view | 100K | 0.003s | 0.059s | **21x** |
 | Single-pair `shortest_path` vs `nx.dijkstra_path` | 100K | 0.009s | 0.198s | **23x** |
-| Single-pair `shortest_path` vs `nx.shortest_path` | 100K | 0.009s | 0.0014s | **0.16x — networkx is faster** |
+| Single-pair `shortest_path` vs `nx.shortest_path`, free function | 100K | 0.0034s | 0.0015s | **0.5x — networkx is faster** |
 
-The last row is the one operation where networkx wins: for a single
-source-target pair `nx.shortest_path` dispatches to bidirectional Dijkstra and
-settles a small fraction of the nodes, while pygraphc runs one search from the
-source. Against the same one-directional algorithm (`nx.dijkstra_path`)
-pygraphc stays 23x ahead.
+The last row is the one place networkx still wins, and which call it is
+matters more than the ratio. `nx.shortest_path` dispatches to bidirectional
+Dijkstra for a single source-target pair, and so does pygraphc now — but that
+row times the **free function**, which parses the node ids and the edge list on
+every call. Three calls, same graph, same machine, against the same 0.0013s
+from networkx: the free function with list weights takes 0.0034s (0.5x), the
+`Graph` method with list weights 0.0006s (2.2x), and the `Graph` method with a
+float64 buffer 0.00007s (18x). So the search is not what is behind — building
+the input on every call is, and converting a list of floats element by element
+costs more than the search itself. Against the one-directional
+`nx.dijkstra_path` the free function stays 59x ahead.
 
 `shortest_path` with a target runs a bidirectional Dijkstra: two searches, one forward from the source and one backward from the target, meet in the middle, so only a small part of a large graph is settled. It is compared against `nx.shortest_path`, which dispatches to networkx's own bidirectional Dijkstra; against the one-directional `nx.dijkstra_path` the same query is ~500x (list weights) to ~12,000x (float64 weights) faster.
 
