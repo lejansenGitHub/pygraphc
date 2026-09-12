@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   connected components. Each test times both sides best-of-3, prints the
   ratio, asserts identical results and asserts pygraphc is faster, so a fast
   wrong answer fails too.
+- Four C label kernels on `Graph` and `GraphView`, each returning an int32
+  `memoryview` instead of Python containers: `component_labels()` (smallest
+  node index of every node's connected component, -1 for an excluded node),
+  `quotient_edges(labels)` (one pass over the unmasked edges in index order
+  returning crossing edges as three parallel arrays of source label,
+  destination label and edge index plus the internal edge indices; the
+  labels buffer must hold one int32 per node), `degrees()` (incidence degrees
+  under the masks, self-loops counted twice) and `bcc_edge_labels()`
+  (biconnected component id per edge, bridges as singleton components, -1
+  for masked edges and self-loops). `Partition.from_components` and
+  `quotient` in `pygraphc.reduction` now run on these kernels with identical
+  results; the partition no longer materialises one set per block.
 - `pygraphc.reduction`: the terminal-preserving graph reduction kernel.
   `MultiGraph` with edge identity, `Partition` from masked connected
   components (`from_components`, `from_groups`, `compose`, `refines`,

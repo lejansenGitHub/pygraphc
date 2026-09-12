@@ -105,7 +105,7 @@ def test_cycle_basis_large_single_cycle():
 
 def test_cycle_basis_circuit_rank():
     """Verify circuit rank = m - n + c for various graphs."""
-    # Grid-like graph: 4 nodes, 5 edges, 1 component -> 5-4+1=2
+    # Square with a diagonal: 4 nodes, 5 edges, 1 component -> 5-4+1=2
     node_ids = [1, 2, 3, 4]
     edges = [(1, 2), (2, 3), (3, 4), (4, 1), (1, 3)]
     graph = Graph(node_ids, edges)

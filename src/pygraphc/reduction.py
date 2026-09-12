@@ -1,23 +1,26 @@
 """Terminal-preserving graph reduction kernel (Python tier).
 
-The partition step runs in the C tier through masked connected components of
-``pygraphc.Graph``. Everything above it lives here: quotient with edge
-identity, lift with a fixed combination order, the fixpoint reduction with
-series-parallel provenance, the tree folds and scenario application.
+The partition step and the edge split of the quotient run in the C tier on
+int32 label arrays of ``pygraphc.Graph`` (``component_labels`` and
+``quotient_edges`` under an edge mask). Everything above them lives here:
+quotient with edge identity, lift with a fixed combination order, the fixpoint
+reduction with series-parallel provenance, the tree folds and scenario
+application.
 
 Node ids are non-negative integers because the C tier interns them. Edge ids
 are opaque hashable values and every edge keeps its identity through every
 operation. Every operation is deterministic: ties are broken by id order,
 never by hash order. Self-loops take part in no move and leave with their node.
 
-The module depends on ``pygraphc`` only for ``pygraphc.Graph``; the package
-is imported as a module so that ``pygraphc/__init__.py`` can re-export the
-kernel without a circular import.
+The module depends on ``pygraphc`` only for ``pygraphc.Graph`` and its views;
+the package is imported as a module so that ``pygraphc/__init__.py`` can
+re-export the kernel without a circular import.
 """
 
 from __future__ import annotations
 
 import heapq
+from array import array
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -135,17 +138,28 @@ class MultiGraph(Generic[EdgeId]):
 
     @cached_property
     def _kernel(self) -> _KernelGraph[EdgeId]:
+        nodes = sorted(self.nodes)
         edge_ids = sorted(self.endpoints, key=_order_key)
-        kernel_graph = pygraphc.Graph(list(self.nodes), [self.endpoints[edge_id] for edge_id in edge_ids])
-        return _KernelGraph(edge_ids, kernel_graph)
+        kernel_graph = pygraphc.Graph(nodes, [self.endpoints[edge_id] for edge_id in edge_ids])
+        return _KernelGraph(nodes, edge_ids, kernel_graph)
 
 
 @dataclass(frozen=True)
 class _KernelGraph(Generic[EdgeId]):
-    """Parsed C graph of a multigraph plus the edge id at every edge index."""
+    """Parsed C graph of a multigraph with the node id at every node index and the edge id at every edge index.
 
+    Node ids are in increasing order, so the smallest node index of a block is
+    its smallest member and a C label becomes the block id by one list lookup.
+    Edge ids are in ``_order_key`` order, so edge index order is edge id order.
+    """
+
+    nodes: list[int]
     edge_ids: list[EdgeId]
     graph: pygraphc.Graph[int, int]
+
+    def restricted_to(self, kept: AbstractSet[EdgeId]) -> pygraphc.GraphView[int, int]:
+        """View that masks every edge outside ``kept``; the parsed graph is never rebuilt."""
+        return self.graph.without_edges([index for index, edge_id in enumerate(self.edge_ids) if edge_id not in kept])
 
 
 # ---------------------------------------------------------------------------
@@ -168,16 +182,14 @@ class Partition:
         """Connected components of the graph restricted to the active edges.
 
         The inactive edges are a byte mask on the cached C graph, so applying
-        a different active set never rebuilds the graph.
+        a different active set never rebuilds the graph. The C tier returns
+        one int32 label per node, the node index of the block's smallest
+        member, so no set per block is ever built.
         """
         kernel = graph._kernel
-        excluded = [index for index, edge_id in enumerate(kernel.edge_ids) if edge_id not in active]
-        block_of: dict[int, int] = {}
-        for group in kernel.graph.without_edges(excluded).connected_components():
-            representative = min(group)
-            for node_id in group:
-                block_of[node_id] = representative
-        return cls(block_of)
+        labels = kernel.restricted_to(active).component_labels()
+        nodes = kernel.nodes
+        return cls({node_id: nodes[label] for node_id, label in zip(nodes, labels, strict=True)})
 
     @classmethod
     def from_groups(cls, groups: Iterable[Iterable[int]]) -> Partition:
@@ -220,18 +232,24 @@ def quotient(
     """Meta multigraph over the blocks in which every crossing edge keeps its identity.
 
     Crossing edges with both endpoints in one block are returned separately
-    as the internal edges of that block.
+    as the internal edges of that block. The C tier splits the edges in one
+    pass over an int32 label per node (the position of the node's block in
+    the sorted block list); the meta edges come back in edge id order. The
+    partition must name a block for every node of the graph.
     """
     block_nodes = sorted(set(partition.block_of.values()))
-    endpoints: dict[EdgeId, tuple[int, int]] = {}
+    block_index = {block_id: index for index, block_id in enumerate(block_nodes)}
+    kernel = graph._kernel
+    labels = memoryview(array("i", [block_index[partition.block_of[node_id]] for node_id in kernel.nodes]))
+    from_labels, to_labels, crossing_indices, internal_indices = kernel.restricted_to(crossing).quotient_edges(labels)
+    endpoints: dict[EdgeId, tuple[int, int]] = {
+        kernel.edge_ids[index]: (block_nodes[from_label], block_nodes[to_label])
+        for from_label, to_label, index in zip(from_labels, to_labels, crossing_indices, strict=True)
+    }
     internal: dict[int, list[EdgeId]] = {}
-    for edge_id in sorted(crossing, key=_order_key):
-        from_node, to_node = graph.endpoints[edge_id]
-        block_from, block_to = partition.block_of[from_node], partition.block_of[to_node]
-        if block_from == block_to:
-            internal.setdefault(block_from, []).append(edge_id)
-        else:
-            endpoints[edge_id] = (block_from, block_to)
+    for index in internal_indices:
+        edge_id = kernel.edge_ids[index]
+        internal.setdefault(partition.block_of[graph.endpoints[edge_id][0]], []).append(edge_id)
     return MultiGraph(block_nodes, endpoints), internal
 
 
