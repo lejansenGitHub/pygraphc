@@ -157,7 +157,7 @@ class _KernelGraph(Generic[EdgeId]):
     edge_ids: list[EdgeId]
     graph: pygraphc.Graph[int, int]
 
-    def restricted_to(self, kept: AbstractSet[EdgeId]) -> pygraphc.GraphView:
+    def restricted_to(self, kept: AbstractSet[EdgeId]) -> pygraphc.GraphView[int, int]:
         """View that masks every edge outside ``kept``; the parsed graph is never rebuilt."""
         return self.graph.without_edges([index for index, edge_id in enumerate(self.edge_ids) if edge_id not in kept])
 
