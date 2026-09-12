@@ -578,7 +578,7 @@ class ReductionLog:
         return cls(*(memoryview(buffer).cast("i") for buffer in raw))
 
 
-class ReductionState:
+class ReductionState(Generic[NodeIdT, BranchIdT]):
     """Opaque handle on the mutable state of one terminal-preserving reduction.
 
     ``Graph.series_parallel_state`` builds the incidence structure of the
@@ -601,16 +601,16 @@ class ReductionState:
     PARALLEL = 2
     PENDANT = 3
 
-    def __init__(self, graph: "Graph", capsule: object) -> None:
+    def __init__(self, graph: Graph[NodeIdT, BranchIdT], capsule: object) -> None:
         self._graph = graph
         self._capsule = capsule
 
     @property
-    def graph(self) -> "Graph":
+    def graph(self) -> Graph[NodeIdT, BranchIdT]:
         """The graph the state was built from."""
         return self._graph
 
-    def __enter__(self) -> "ReductionState":
+    def __enter__(self) -> ReductionState[NodeIdT, BranchIdT]:
         return self
 
     def __exit__(self, *_exception: object) -> None:
@@ -1244,7 +1244,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         *,
         pendant_keep_mask: NodeMask | None = None,
         series_blocked_mask: NodeMask | None = None,
-    ) -> ReductionState:
+    ) -> ReductionState[NodeIdT, BranchIdT]:
         """Reduction state of this graph, with the terminal-free components already gone.
 
         The four masks hold one byte per node index and mark membership by a
