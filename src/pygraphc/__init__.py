@@ -584,7 +584,7 @@ _LARGE_COMPONENT_SHARE = 8
 """Above one member per this many nodes, a full label pass beats a ``find`` per member."""
 
 
-def _node_index_of(graph: "Graph", node_id: NodeId) -> int:
+def _node_index_of(graph: Graph[NodeIdT, BranchIdT], node_id: NodeIdT) -> int:
     """The index of a node id, without building the cached id map for a single lookup.
 
     The map costs about 79 MiB at 1,000,000 nodes, more than building every
@@ -600,7 +600,7 @@ def _node_index_of(graph: "Graph", node_id: NodeId) -> int:
 
 
 def _connected_component_of(
-    graph: "Graph[NodeIdT, BranchIdT]",
+    graph: Graph[NodeIdT, BranchIdT],
     node_id: NodeIdT,
     excluded_edges: bytearray | None,
     excluded_nodes: bytearray | None,
@@ -633,7 +633,7 @@ def _connected_component_of(
     label = labels[4 * node_index : 4 * node_index + 4]
     if labels.count(label) > len(node_ids) // _LARGE_COMPONENT_SHARE:
         return {node_ids[index] for index, value in enumerate(label_values) if value == label_value}
-    component: set[NodeId] = set()
+    component: set[NodeIdT] = set()
     position = labels.find(label)
     while position >= 0:
         if position % 4 == 0:
