@@ -145,7 +145,7 @@ class _KernelGraph(Generic[EdgeId]):
     """Parsed C graph of a multigraph plus the edge id at every edge index."""
 
     edge_ids: list[EdgeId]
-    graph: pygraphc.Graph
+    graph: pygraphc.Graph[int, int]
 
 
 # ---------------------------------------------------------------------------
