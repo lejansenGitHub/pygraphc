@@ -5,8 +5,9 @@ the standard ones about perfect mazes -- a maze with no loops and no closed-off
 cells, which is to say a spanning tree of its cells, so any two of them are
 joined by exactly one corridor. The maze used here is drawn in full in
 ``MAZE_DRAWING`` below and the cell graph is derived from that drawing by
-``parse_maze``, so the picture and the graph cannot drift apart: a reader checks
-the picture, and the code cannot disagree with it.
+``parse_maze`` of ``maze_geometry``, the cell geometry this case shares with the
+braided maze of ``test_braided_maze``, so the picture and the graph cannot
+drift apart: a reader checks the picture, and the code cannot disagree with it.
 
 What this case exercises: the pendant and series moves of ``reduce`` down to a
 single residual edge, the ``paths`` fold over the resulting provenance chain,
@@ -16,13 +17,11 @@ series, and the one edge that survives carries the unique route.
 """
 
 import pytest
+from maze_geometry import COLUMNS, ROWS, cell_id, parse_maze, passage_id
 
-from pygraphc.reduction import MultiGraph, Partition, leaves, paths, reduce, scenario, tree_records
+from pygraphc.reduction import Partition, leaves, paths, reduce, scenario, tree_records
 
 pytestmark = pytest.mark.integration
-
-ROWS = 10
-COLUMNS = 10
 
 # A ten by ten perfect maze. '#' is wall, a space is open. A cell sits at every
 # odd row and odd column; two neighbouring cells have a passage between them
@@ -91,33 +90,6 @@ SOLUTION_CELLS = [
 # walker can only enter and leave again -- none of its cells is on the route,
 # and it holds three of the maze's dead ends.
 DEAD_END_PASSAGE_CELLS = ((9, 0), (9, 1))
-
-
-def cell_id(cell: tuple[int, int]) -> int:
-    """Node id of a cell, row-major, so cell (row, column) is row * 10 + column."""
-    row, column = cell
-    return row * COLUMNS + column
-
-
-def passage_id(first_cell: tuple[int, int], second_cell: tuple[int, int]) -> str:
-    """Edge id of the passage between two neighbouring cells, independent of direction."""
-    low, high = sorted([cell_id(first_cell), cell_id(second_cell)])
-    return f"{low}-{high}"
-
-
-def parse_maze(drawing: str) -> MultiGraph[str]:
-    """Cell graph of the drawing: one node per cell, one edge per open wall square between two cells."""
-    squares = drawing.splitlines()
-    endpoints: dict[str, tuple[int, int]] = {}
-    for row in range(ROWS):
-        for column in range(COLUMNS):
-            if column + 1 < COLUMNS and squares[2 * row + 1][2 * column + 2] != "#":
-                neighbour = (row, column + 1)
-                endpoints[passage_id((row, column), neighbour)] = (cell_id((row, column)), cell_id(neighbour))
-            if row + 1 < ROWS and squares[2 * row + 2][2 * column + 1] != "#":
-                neighbour = (row + 1, column)
-                endpoints[passage_id((row, column), neighbour)] = (cell_id((row, column)), cell_id(neighbour))
-    return MultiGraph([cell_id((row, column)) for row in range(ROWS) for column in range(COLUMNS)], endpoints)
 
 
 def solution_passages() -> list[str]:
