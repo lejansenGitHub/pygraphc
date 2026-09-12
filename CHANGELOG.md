@@ -160,6 +160,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Virtual edge ids start above any present in the input, so a residual can
   be reduced again. Parallel candidates come from a pair index, so hub-heavy
   inputs reduce in linear time. All names are re-exported from `pygraphc`.
+- `benchmarks/profile_workflows.py`: a phase profiler over a registry of the
+  end-to-end workflows the library supports (graph construction, connected
+  components, a scenario sweep, the full partition/quotient/lift/reduce
+  pipeline, the same reduction through the raw operation log, the weighted and
+  structural families, path enumeration and the DAG hill climb). Each workflow
+  is instrumented with explicit phases, timed best-of-three after a warm-up
+  with the profiler detached, and written to `profiles/` as a `.prof` per
+  workflow, a `.txt` of its top entries by cumulative and total time, a shared
+  `summary.md` with time, share and `tracemalloc` peak per phase plus a
+  networkx reference column, and a `summary.json`. Phases rather than a call
+  tree, because the split that matters — C kernel against Python object
+  construction — is invisible in a flat profile: the reduction spends about a
+  tenth of its `reduce` step in the C loop and the rest folding the operation
+  log into provenance trees.
+- `benchmarks/baseline.json` and `tests/unit_tests/test_workflow_profiles.py`:
+  a deliberately coarse guard that runs the harness at small sizes and fails
+  when a phase's share of its workflow's library time moves by more than 20
+  percentage points, when a phase above 50 microseconds or a workflow's library
+  time exceeds eight times its baseline, or when the phases stop accounting for
+  95% of the measured total; the whole table is printed on failure. Shares are
+  taken over the library time — the total without the harness's own input
+  generation, which is a third to nine tenths of these workflows at any size —
+  and the absolute per-phase gate is what covers the C kernels, which are single
+  digit percentages of their workflows and which a share can only catch once
+  they are an order of magnitude slower. No gate fails on one run: a workflow
+  that trips is measured again and only what survives the fastest of three
+  fresh runs is reported, which the share gate needs as much as the absolute
+  ones because the harness reports the phases of the round with the best total.
+  The baseline records the machine, interpreter, date and the revision the tree
+  was at when the numbers were taken. A CI job runs the harness at the
+  small sizes and uploads `profiles/` as an artifact without gating a merge.
 
 ### Fixed
 - Weighted algorithms (`shortest_path`, `shortest_path_lengths`,

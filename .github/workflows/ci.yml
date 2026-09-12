@@ -112,6 +112,29 @@ jobs:
           cd tests/performance_tests
           pytest "$PERFORMANCE_FILE" -v -s
 
+  profiles:
+    runs-on: ubuntu-latest
+    # Off the critical path on purpose: the uploaded artifact is the point, the
+    # timing on a shared runner is not, so this job never gates a merge. The
+    # guard lives in the unit suite, where it compares both phase shares and
+    # absolute phase times against benchmarks/baseline.json.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: pip install -e ".[dev,benchmark]" vendor/blueprint_linters-*.whl
+      - name: Workflow profiles
+        run: python benchmarks/profile_workflows.py --size guard --output profiles
+      - name: Upload profiles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profiles
+          path: profiles/
+
   coverage:
     runs-on: ubuntu-latest
     needs: test

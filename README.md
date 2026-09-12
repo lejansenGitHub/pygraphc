@@ -1033,6 +1033,96 @@ connected_components(node_ids, src, dst)
 
 Split lists is faster because building two flat lists avoids creating 1.5M tuple objects. The C parsing cost is similar — `PyLong_AsLong` per element dominates regardless of container shape.
 
+### Workflow profiles
+
+`benchmarks/profile_workflows.py` profiles the end-to-end workflows the library
+supports — build a graph, partition it, sweep scenarios, run the full
+partition/quotient/lift/reduce pipeline, the weighted and structural families,
+path enumeration, DAG structure learning — and writes a per-phase breakdown of
+every one of them. Phases, not a call tree: the split that matters here is the C
+kernel against the Python objects built around it, and a flat profile hides it.
+
+```bash
+python benchmarks/profile_workflows.py               # full sizes, writes profiles/
+python benchmarks/profile_workflows.py --size guard   # the small sizes the guard uses
+python benchmarks/profile_workflows.py --list         # the registry
+```
+
+**The artifacts** land in `profiles/` (gitignored, created on demand):
+
+| File | What it is |
+|------|------------|
+| `summary.md` | the table to open first: total wall time, every phase with its time and its share, the `tracemalloc` peak and the networkx reference per workflow |
+| `summary.json` | the same numbers machine-readably, the shape `benchmarks/baseline.json` uses |
+| `<workflow>.prof` | raw `cProfile` output — `python -m pstats` or `snakeviz profiles/<workflow>.prof` |
+| `<workflow>.txt` | that profile's top 25 entries by cumulative and by total time |
+
+**Two share columns.** The phase that generates a workflow's random inputs is
+the harness, not the library, and on most workflows it is a third to nine
+tenths of the wall time — 87% of `connected_components` at 5 000 nodes and
+still 79% at 200 000, so it is not an artefact of the small sizes. Every table therefore
+carries the share of the workflow and the share of the *library* time, the
+total without those generation phases. Read the second one.
+
+**How to read them.** Start with the phase shares, not the totals. A workflow
+whose C phase is a few percent and whose Python phase is most of the runtime is
+not a slow kernel, it is a caller paying for objects — the reduction spends
+about a tenth of its `reduce` step in the C loop and the rest folding the
+operation log into provenance trees, which is why `framework_pipeline` and
+`reduction_log` run the same reduction and differ only in their tails. Times are
+best of three runs after a warm-up, with the profiler detached; the `.prof` and
+`.txt` files come from a separate run and carry the profiler's overhead, so use
+them to find *which* call, never to quote a duration. `release inputs` is the
+teardown of the workflow's own inputs, attributed on purpose so the phases add
+up to the total.
+
+**The guard.** `tests/unit_tests/test_workflow_profiles.py` runs the harness at
+the small sizes and fails when a phase's share of its workflow's library time
+moves by more than 20 percentage points, when a phase above 50 microseconds or
+a whole workflow's library time exceeds eight times its baseline, or when the
+phases stop accounting for 95% of the measured total. The margins are wide on
+purpose — a guard that fires on CI noise gets deleted — so a failure means the
+shape of a workflow changed, and the failure message prints the whole table.
+
+No gate fails on a single run: a workflow that trips is measured again, and
+only what survives the fastest of three fresh runs is reported, which is what
+keeps a scheduler stall on a shared runner from reading as a regression. That
+applies to the share gate too, and not for symmetry: the harness reports the
+phases of the round with the best total, so one stall inside one phase skews
+every share in that workflow. Measured on an oversubscribed machine, the share
+gate failed ten runs in twenty without the confirmation pass and one with it.
+
+The two gates cover different regressions, and the file says so with the
+arithmetic. A share needs a phase to be a sizeable part of its workflow before
+20 points can move: at half the library time 2.4x fires, at a twentieth 6.4x,
+at a hundredth 26.4x, and above four fifths growth can never fire at all. The
+absolute gate is what covers the kernels, which are single-digit percentages of
+their workflows however large the graph: an injected tenfold regression in the
+label kernel, the degree kernel or the bridge kernel fails the suite every
+time, and in the C reduction loop — a phase of about 100 microseconds — ten
+times fails about two runs in three while twelve times fails every run, because
+both sides of that comparison are minima. Phases
+below the floor stay unguarded and the file names them; the guard sizes of four
+workflows are chosen to keep their kernels above it.
+
+**Regenerating the baseline.**
+
+```bash
+python benchmarks/profile_workflows.py --size guard --write-baseline
+```
+
+Legitimate when the registry changed (a new workflow, a renamed or re-cut
+phase), when a deliberate optimisation moved work from one phase to another, or
+when the reference machine in `benchmarks/baseline.json` is no longer the one
+the numbers should come from. Not legitimate as a way past a red guard: if a
+phase grew and you cannot say why, the baseline is the evidence and overwriting
+it destroys the finding. Regenerate in its own commit, say which phase moved
+and why, and keep the machine, date and revision blocks the file records. The
+revision is the commit the tree was at when the numbers were taken, with a
+dirty marker when it had uncommitted changes — which it normally does, since a
+baseline is regenerated just before the commit that carries it, so expect it to
+name that commit's parent.
+
 ### Run benchmarks
 
 ```bash
