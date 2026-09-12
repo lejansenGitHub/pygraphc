@@ -628,6 +628,28 @@ src, dst, edge_indices, internal = graph.quotient_edges(labels)
 `Partition.from_components` builds `block_of` straight from the label array and
 `quotient` from the edge split, so neither materialises a Python set per block.
 
+#### Domain independence check
+
+The reduction kernel was designed while looking at one application, so
+`tests/integration_tests/` keeps three cases from unrelated fields as the
+standing check that nothing domain-specific leaked into the API. Each models a
+real problem and asserts statements that are true about the modelled world, not
+numbers that happen to fall out of the code:
+
+| Case | Field | Exercises |
+|------|-------|-----------|
+| [Seven bridges of Konigsberg](tests/integration_tests/test_koenigsberg_bridges.py) | civil infrastructure, 1736 | `Partition`, `quotient` keeping parallel bridges distinct, `lift` of a per-district headcount, `minimal_toggles` over a parallel provenance node, and the irreducible four-node core where series and parallel moves stop |
+| [Caffeine scaffold](tests/integration_tests/test_caffeine_scaffold.py) | cheminformatics | `cycle_basis` and `bridges` to find the ring system, then `reduce` with `fold_leaves` as the side-chain stripping of a Bemis-Murcko decomposition |
+| [Perfect maze](tests/integration_tests/test_maze_solving.py) | puzzles, robot path planning | pendant and series moves collapsing a spanning tree to one edge, `paths` over the resulting series chain as the maze solution, `scenario` as a blocked-passage query |
+
+```bash
+pytest tests/integration_tests/ -v          # or: pytest tests/ -m integration
+```
+
+The pre-commit hooks deselect the marker to stay fast, so CI carries the check:
+the `integration` job in `.github/workflows/ci.yml` runs the directory on every
+supported Python version.
+
 ### DAG structure learning (Bayesian networks)
 
 Learn directed acyclic graph (DAG) structures from discrete data using greedy hill-climb search with K2 Bayesian scoring. Implemented in C — drop-in replacement for pgmpy's `HillClimbSearch` with identical results and orders of magnitude faster.

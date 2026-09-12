@@ -149,4 +149,5 @@ disable_error_code = ["call-arg", "arg-type", "attr-defined", "misc", "unused-ig
 testpaths = ["tests"]
 markers = [
     "performance: performance benchmarks (deselect with '-m not performance')",
+    "integration: domain integration cases (deselect with '-m not integration')",
 ]

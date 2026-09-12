@@ -69,6 +69,27 @@ jobs:
           echo "files=$files" >> "$GITHUB_OUTPUT"
           echo "$files"
 
+  integration:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install -e ".[dev]" vendor/blueprint_linters-*.whl
+      # The test job runs only tests/unit_tests/ and both pre-commit hooks pass
+      # -m "not integration", so this is the only place the domain cases run.
+      # The directory is named without a marker filter, so no deselect rule can
+      # exclude it and a case that forgets the marker still runs; pytest exits 5
+      # when nothing is collected, so an empty directory fails rather than
+      # passing quietly.
+      - name: Integration cases
+        run: pytest tests/integration_tests/ -x -v
+
   performance:
     needs: performance-files
     runs-on: ubuntu-latest
