@@ -5,6 +5,7 @@ from __future__ import annotations
 import types
 from collections import deque
 from collections.abc import Collection, Generator, Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from typing import Generic, NewType, TypeVar, overload
 
 from pygraphc._core import all_edge_paths_ctx as _all_edge_paths_ctx
@@ -43,6 +44,7 @@ from pygraphc._core import parse_graph as _parse_graph
 from pygraphc._core import predecessors_ctx as _predecessors_ctx
 from pygraphc._core import quotient_edges_ctx as _quotient_edges_ctx
 from pygraphc._core import scc_ctx as _scc_ctx
+from pygraphc._core import series_parallel_reduce_ctx as _series_parallel_reduce_ctx
 from pygraphc._core import sssp_ctx as _sssp_ctx
 from pygraphc._core import sssp_nid as _sssp_nid
 from pygraphc._core import toposort_ctx as _toposort_ctx
@@ -82,9 +84,11 @@ __all__ = [
     "MultiGraph",
     "NodeId",
     "NodeIdT",
+    "NodeMask",
     "Parallel",
     "Partition",
     "Reduced",
+    "ReductionLog",
     "SPTree",
     "Series",
     "TreeRecord",
@@ -136,6 +140,9 @@ NodeId = int
 
 BranchId = int
 """Backwards-compatible alias; new code should parameterize ``Graph`` instead."""
+
+NodeMask = bytes | bytearray | memoryview
+"""One byte per node index; a non-zero byte marks membership. Read as a buffer, never iterated."""
 
 
 # ── Connected Components (legacy index-based API kept for branch_ids) ──
@@ -508,6 +515,49 @@ def _rerouted_branch_ids(
     if base_branch_ids is None:
         return None
     return [base_branch_ids[edge_idx] for edge_idx in edge_indices]
+
+
+@dataclass(frozen=True)
+class ReductionLog:
+    """Flat operation log of a terminal-preserving series-parallel reduction, as int32 views.
+
+    The first eight fields hold one entry per operation, in the order the
+    moves apply: ``op_kind`` is 0 for a leaf, 1 for a series merge, 2 for a
+    parallel merge and 3 for a pendant deletion; ``left`` and ``right`` are
+    child operation ids (-1 when absent); ``endpoint_u`` and ``endpoint_v``
+    are the oriented endpoints of the virtual edge the operation produces
+    (-1 when it produces none); ``interior_node`` is the node a series move
+    eliminates or a pendant move removes; ``leaf_edge_index`` is the input
+    edge index of a leaf; ``absorber`` is the neighbour a pendant move's
+    payload moves to. A parallel merge of more than two edges is a left-deep
+    chain of binary operations of which only the last carries endpoints.
+
+    Every leaf precedes every move, one per input edge in edge index order, so
+    the leaves are the operations below the first non-leaf one.
+
+    ``residual_op``, ``residual_u`` and ``residual_v`` hold one entry per
+    surviving edge: the operation that produced it and its two endpoint node
+    indices. ``surviving_nodes`` holds the surviving node indices in
+    increasing order.
+    """
+
+    op_kind: memoryview
+    left: memoryview
+    right: memoryview
+    endpoint_u: memoryview
+    endpoint_v: memoryview
+    interior_node: memoryview
+    leaf_edge_index: memoryview
+    absorber: memoryview
+    residual_op: memoryview
+    residual_u: memoryview
+    residual_v: memoryview
+    surviving_nodes: memoryview
+
+    @classmethod
+    def from_buffers(cls, raw: tuple[bytes, ...]) -> ReductionLog:
+        """The twelve int32 byte buffers of ``series_parallel_reduce_ctx`` as typed views."""
+        return cls(*(memoryview(buffer).cast("i") for buffer in raw))
 
 
 def _quotient_edge_views(
@@ -965,6 +1015,22 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         """Degree per node index as an int32 view: incidences with a self-loop counted twice, out-degree if directed."""
         result: bytes = _degrees_ctx(self._ctx)
         return memoryview(result).cast("i")
+
+    def series_parallel_reduce(self, terminal_mask: NodeMask, protected_mask: NodeMask) -> ReductionLog:
+        """Terminal-preserving series-parallel reduction as a flat operation log.
+
+        Pendant deletion, series merge and parallel merge are applied to a
+        fixpoint in increasing node index, self-loops take part in no move
+        and leave with their node, and components without a terminal go
+        whole before any move. The two masks hold one byte per node index and
+        mark membership by a non-zero byte; they are read as buffers, so a
+        list of node ids is not a mask. ``None`` in place of the terminal mask
+        raises ``TypeError``, because a reduction without a terminal deletes
+        every component. Undirected graphs only.
+        """
+        self._require_undirected("series_parallel_reduce")
+        raw: tuple[bytes, ...] = _series_parallel_reduce_ctx(self._ctx, terminal_mask, protected_mask, None, None)
+        return ReductionLog.from_buffers(raw)
 
     def bcc_edge_labels(self) -> memoryview:
         """Biconnected component id per edge index as an int32 view.
@@ -1486,6 +1552,18 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     def quotient_edges(self, labels: memoryview) -> tuple[memoryview, memoryview, memoryview, memoryview]:
         """Split the unmasked edges by endpoint label, see ``Graph.quotient_edges``; excluded edges are skipped."""
         return _quotient_edge_views(_quotient_edges_ctx(self._graph._ctx, labels, self._excluded_edges))
+
+    def series_parallel_reduce(self, terminal_mask: NodeMask, protected_mask: NodeMask) -> ReductionLog:
+        """Reduce under the view's masks, see ``Graph.series_parallel_reduce``; excluded nodes and edges never move."""
+        self._require_undirected("series_parallel_reduce")
+        raw: tuple[bytes, ...] = _series_parallel_reduce_ctx(
+            self._graph._ctx,
+            terminal_mask,
+            protected_mask,
+            self._excluded_edges,
+            self._excluded_nodes,
+        )
+        return ReductionLog.from_buffers(raw)
 
     def degrees(self) -> memoryview:
         """Degree per node index as an int32 view under the masks, see ``Graph.degrees``; excluded nodes get 0."""
