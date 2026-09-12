@@ -5,6 +5,7 @@ equivalent best-of-3, prints the ratio, asserts identical results and asserts
 pygraphc is faster. The measured ratios back the README benchmark table.
 """
 
+import array
 import random
 import time
 from collections.abc import Callable, Iterable
@@ -177,17 +178,19 @@ def test_biconnected_components_vs_networkx() -> None:
 
 
 def test_shortest_path_vs_networkx() -> None:
-    """The single-pair query, timed through the free function.
+    """The single-pair query, algorithm against algorithm.
 
-    Both sides now search from both ends, so the remaining gap against
-    `nx.shortest_path` is not the algorithm: this times the free function, which
-    parses the node ids and the edge list on every call, and converts a list of
-    floats element by element. The `Graph` method on the same graph is 2.2x
-    ahead of networkx with list weights and 18x with a float64 buffer, which the
-    README table records. Against `nx.dijkstra_path`, the one-directional search,
-    the free function is far ahead even so. Both ratios are printed; the first
-    assertion guards the like-for-like comparison and the second pins the
-    bidirectional gap so a regression in either direction fails.
+    networkx's graph is built outside the timer, so pygraphc's is too: the two
+    asserted ratios time a prepared `Graph` against a prepared `nx.Graph`, with
+    weights as a float64 buffer. The earlier version of this test timed the free
+    function, which parses the node ids and the edge list on every call, against
+    a prepared networkx graph — build-and-search against search — and reported
+    0.16x from it.
+
+    Two further ratios are printed but not asserted, because they measure input
+    handling rather than the search, and both are symmetric: the same prepared
+    call with a list of floats instead of a buffer, and the free function
+    against networkx with *its* graph built inside the timer too.
     """
     networkx = pytest.importorskip("networkx")
     number_of_nodes = 10**5
@@ -197,7 +200,17 @@ def test_shortest_path_vs_networkx() -> None:
     source, target = 0, number_of_nodes - 1
     edge_weights = {frozenset(edge): weight for edge, weight in zip(edges, weights, strict=True)}
 
-    pygraphc_result, pygraphc_seconds = _best_of(lambda: shortest_path(node_ids, edges, weights, source, target))
+    prepared = Graph(node_ids, edges)
+    weight_buffer = array.array("d", weights)
+    pygraphc_result, pygraphc_seconds = _best_of(lambda: prepared.shortest_path(weight_buffer, source, target))
+    _list_result, list_seconds = _best_of(lambda: prepared.shortest_path(weights, source, target))
+    # Both sides build their own structure inside the timer, or neither does.
+    _built_result, built_seconds = _best_of(lambda: shortest_path(node_ids, edges, weights, source, target))
+    _networkx_built, networkx_built_seconds = _best_of(
+        lambda: networkx.shortest_path(
+            _networkx_graph(networkx, node_ids, edges, weights), source, target, weight="weight"
+        )
+    )
     unidirectional_result, unidirectional_seconds = _best_of(
         lambda: networkx.dijkstra_path(graph, source, target, weight="weight")
     )
@@ -217,12 +230,15 @@ def test_shortest_path_vs_networkx() -> None:
     bidirectional_speedup = _report(
         "shortest_path vs nx.shortest_path (bidirectional)", "100K", pygraphc_seconds, bidirectional_seconds
     )
+    _report("  same call with list weights", "100K", list_seconds, bidirectional_seconds)
+    _report("  both sides building inside the timer", "100K", built_seconds, networkx_built_seconds)
     assert speedup > 1.0, f"pygraphc is not faster than nx.dijkstra_path ({speedup:.2f}x)"
-    # 0.20 sits between the 0.16 this ratio had before the search became
-    # bidirectional and the 0.4 to 0.5 it measures after, so the floor fails if
-    # the bidirectional search is lost and tolerates ordinary variation.
-    assert bidirectional_speedup > 0.20, (
-        f"pygraphc fell further behind bidirectional Dijkstra ({bidirectional_speedup:.2f}x)"
+    # Both sides now hold a prepared graph, so this is the algorithm against the
+    # algorithm: measured 7.2x to 8.3x over three runs. The floor is 3x, clear of
+    # that spread and far above the 0.16x this comparison gave before the search
+    # became bidirectional.
+    assert bidirectional_speedup > 3.0, (
+        f"pygraphc is not clear of bidirectional Dijkstra ({bidirectional_speedup:.2f}x)"
     )
 
 
