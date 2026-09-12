@@ -59,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `cycle_basis` is quadratic on that generator and the 1M point would cost tens
   of minutes per call; `test_cycle_basis_performance` keeps 1M covered on the
   pygraphc side, where no networkx call is involved.
+- The masking performance tests assert the cost of a mask per returned
+  component instead of a ratio of total times. Excluding half the nodes breaks
+  the graph into 40,500 components where the unmasked graph has 5,333, so the
+  ratio of totals was a measure of the output size and tripped its threshold
+  whenever the baseline round happened to be fast. Timing is best of five on
+  both sides rather than a mean of three, and the 10,000-node cases are
+  asserted too.
 
 ### Changed
 - Rebuilds through `with_edges` and `split_node` keep every base edge at its
