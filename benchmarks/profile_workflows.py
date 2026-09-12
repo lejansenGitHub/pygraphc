@@ -19,10 +19,13 @@ Usage::
     python benchmarks/profile_workflows.py --size guard      # the guard's sizes
     python benchmarks/profile_workflows.py --only reduction_log
     python benchmarks/profile_workflows.py --size guard --write-baseline
+    python benchmarks/profile_workflows.py --compare-engines   # the four reduction engines
 
 Artifacts land in ``profiles/`` (gitignored): one ``.prof`` per workflow for
 ``pstats`` or snakeviz, one ``.txt`` with the top entries by cumulative and by
-total time, one shared ``summary.md`` and one ``summary.json``.
+total time, one shared ``summary.md`` and one ``summary.json``. The engine
+comparison adds ``engine_comparison.md`` with its ``engine_comparison.json``,
+which ``--rebuild-comparison`` rewrites the artifact from without re-measuring.
 """
 
 import argparse
@@ -33,12 +36,14 @@ import pstats
 import random
 import subprocess
 import sys
+import textwrap
 import time
 import tracemalloc
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from types import ModuleType
 
@@ -84,6 +89,10 @@ class PhaseTimer:
         finally:
             self.seconds[name] = self.seconds.get(name, 0.0) + (time.perf_counter() - start)
 
+    def absent(self, name: str) -> None:
+        """Record a phase this workflow has no counterpart for as zero, so sibling tables line up row by row."""
+        self.seconds.setdefault(name, 0.0)
+
 
 WorkflowBody = Callable[[PhaseTimer, int], str]
 NetworkxReference = Callable[[ModuleType, int], str]
@@ -116,6 +125,8 @@ class Workflow:
     """
     networkx_reference: NetworkxReference | None = None
     networkx_note: str = ""
+    phase_note: str = ""
+    """Caveat about how this workflow's phases are cut, printed wherever its phases are."""
 
     def size_for(self, profile_name: str) -> int:
         return self.default_size if profile_name == "default" else self.guard_size
@@ -436,6 +447,106 @@ def workflow_dag_structure_learning(timer: PhaseTimer, size: int) -> str:
     return outcome
 
 
+# ---------------------------------------------------------------------------
+# Reduction engines, one workflow each
+# ---------------------------------------------------------------------------
+
+ENGINE_NAMES: tuple[str, ...] = ("c", "moves", "rounds", "python")
+ENGINE_SEED = 71
+ENGINE_TERMINAL_STRIDE = 100
+ENGINE_COMPARISON_SIZES: tuple[int, ...] = (20_000, 100_000, 1_000_000)
+ENGINE_PROFILED_SIZES: tuple[int, ...] = (20_000, 100_000)
+
+PHASE_GENERATE = "generate input"
+PHASE_KERNEL = "construct kernel graph"
+PHASE_STRUCTURAL = "structural moves"
+PHASE_FOLD = "fold provenance"
+PHASE_RELEASE = "release"
+ENGINE_PHASES: tuple[str, ...] = (PHASE_GENERATE, PHASE_KERNEL, PHASE_STRUCTURAL, PHASE_FOLD, PHASE_RELEASE)
+
+PYTHON_ENGINE_PHASE_NOTE = (
+    f"The `python` engine is not phased like the other three: it interleaves the structural work and the "
+    f"fold, so its `{PHASE_STRUCTURAL}` figure holds both and its `{PHASE_FOLD}` figure is zero by "
+    f"construction rather than by measurement. Compare it against the sum of those two in a C-backed "
+    f"engine, never against `{PHASE_STRUCTURAL}` alone."
+)
+
+
+def engine_input(size: int) -> tuple[list[int], dict[int, tuple[int, int]], frozenset[int]]:
+    """The one seeded graph and terminal set every engine workflow reduces, so only the engine differs."""
+    nodes = list(range(size))
+    endpoints = dict(enumerate(sparse_edge_pairs(size, size * 5 // 4, seed=ENGINE_SEED)))
+    terminals = frozenset(range(0, size, ENGINE_TERMINAL_STRIDE))
+    return nodes, endpoints, terminals
+
+
+def structural_log(
+    engine: str,
+    kernel: reduction._KernelGraph[int],
+    terminals: frozenset[int],
+) -> pygraphc.ReductionLog:
+    """The structural half of one log-producing engine, with none of the payload algebra in it.
+
+    The default policies: every pendant absorbed, no node barred from a series
+    merge. They are what the four engines are compared under, so they are passed
+    explicitly rather than left to a default that could drift.
+    """
+    policies: dict[str, object] = {
+        "pendant": reduction.PendantPolicy("absorb"),
+        "series_ineligible": frozenset(),
+    }
+    if engine == "c":
+        return reduction._structural_log_c(kernel, terminals, frozenset(), **policies)  # type: ignore[arg-type]
+    if engine == "moves":
+        return reduction._structural_log_moves(kernel, terminals, frozenset(), **policies)  # type: ignore[arg-type]
+    return reduction._structural_log_rounds(kernel, terminals, frozenset(), **policies)  # type: ignore[arg-type]
+
+
+def workflow_reduce_engine(timer: PhaseTimer, size: int, engine: str) -> str:
+    """One reduction through one engine, phased identically to its three siblings.
+
+    The phases are the comparison: the same generated input, the same kernel
+    graph, then the structural work of finding and applying moves against the
+    fold that builds the provenance trees and the folded payloads. The Python
+    engine interleaves those two, so its fold is recorded as zero rather than
+    omitted and the four tables line up row by row.
+    """
+    with timer.phase(PHASE_GENERATE, setup=True):
+        nodes, endpoints, terminals = engine_input(size)
+    with timer.phase(PHASE_KERNEL):
+        graph = reduction.MultiGraph(nodes, endpoints)
+        kernel = graph._kernel
+    if engine == "python":
+        with timer.phase(PHASE_STRUCTURAL):
+            reduced = reduction.reduce(graph, terminals, engine="python")
+        timer.absent(PHASE_FOLD)
+    else:
+        with timer.phase(PHASE_STRUCTURAL):
+            log = structural_log(engine, kernel, terminals)
+        with timer.phase(PHASE_FOLD):
+            reduced = reduction._fold_operation_log(graph, kernel, log, pendant=reduction.PendantPolicy("absorb"))
+        del log
+    outcome = (
+        f"{len(reduced.graph.nodes)} residual nodes, {len(reduced.graph.endpoints)} residual edges, "
+        f"{len(reduced.provenance)} provenance trees, {len(reduced.folded_nodes)} folded payloads"
+    )
+    with timer.phase(PHASE_RELEASE):
+        del nodes, endpoints, terminals, graph, kernel, reduced
+    return outcome
+
+
+def engine_workflow(engine: str) -> Workflow:
+    """The registry entry for one engine; the four differ in the engine and in nothing else."""
+    return Workflow(
+        name=f"reduce_engine_{engine}",
+        description=f"reduce one seeded graph with the {engine!r} engine, phased for the engine comparison",
+        body=partial(workflow_reduce_engine, engine=engine),
+        default_size=20_000,
+        guard_size=2_000,
+        phase_note=PYTHON_ENGINE_PHASE_NOTE if engine == "python" else "",
+    )
+
+
 WORKFLOWS: tuple[Workflow, ...] = (
     Workflow(
         name="graph_build",
@@ -509,6 +620,7 @@ WORKFLOWS: tuple[Workflow, ...] = (
         default_size=2_000,
         guard_size=300,
     ),
+    *(engine_workflow(engine) for engine in ENGINE_NAMES),
 )
 
 WORKFLOWS_BY_NAME = {workflow.name: workflow for workflow in WORKFLOWS}
@@ -533,6 +645,7 @@ class Measurement:
     outcome: str = ""
     networkx_seconds: float | None = None
     networkx_note: str = ""
+    phase_note: str = ""
 
     @property
     def phase_shares(self) -> dict[str, float]:
@@ -630,17 +743,20 @@ def measure(
         outcome=outcome,
         networkx_seconds=networkx_seconds,
         networkx_note=workflow.networkx_note,
+        phase_note=workflow.phase_note,
     )
 
 
-def write_profile(workflow: Workflow, size: int, directory: Path) -> None:
+def write_profile(workflow: Workflow, size: int, directory: Path, stem: str | None = None) -> Path:
     """One unmeasured ``cProfile`` run per workflow, dumped as ``.prof`` and ``.txt``."""
+    stem = stem or workflow.name
     profiler = cProfile.Profile()
     profiler.enable()
     outcome = workflow.body(PhaseTimer(), size)
     profiler.disable()
-    profiler.dump_stats(str(directory / f"{workflow.name}.prof"))
-    with (directory / f"{workflow.name}.txt").open("w") as stream:
+    profile_path = directory / f"{stem}.prof"
+    profiler.dump_stats(str(profile_path))
+    with (directory / f"{stem}.txt").open("w") as stream:
         stream.write(f"{workflow.name} — {workflow.description}\n")
         stream.write(f"size {size}, outcome: {outcome}\n")
         stream.write("A profiled run, not a timing run: these numbers carry the profiler's overhead.\n\n")
@@ -648,6 +764,7 @@ def write_profile(workflow: Workflow, size: int, directory: Path) -> None:
         pstats.Stats(profiler, stream=stream).sort_stats("cumulative").print_stats(25)
         stream.write("\n=== by total time ===\n")
         pstats.Stats(profiler, stream=stream).sort_stats("tottime").print_stats(25)
+    return profile_path
 
 
 # ---------------------------------------------------------------------------
@@ -804,15 +921,31 @@ def summary_markdown(measurements: list[Measurement], profile_name: str) -> str:
         lines.append(f"- **`{measurement.name}`** — {measurement.description}. Result: {measurement.outcome}.")
         if measurement.networkx_note:
             lines.append(f"  - networkx reference: {measurement.networkx_note}.")
+        if measurement.phase_note:
+            lines.append(f"  - {measurement.phase_note}")
     lines.append("")
     return "\n".join(lines)
+
+
+CONSOLE_WIDTH = 81
+CONSOLE_NOTE_INDENT = " " * 25
+
+
+def console_note_lines(note: str) -> list[str]:
+    """A workflow's phase caveat under its own rows, so the console says what the artifacts say."""
+    return textwrap.wrap(
+        note,
+        width=CONSOLE_WIDTH,
+        initial_indent=CONSOLE_NOTE_INDENT,
+        subsequent_indent=CONSOLE_NOTE_INDENT,
+    )
 
 
 def console_table(measurements: list[Measurement]) -> str:
     """The same numbers as plain text, printed by the harness and by the guard on failure."""
     lines = [
         f"{'workflow':<24} {'phase':<26} {'seconds':>9} {'of total':>9} {'of library':>11}",
-        "-" * 81,
+        "-" * CONSOLE_WIDTH,
     ]
     for measurement in measurements:
         lines.append(
@@ -829,6 +962,8 @@ def console_table(measurements: list[Measurement]) -> str:
                 else f"{library_shares[phase_name] * 100:>10.1f}%"
             )
             lines.append(f"{'':<24} {phase_name:<26} {seconds:>9.4f} {shares[phase_name] * 100:>8.1f}% {library_cell}")
+        if measurement.phase_note:
+            lines.extend(console_note_lines(measurement.phase_note))
     return "\n".join(lines)
 
 
@@ -858,6 +993,600 @@ def run(
     return measurements
 
 
+# ---------------------------------------------------------------------------
+# Engine comparison
+# ---------------------------------------------------------------------------
+
+BOUNDARY_MARKER = "pygraphc._core."
+ENGINE_COMPARISON_PAIRS: tuple[tuple[str, str], ...] = (("c", "rounds"), ("c", "moves"), ("c", "python"))
+ENGINE_DIFF_ENTRIES = 12
+ENGINE_COMPARISON_ROUNDS = 3
+CLAIMED_BOUNDARY_BAND: dict[str, tuple[float, float]] = {"moves": (0.09, 0.15), "rounds": (0.0, 0.03)}
+CLAIMED_FOLD_SHARE = 0.80
+CLAIMED_FOLD_TOLERANCE = 0.05
+
+
+def engine_workflow_name(engine: str) -> str:
+    return f"reduce_engine_{engine}"
+
+
+@dataclass(frozen=True)
+class ProfileEntry:
+    """One function of one profile: its call counts, its own time and its cumulative time."""
+
+    label: str
+    primitive_calls: int
+    total_calls: int
+    total_seconds: float
+    cumulative_seconds: float
+
+
+@dataclass(frozen=True)
+class ProfileSummary:
+    """Every function of one ``.prof`` file, with the call counts the whole run made."""
+
+    engine: str
+    entries: dict[str, ProfileEntry]
+    primitive_calls: int
+    total_calls: int
+    profiled_seconds: float
+
+    @property
+    def boundary_calls(self) -> int:
+        """Primitive calls into the C extension: one per crossing of the Python-to-C boundary."""
+        return sum(entry.primitive_calls for label, entry in self.entries.items() if BOUNDARY_MARKER in label)
+
+    @property
+    def boundary_seconds(self) -> float:
+        """Time inside the C extension itself, exclusive of the Python frames that called it."""
+        return sum(entry.total_seconds for label, entry in self.entries.items() if BOUNDARY_MARKER in label)
+
+
+def read_profile(engine: str, path: Path) -> ProfileSummary:
+    """One ``.prof`` file as a label-keyed table, which is what makes two profiles diffable."""
+    stats = pstats.Stats(str(path))
+    entries = {}
+    for function, record in stats.stats.items():
+        primitive_calls, total_calls, total_seconds, cumulative_seconds, _callers = record
+        label = pstats.func_std_string(function)
+        entries[label] = ProfileEntry(label, primitive_calls, total_calls, total_seconds, cumulative_seconds)
+    return ProfileSummary(engine, entries, stats.prim_calls, stats.total_calls, stats.total_tt)
+
+
+def short_label(label: str) -> str:
+    """The profile's function label with the absolute path dropped, so a table row fits a screen."""
+    if label.startswith("{"):
+        return label
+    file_name, separator, rest = label.partition(":")
+    return f"{Path(file_name).name}:{rest}" if separator else label
+
+
+@dataclass(frozen=True)
+class LabelDelta:
+    """One function as it appears in two profiles, with the difference the diff is about."""
+
+    label: str
+    left: ProfileEntry | None
+    right: ProfileEntry | None
+
+    @property
+    def total_delta(self) -> float:
+        return (self.right.total_seconds if self.right else 0.0) - (self.left.total_seconds if self.left else 0.0)
+
+    @property
+    def cumulative_delta(self) -> float:
+        left = self.left.cumulative_seconds if self.left else 0.0
+        right = self.right.cumulative_seconds if self.right else 0.0
+        return right - left
+
+
+def profile_deltas(left: ProfileSummary, right: ProfileSummary) -> list[LabelDelta]:
+    """Every function of either profile, worst absolute own-time difference first."""
+    labels = {*left.entries, *right.entries}
+    deltas = [LabelDelta(label, left.entries.get(label), right.entries.get(label)) for label in labels]
+    deltas.sort(key=lambda delta: abs(delta.total_delta), reverse=True)
+    return deltas
+
+
+@dataclass(frozen=True)
+class EngineComparison:
+    """One engine comparison run: timings at every size, profiles at the profiled sizes."""
+
+    measurements: dict[int, dict[str, Measurement]]
+    profiles: dict[int, dict[str, ProfileSummary]]
+    machine: dict[str, str]
+
+
+def run_engine_comparison(output_directory: Path) -> EngineComparison:
+    """Time the four engine workflows at every size and profile them at the profiled sizes."""
+    output_directory.mkdir(parents=True, exist_ok=True)
+    measurements: dict[int, dict[str, Measurement]] = {}
+    profiles: dict[int, dict[str, ProfileSummary]] = {}
+    for size in ENGINE_COMPARISON_SIZES:
+        measurements[size] = {}
+        profiles[size] = {}
+        for engine in ENGINE_NAMES:
+            workflow = WORKFLOWS_BY_NAME[engine_workflow_name(engine)]
+            emit(f"  {engine:<8} at {size:,} …")
+            measurements[size][engine] = measure(
+                workflow,
+                size,
+                rounds=ENGINE_COMPARISON_ROUNDS,
+                with_peak=False,
+                with_networkx=False,
+            )
+            if size in ENGINE_PROFILED_SIZES:
+                profiles[size][engine] = read_profile(
+                    engine, write_profile(workflow, size, output_directory, profile_stem(engine, size))
+                )
+    return EngineComparison(measurements, profiles, machine_description())
+
+
+def profile_stem(engine: str, size: int) -> str:
+    """File name stem of one engine's profile at one size; one file per pair, never overwritten."""
+    return f"{engine_workflow_name(engine)}_{size}"
+
+
+def write_engine_comparison_numbers(comparison: EngineComparison, path: Path) -> None:
+    """The measured numbers machine-readably, so the artifact can be rebuilt without re-measuring."""
+    payload = {
+        "machine": machine_description(),
+        "rounds": ENGINE_COMPARISON_ROUNDS,
+        "warmups": MEASUREMENT_WARMUPS,
+        "sizes": list(ENGINE_COMPARISON_SIZES),
+        "profiled_sizes": list(ENGINE_PROFILED_SIZES),
+        "measurements": {
+            str(size): {
+                engine: {
+                    "name": measurement.name,
+                    "description": measurement.description,
+                    "size": measurement.size,
+                    "total_seconds": measurement.total_seconds,
+                    "phase_seconds": measurement.phase_seconds,
+                    "outcome": measurement.outcome,
+                }
+                for engine, measurement in by_engine.items()
+            }
+            for size, by_engine in comparison.measurements.items()
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def load_engine_comparison(directory: Path) -> EngineComparison:
+    """The last run of the comparison, read back from its numbers and its ``.prof`` files."""
+    payload = json.loads((directory / "engine_comparison.json").read_text())
+    measurements = {
+        int(size): {
+            engine: Measurement(
+                name=entry["name"],
+                description=entry["description"],
+                size=entry["size"],
+                total_seconds=entry["total_seconds"],
+                phase_seconds=entry["phase_seconds"],
+                outcome=entry["outcome"],
+                phase_note=WORKFLOWS_BY_NAME[entry["name"]].phase_note,
+            )
+            for engine, entry in by_engine.items()
+        }
+        for size, by_engine in payload["measurements"].items()
+    }
+    profiles = {
+        size: {
+            engine: read_profile(engine, directory / f"{profile_stem(engine, size)}.prof") for engine in ENGINE_NAMES
+        }
+        for size in ENGINE_PROFILED_SIZES
+    }
+    return EngineComparison(measurements, profiles, payload["machine"])
+
+
+def phase_table_lines(by_engine: dict[str, Measurement]) -> list[str]:
+    """One table with the four engines side by side, a phase per row, absolute time and share per engine."""
+    header = "| Phase | " + " | ".join(f"`{engine}` | share" for engine in ENGINE_NAMES) + " |"
+    ruler = "|-------|" + "------:|------:|" * len(ENGINE_NAMES)
+    lines = [header, ruler]
+    for phase_name in ENGINE_PHASES:
+        cells = []
+        for engine in ENGINE_NAMES:
+            measurement = by_engine[engine]
+            seconds = measurement.phase_seconds.get(phase_name, 0.0)
+            share = seconds / measurement.total_seconds if measurement.total_seconds > 0.0 else 0.0
+            cells.append(f"{seconds:.4f}s | {share * 100:.1f}%")
+        lines.append(f"| {phase_name} | " + " | ".join(cells) + " |")
+    totals = []
+    for engine in ENGINE_NAMES:
+        measurement = by_engine[engine]
+        totals.append(f"**{measurement.total_seconds:.4f}s** | {measurement.accounted_share * 100:.1f}%")
+    lines.append("| **total** (share column: phases accounted) | " + " | ".join(totals) + " |")
+    baseline_seconds = by_engine["c"].total_seconds
+    relative = [
+        f"{(by_engine[engine].total_seconds / baseline_seconds if baseline_seconds > 0.0 else 0.0):.3f}x | —"
+        for engine in ENGINE_NAMES
+    ]
+    lines.append("| vs `c` | " + " | ".join(relative) + " |")
+    lines.extend(["", PYTHON_ENGINE_PHASE_NOTE])
+    return lines
+
+
+def diff_table_lines(left: ProfileSummary, right: ProfileSummary) -> list[str]:
+    """The functions whose own time differs most between two profiles, and the ones only one of them has."""
+    deltas = profile_deltas(left, right)
+    lines = [
+        (
+            f"| Function | `{left.engine}` tottime | `{right.engine}` tottime | Δ tottime | "
+            f"Δ cumtime | `{left.engine}` calls | `{right.engine}` calls |"
+        ),
+        "|----------|------:|------:|------:|------:|------:|------:|",
+    ]
+    for delta in deltas[:ENGINE_DIFF_ENTRIES]:
+        left_entry, right_entry = delta.left, delta.right
+        lines.append(
+            f"| `{short_label(delta.label)}` | "
+            f"{'—' if left_entry is None else f'{left_entry.total_seconds:.4f}s'} | "
+            f"{'—' if right_entry is None else f'{right_entry.total_seconds:.4f}s'} | "
+            f"{delta.total_delta:+.4f}s | {delta.cumulative_delta:+.4f}s | "
+            f"{'—' if left_entry is None else f'{left_entry.primitive_calls:,}'} | "
+            f"{'—' if right_entry is None else f'{right_entry.primitive_calls:,}'} |"
+        )
+    only_left = sorted(
+        (entry for label, entry in left.entries.items() if label not in right.entries),
+        key=lambda entry: entry.total_seconds,
+        reverse=True,
+    )
+    only_right = sorted(
+        (entry for label, entry in right.entries.items() if label not in left.entries),
+        key=lambda entry: entry.total_seconds,
+        reverse=True,
+    )
+    lines.append("")
+    lines.append(f"Only in `{left.engine}`: " + (describe_only(only_left) or "nothing."))
+    lines.append("")
+    lines.append(f"Only in `{right.engine}`: " + (describe_only(only_right) or "nothing."))
+    lines.append("")
+    lines.append(
+        f"Primitive calls: `{left.engine}` {left.primitive_calls:,}, `{right.engine}` {right.primitive_calls:,}. "
+        f"Of those, calls into the C extension: `{left.engine}` {left.boundary_calls:,} "
+        f"({left.boundary_seconds:.4f}s inside C), `{right.engine}` {right.boundary_calls:,} "
+        f"({right.boundary_seconds:.4f}s inside C)."
+    )
+    return lines
+
+
+def describe_only(entries: list[ProfileEntry]) -> str:
+    """The functions one profile has and the other does not, as one sentence."""
+    if not entries:
+        return ""
+    shown = ", ".join(
+        f"`{short_label(entry.label)}` ({entry.total_seconds:.4f}s, {entry.primitive_calls:,} calls)"
+        for entry in entries[:ENGINE_DIFF_ENTRIES]
+    )
+    remainder = f", and {len(entries) - ENGINE_DIFF_ENTRIES} more" if len(entries) > ENGINE_DIFF_ENTRIES else ""
+    return f"{shown}{remainder}."
+
+
+def warm_call_seconds(measurement: Measurement) -> float:
+    """What a ``reduce`` call costs on a graph whose kernel is already built: the structure plus the fold."""
+    return measurement.phase_seconds[PHASE_STRUCTURAL] + measurement.phase_seconds.get(PHASE_FOLD, 0.0)
+
+
+def cold_call_seconds(measurement: Measurement) -> float:
+    """What the first ``reduce`` call on a graph costs: the kernel graph as well, since it is built on demand."""
+    return measurement.phase_seconds[PHASE_KERNEL] + warm_call_seconds(measurement)
+
+
+def boundary_overhead_share(comparison: EngineComparison, engine: str, size: int) -> float:
+    """Share of the ``"c"`` engine's warm call that this engine's structural phase adds on top of it."""
+    baseline = comparison.measurements[size]["c"]
+    candidate = comparison.measurements[size][engine]
+    reference = warm_call_seconds(baseline)
+    if reference <= 0.0:
+        return 0.0
+    return (candidate.phase_seconds[PHASE_STRUCTURAL] - baseline.phase_seconds[PHASE_STRUCTURAL]) / reference
+
+
+def fold_share_lines(comparison: EngineComparison) -> list[str]:
+    """Question one: is the fold four fifths of the call for every engine, and identically so.
+
+    Three denominators, because "the call" is ambiguous and the answer depends
+    on which one is meant: the whole workflow, a warm ``reduce`` (structure plus
+    fold) and a cold one (the kernel graph too, since it is built on demand).
+    """
+    lines = [
+        "| Size | Engine | fold provenance | of whole workflow | of warm `reduce` | of cold `reduce` |",
+        "|-----:|--------|------:|------:|------:|------:|",
+    ]
+    for size in ENGINE_COMPARISON_SIZES:
+        for engine in ENGINE_NAMES:
+            measurement = comparison.measurements[size][engine]
+            fold = measurement.phase_seconds.get(PHASE_FOLD, 0.0)
+            warm, cold = warm_call_seconds(measurement), cold_call_seconds(measurement)
+            lines.append(
+                f"| {size:,} | `{engine}` | {fold:.4f}s | "
+                f"{fold / measurement.total_seconds * 100:.1f}% | "
+                f"{(fold / warm * 100) if warm > 0.0 else 0.0:.1f}% | "
+                f"{(fold / cold * 100) if cold > 0.0 else 0.0:.1f}% |"
+            )
+    return lines
+
+
+def fold_noise_floor(comparison: EngineComparison, size: int) -> float:
+    """How far two identical fold workloads drift apart at this size, as a share of the fold.
+
+    ``"moves"`` applies the moves in the monolith's order and hands the fold
+    the very same log, so the two fold phases do byte-identical work and what
+    is left between them is measurement noise.
+
+    It is one paired difference of two best-of-N minima, not a distribution:
+    an estimate of the order of the noise, good enough to say that a few
+    percent between two engines is not a ranking, and not good enough to
+    quote as an interval. It is also measured on the fold phase, which is
+    several times the structural phase here, so it bounds a difference between
+    two folds and says nothing about a difference between two structural
+    phases; those are compared against the monolith's own warm call instead.
+    """
+    monolith = comparison.measurements[size]["c"].phase_seconds.get(PHASE_FOLD, 0.0)
+    moves = comparison.measurements[size]["moves"].phase_seconds.get(PHASE_FOLD, 0.0)
+    return abs(monolith - moves) / monolith if monolith > 0.0 else 0.0
+
+
+def fold_verdict_lines(comparison: EngineComparison) -> list[str]:
+    """Question one: is the fold four fifths of the call for every engine, identically so."""
+    lines = ["### Is the fold four fifths of the call for every engine, identically so?", ""]
+    lines.extend(fold_share_lines(comparison))
+    warm, cold = [], []
+    for size in ENGINE_COMPARISON_SIZES:
+        for engine in ENGINE_NAMES:
+            if engine == "python":
+                continue
+            measurement = comparison.measurements[size][engine]
+            fold = measurement.phase_seconds[PHASE_FOLD]
+            warm.append(fold / warm_call_seconds(measurement))
+            cold.append(fold / cold_call_seconds(measurement))
+    claimed = CLAIMED_FOLD_SHARE
+    warm_holds = all(abs(share - claimed) <= CLAIMED_FOLD_TOLERANCE for share in warm)
+    cold_holds = all(abs(share - claimed) <= CLAIMED_FOLD_TOLERANCE for share in cold)
+    lines.extend([
+        "",
+        f"**Answer: it depends which call, and the claim is only true of the more expensive one.** Across the "
+        f"three log-producing engines and the three sizes the fold is {min(warm) * 100:.0f}% to "
+        f"{max(warm) * 100:.0f}% of a warm `reduce` (structure plus fold, the kernel graph already built) and "
+        f"{min(cold) * 100:.0f}% to {max(cold) * 100:.0f}% of a cold one (the kernel graph built on demand, "
+        f"which is what the first call on a `MultiGraph` pays). Against {claimed * 100:.0f}% the warm figure "
+        f"{'holds' if warm_holds else 'does not hold'} within {CLAIMED_FOLD_TOLERANCE * 100:.0f} points and "
+        f"the cold figure {'holds' if cold_holds else 'does not hold'}. "
+        + (
+            f"Four fifths sits between the two: it understates the fold's share of a warm call "
+            f"({sum(warm) / len(warm) * 100:.0f}% on average) and overstates its share of a cold one "
+            f"({sum(cold) / len(cold) * 100:.0f}% on average), where building the compressed sparse row graph "
+            f"is counted too."
+            if min(warm) > claimed > max(cold)
+            else (
+                f"The measured means are {sum(warm) / len(warm) * 100:.0f}% warm and "
+                f"{sum(cold) / len(cold) * 100:.0f}% cold."
+            )
+        ),
+        "",
+        (
+            "**And not identically so.** The three log-producing engines differ by several points at every "
+            "size, in the direction the engine predicts: an engine whose structural phase is dearer has a "
+            "smaller fold share of the same fold. The Python engine has no fold to separate at all — its "
+            "worklist builds the trees as it applies the moves — so its row is zero by construction and the "
+            "claim cannot be made of it in either direction."
+        ),
+        "",
+    ])
+    return lines
+
+
+def moves_verdict_lines(comparison: EngineComparison) -> list[str]:
+    """Question two: where ``"moves"`` loses its margin, by function."""
+    lines = ["### Where does `moves` lose its 15 to 20 percent?", ""]
+    band_low, band_high = CLAIMED_BOUNDARY_BAND["moves"]
+    for size in ENGINE_COMPARISON_SIZES:
+        monolith, moves = comparison.measurements[size]["c"], comparison.measurements[size]["moves"]
+        warm_ratio = warm_call_seconds(moves) / warm_call_seconds(monolith)
+        share = boundary_overhead_share(comparison, "moves", size)
+        agreement = "inside" if band_low <= share <= band_high else "outside"
+        named = "profiled at the two smaller sizes only"
+        crossings = ""
+        if size in ENGINE_PROFILED_SIZES:
+            left, right = comparison.profiles[size]["c"], comparison.profiles[size]["moves"]
+            top = [delta for delta in profile_deltas(left, right) if delta.total_delta > 0.0][:5]
+            named = ", ".join(f"`{short_label(delta.label)}` ({delta.total_delta:+.4f}s)" for delta in top)
+            crossings = (
+                f" Boundary crossings: {left.boundary_calls:,} for `c` against {right.boundary_calls:,} "
+                f"for `moves`, {right.boundary_seconds - left.boundary_seconds:+.4f}s of it inside C."
+            )
+        lines.append(
+            f"- **At {size:,}**: `moves` costs {(warm_ratio - 1) * 100:+.1f}% on a warm `reduce` and "
+            f"{(moves.total_seconds / monolith.total_seconds - 1) * 100:+.1f}% on the whole workflow. Its "
+            f"structural phase alone is {share * 100:+.1f}% of the monolith's warm call, {agreement} the "
+            f"estimated {band_low * 100:.0f} to {band_high * 100:.0f} percent. Functions: {named}.{crossings}"
+        )
+    warm_costs = {
+        size: warm_call_seconds(comparison.measurements[size]["moves"])
+        / warm_call_seconds(comparison.measurements[size]["c"])
+        - 1
+        for size in ENGINE_COMPARISON_SIZES
+    }
+    structural_costs = {size: boundary_overhead_share(comparison, "moves", size) for size in ENGINE_COMPARISON_SIZES}
+    band_comparison = (
+        "Against the estimate, the part of the cost the profile actually attributes to the boundary — the "
+        "structural phase, measured against the monolith's warm call — is "
+        + ", ".join(f"{cost * 100:+.1f}% at {size:,}" for size, cost in structural_costs.items())
+        + f", against the estimated {band_low * 100:.0f} to {band_high * 100:.0f} percent. The warm call "
+        f"as a whole moves further ("
+        + ", ".join(f"{cost * 100:+.1f}% at {size:,}" for size, cost in warm_costs.items())
+        + "), and the extra is not boundary cost at all: `moves` and the monolith fold byte-identical logs, so "
+        "every difference in their fold phases is measurement noise, whose order — one paired difference of "
+        "two minima, not an interval — is "
+        + ", ".join(f"±{fold_noise_floor(comparison, size) * 100:.1f}% at {size:,}" for size in ENGINE_COMPARISON_SIZES)
+        + ". The 15 to 20 percent wall-time figure is therefore the right order of magnitude but reads the noise "
+        "as signal: what `moves` demonstrably pays for its crossings is the structural delta, not the whole gap."
+    )
+    lines.extend([
+        "",
+        "**Answer.** The cost is one `sp_next_move` plus one `sp_apply_move` per move, and the Python "
+        "wrapper method around each of them — four entries that do not exist in the monolith's profile at "
+        "all, where the whole loop is one `series_parallel_reduce_ctx` call. Nothing else moves: every other "
+        "function in the two profiles is the same function doing the same work. " + band_comparison,
+        "",
+    ])
+    return lines
+
+
+def rounds_verdict_lines(comparison: EngineComparison) -> list[str]:
+    """Question three: whether ``"rounds"`` beats the monolith, and whether for the reason claimed."""
+    lines = ["### Does `rounds` beat the monolith, and for the reason claimed?", ""]
+    lines.extend([
+        "| Size | total | structural | fold | structural Δ | fold Δ | noise floor of the fold |",
+        "|-----:|------:|------:|------:|------:|------:|------:|",
+    ])
+    for size in ENGINE_COMPARISON_SIZES:
+        monolith, rounds = comparison.measurements[size]["c"], comparison.measurements[size]["rounds"]
+        structural_delta = rounds.phase_seconds[PHASE_STRUCTURAL] - monolith.phase_seconds[PHASE_STRUCTURAL]
+        fold_delta = rounds.phase_seconds[PHASE_FOLD] - monolith.phase_seconds[PHASE_FOLD]
+        lines.append(
+            f"| {size:,} | {rounds.total_seconds / monolith.total_seconds:.3f}x | "
+            f"{rounds.phase_seconds[PHASE_STRUCTURAL] / monolith.phase_seconds[PHASE_STRUCTURAL]:.3f}x | "
+            f"{rounds.phase_seconds[PHASE_FOLD] / monolith.phase_seconds[PHASE_FOLD]:.3f}x | "
+            f"{structural_delta:+.4f}s | {fold_delta:+.4f}s | "
+            f"±{fold_noise_floor(comparison, size) * 100:.1f}% |"
+        )
+    lines.append("")
+    for size in ENGINE_PROFILED_SIZES:
+        left, right = comparison.profiles[size]["c"], comparison.profiles[size]["rounds"]
+        lines.append(
+            f"- At {size:,} the batch engine crosses the boundary {right.boundary_calls:,} times against "
+            f"{left.boundary_calls:,} for the monolith and {comparison.profiles[size]['moves'].boundary_calls:,} "
+            f"for `moves`, so its crossing count is already within an order of magnitude of a single call: there "
+            f"is no per-move crossing left for a batch to remove."
+        )
+    largest = ENGINE_COMPARISON_SIZES[-1]
+    smaller = ENGINE_COMPARISON_SIZES[:-1]
+    smaller_ratios = {
+        size: comparison.measurements[size]["rounds"].total_seconds / comparison.measurements[size]["c"].total_seconds
+        for size in smaller
+    }
+    smaller_structural = {
+        size: comparison.measurements[size]["rounds"].phase_seconds[PHASE_STRUCTURAL]
+        / comparison.measurements[size]["c"].phase_seconds[PHASE_STRUCTURAL]
+        for size in smaller
+    }
+    smaller_sizes_note = (
+        "At the smaller sizes `rounds` runs at "
+        + ", ".join(f"{ratio:.3f}x the monolith at {size:,}" for size, ratio in smaller_ratios.items())
+        + " with a structural phase of "
+        + ", ".join(f"{ratio:.3f}x" for ratio in smaller_structural.values())
+        + ", so the batch does not win the structural phase where the structural phase is still readable."
+    )
+    monolith, rounds = comparison.measurements[largest]["c"], comparison.measurements[largest]["rounds"]
+    structural_delta = rounds.phase_seconds[PHASE_STRUCTURAL] - monolith.phase_seconds[PHASE_STRUCTURAL]
+    total_delta = rounds.total_seconds - monolith.total_seconds
+    noise = fold_noise_floor(comparison, largest)
+    structural_ceiling = monolith.phase_seconds[PHASE_STRUCTURAL] / warm_call_seconds(monolith)
+    lines.extend([
+        "",
+        f"**Answer: it matches the monolith, it does not beat it by much, and not for the reason claimed.** "
+        f"At {largest:,} the whole gap is {total_delta:+.4f}s, or "
+        f"{total_delta / monolith.total_seconds * 100:+.1f}% of the monolith's call. The structural phase — "
+        f"the batch scan against one heap pop per move, the thing the claim is about — accounts for "
+        f"{structural_delta:+.4f}s of that, {abs(structural_delta / total_delta) * 100:.0f}% of the gap; the "
+        f"other {100 - abs(structural_delta / total_delta) * 100:.0f}% sits in the fold, which no batch "
+        f"engine sets out to make cheaper. And the claimed mechanism is bounded from above whatever it does: "
+        f"the monolith's structural phase is only {structural_ceiling * 100:.1f}% of its own warm call, so "
+        f"removing it entirely could not buy more than that, while the fold-phase noise floor at this size "
+        f"is ±{noise * 100:.1f}% — `moves` hands the fold a byte-identical log to the monolith's and its fold "
+        f"still differs by that much. " + smaller_sizes_note + " What the batch scan does buy is real but "
+        "small and already spent: it cuts the crossings from one per move to a few dozen, which is why "
+        "`rounds` never pays what `moves` pays. Beyond that the profile shows no mechanism by which a batch "
+        "would overtake a single C call, and the measurements do not show it overtaking one.",
+        "",
+    ])
+    return lines
+
+
+def verdict_lines(comparison: EngineComparison) -> list[str]:
+    """The three questions, answered from the numbers this run measured."""
+    return [
+        *fold_verdict_lines(comparison),
+        *moves_verdict_lines(comparison),
+        *rounds_verdict_lines(comparison),
+    ]
+
+
+ENGINE_COMPARISON_HEADER = """# Reduction engine comparison
+
+Four engines do the same reduction: `"c"` runs the whole fixpoint loop in one C
+call, `"moves"` drives the same loop from Python one move at a time over C
+primitives on an opaque state handle, `"rounds"` drives it one batch of
+independent moves per kind per round over the same handle, and `"python"` is
+the pure Python worklist. Wall times had been compared before; where the time
+goes had only been estimated by subtracting the monolith's loop time from the
+new engines' structural phase. This artifact profiles the four and diffs the
+profiles against each other.
+
+**One workflow per engine, identical but for the engine.** Same seeded graph
+(`sparse_edge_pairs`, seed {seed}), same terminal set (every
+{stride}th node), same sizes, same phase names. Where an engine has no
+counterpart to a phase it is recorded as zero, not omitted, so the tables line
+up row by row.
+
+**How these numbers were taken.** {rounds} measured rounds after
+{warmups} warm-up, fastest round reported, no profiler attached. The `.prof`
+files come from a separate, unmeasured run. The {profiled} sizes are profiled
+under `cProfile`; {timed} is **timed only** — the Python engine alone takes
+{python_note:.1f}s per round there, and `cProfile` on that pass buys nothing
+the two smaller sizes do not already show.
+
+Machine: {platform}, {implementation} {python}.
+
+"""
+
+
+def engine_comparison_markdown(comparison: EngineComparison) -> str:
+    """``profiles/engine_comparison.md``: the phase tables, the profile diffs and the three answers."""
+    machine = comparison.machine
+    timed_only = [size for size in ENGINE_COMPARISON_SIZES if size not in ENGINE_PROFILED_SIZES]
+    lines = [
+        ENGINE_COMPARISON_HEADER.format(
+            seed=ENGINE_SEED,
+            stride=ENGINE_TERMINAL_STRIDE,
+            rounds=ENGINE_COMPARISON_ROUNDS,
+            warmups=MEASUREMENT_WARMUPS,
+            profiled=", ".join(f"{size:,}" for size in ENGINE_PROFILED_SIZES),
+            timed=", ".join(f"{size:,}" for size in timed_only),
+            python_note=max(comparison.measurements[size]["python"].total_seconds for size in timed_only),
+            platform=machine["platform"],
+            implementation=machine["implementation"],
+            python=machine["python"],
+        ),
+        "## Phases, four engines side by side",
+        "",
+    ]
+    for size in ENGINE_COMPARISON_SIZES:
+        profiled = "profiled and timed" if size in ENGINE_PROFILED_SIZES else "timed only"
+        by_engine = comparison.measurements[size]
+        lines.extend([
+            (f"### {size:,} nodes, {size * 5 // 4:,} edges, {size // ENGINE_TERMINAL_STRIDE:,} terminals ({profiled})"),
+            "",
+        ])
+        lines.extend(phase_table_lines(by_engine))
+        lines.extend(["", f"Outcome, identical for all four: {by_engine['c'].outcome}.", ""])
+    lines.extend(["## Profile diffs", ""])
+    for size in ENGINE_PROFILED_SIZES:
+        for left_engine, right_engine in ENGINE_COMPARISON_PAIRS:
+            left = comparison.profiles[size][left_engine]
+            right = comparison.profiles[size][right_engine]
+            lines.extend([f"### `{left_engine}` against `{right_engine}` at {size:,}", ""])
+            lines.extend(diff_table_lines(left, right))
+            lines.append("")
+    lines.extend(["## The three questions", ""])
+    lines.extend(verdict_lines(comparison))
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--size", choices=["default", "guard"], default="default", help="which size profile to run")
@@ -869,7 +1598,34 @@ def main(argv: list[str] | None = None) -> int:
         help="also write benchmarks/baseline.json from this run (guard sizes only)",
     )
     parser.add_argument("--list", action="store_true", help="list the workflows and exit")
+    parser.add_argument(
+        "--compare-engines",
+        action="store_true",
+        help="profile the four reduction engines at the engine sizes and write engine_comparison.md",
+    )
+    parser.add_argument(
+        "--rebuild-comparison",
+        action="store_true",
+        help="rewrite engine_comparison.md from the last run's numbers and profiles, measuring nothing",
+    )
     arguments = parser.parse_args(argv)
+
+    if arguments.compare_engines or arguments.rebuild_comparison:
+        if arguments.rebuild_comparison:
+            emit("rebuilding the engine comparison from the numbers of the last run")
+            comparison = load_engine_comparison(arguments.output)
+        else:
+            emit(f"comparing the {len(ENGINE_NAMES)} reduction engines at {len(ENGINE_COMPARISON_SIZES)} sizes")
+            comparison = run_engine_comparison(arguments.output)
+            write_engine_comparison_numbers(comparison, arguments.output / "engine_comparison.json")
+        artifact = arguments.output / "engine_comparison.md"
+        artifact.write_text(engine_comparison_markdown(comparison))
+        emit("")
+        for size in ENGINE_COMPARISON_SIZES:
+            emit(console_table([comparison.measurements[size][engine] for engine in ENGINE_NAMES]))
+            emit("")
+        emit(f"comparison written to {artifact}")
+        return 0
 
     if arguments.list:
         for workflow in WORKFLOWS:

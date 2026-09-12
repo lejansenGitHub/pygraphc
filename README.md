@@ -1182,6 +1182,72 @@ dirty marker when it had uncommitted changes — which it normally does, since a
 baseline is regenerated just before the commit that carries it, so expect it to
 name that commit's parent.
 
+### Comparing the reduction engines
+
+`reduce` has four interchangeable engines and the harness has one workflow per
+engine — `reduce_engine_c`, `reduce_engine_moves`, `reduce_engine_rounds`,
+`reduce_engine_python` — identical in the seeded graph, the terminal set, the
+sizes and the phase names, differing in the engine and in nothing else.
+
+```bash
+python benchmarks/profile_workflows.py --compare-engines      # writes profiles/engine_comparison.md
+python benchmarks/profile_workflows.py --rebuild-comparison   # rewrites it, measuring nothing
+```
+
+`profiles/engine_comparison.md` holds the phase table for all four engines side
+by side at 20,000, 100,000 and 1,000,000 nodes; a `pstats` diff of each
+interesting pair, naming the functions whose time differs, the functions only
+one profile has, and the number of calls each engine makes across the
+Python-to-C boundary; and the answers, with numbers, to what the fold costs,
+where `"moves"` loses its margin and why `"rounds"` matches the monolith. The
+two smaller sizes are profiled under `cProfile`; the largest is timed only, and
+the artifact says which is which. Where an engine has no counterpart to a phase
+the phase is recorded as zero rather than omitted, so the four tables line up
+row by row. The numbers land in `profiles/engine_comparison.json` next to the
+artifact, and `--rebuild-comparison` rewrites the prose from them without
+re-measuring.
+
+Two things the artifact contradicts, both worth knowing before quoting the
+older numbers: the fold is about nine tenths of a warm `reduce` and about three
+quarters of a cold one, so "four fifths" is between the two rather than either;
+and the fold-phase noise floor — measured from two engines that fold a
+byte-identical log — is several percent, which is the same order as the
+differences between the C-backed engines. Read a few percent between them as
+noise, not as a ranking.
+
+### Profiling is the practice
+
+Profile whenever an algorithm is exchanged, newly written or updated, and report
+the profile with the change — not a wall-clock number on its own. A wall-clock
+number says a change got faster; a profile says where the time went, which is
+the part a reviewer can argue with.
+
+If runtime or memory can be improved without adding complexity and without
+costing maintainability or readability, do it. No ticket, benchmark target or
+other justification is needed for that kind of improvement.
+
+Read a bad profile as evidence about the design. Time or memory concentrated
+somewhere surprising is usually not a tuning problem but a symptom: the code at
+that spot is doing more than the problem asks for. So the first question at a
+hot spot is not how to make it faster, it is whether it is more complicated than
+it needs to be. Genuine complexity does exist and is fine where the problem
+really carries it, but that is the rarer case.
+
+Two measurements from this repository make the case better than the argument
+does. Most of a `reduce` call turned out to be building provenance trees, not
+the C loop everyone assumed it was — about three quarters of it when the kernel
+graph is built on demand and about nine tenths when it is already there, which
+is the finding the engine comparison above reports. And a source-to-target
+shortest path that inspects a few hundred edges turned out to be settling every
+node nearer the source than the target: the search was answering a larger
+question than the one asked, and the fix was to stop asking it — two searches
+meeting in the middle, not a faster inner loop.
+
+The mechanism is concrete: add or update a workflow in
+`benchmarks/profile_workflows.py`, commit the artifact comparison, and state in
+the change what moved and why. `profiles/engine_comparison.md` and the
+`--compare-engines` workflows above are the worked example.
+
 ### Run benchmarks
 
 ```bash
