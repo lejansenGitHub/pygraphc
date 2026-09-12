@@ -88,9 +88,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Several speedups are lower than the previously published ones (connected
   components at 1M: 20x, not 46x; articulation points at 1M: 17x, not 26x;
   Dijkstra at 1M: 14x, not 29x). The table also records the one operation
-  where networkx is faster: for a single source-target pair `nx.shortest_path`
-  uses bidirectional Dijkstra and beats `shortest_path` by about 6x, while
-  against the one-directional `nx.dijkstra_path` pygraphc stays 23x ahead.
+  where networkx appeared to be faster: for a single source-target pair
+  `nx.shortest_path` uses bidirectional Dijkstra and beat `shortest_path` by
+  about 6x. That row has since been withdrawn — it compared pygraphc building
+  its graph inside the timer against a networkx graph built outside it, and the
+  entry below replaces it with two symmetric measurements.
+- `shortest_path` (free function, `Graph` and `GraphView`) runs a bidirectional
+  Dijkstra instead of a full single-source Dijkstra from the source. The two
+  searches meet in the middle, so only a small part of a large graph is
+  settled. On the 100k-node sparse weighted graph of the networkx baseline, a
+  prepared `Graph` with weights as a float64 buffer (numpy array or
+  `array("d", ...)`) answers a single source-target query in 0.18 ms against
+  11.0 ms for the full single-source search the old code ran first, so 62x; with
+  weights as a list of floats it is 0.7 ms, where converting the list dominates
+  the query. Against `nx.shortest_path`, itself bidirectional, the comparison is
+  now made under two symmetric disciplines: both sides prepared gives 7.5x, both
+  sides building their graph inside the timer gives 69x. The 0.16x previously
+  published for this operation was neither — it timed pygraphc building its
+  graph against a networkx graph built beforehand.
+  Weights are validated the same way for both input forms. The returned path
+  may be a different path of the same total weight than before when several
+  shortest paths exist. `shortest_path_lengths`,
+  `multi_source_shortest_path_lengths` and `eccentricity` keep using the
+  single-source search.
 - Rebuilds through `with_edges` and `split_node` keep every base edge at its
   original index, keep excluded edges masked, and append added edges and new
   nodes. Edge indices and branch ids of the base graph therefore stay valid on

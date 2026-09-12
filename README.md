@@ -28,6 +28,8 @@ rather than the ratio.
 | Articulation Points | 1M | 0.204s | 3.55s | **17x** |
 | BFS | 1M | 0.073s | 6.94s | **95x** |
 | Dijkstra (single-source lengths) | 1M | 0.356s | 5.00s | **14x** |
+| Shortest path, single pair, `Graph` + float64 weights | 100K | 0.0002s | 0.0015s | **7.5x** |
+| Shortest path, single pair, `Graph` + list weights | 100K | 0.0007s | 0.0015s | **2.2x** |
 | Edge paths (cutoff=5) | 80 | 0.000001s | 0.0001s | **91x** |
 | SCC (directed) | 1M | 0.129s | 4.64s | **36x** |
 | WCC (directed) | 1M | 0.029s | 1.97s | **69x** |
@@ -47,14 +49,30 @@ Further networkx baselines, same machine and discipline, from
 | Two-edge-connected components | 10K | 0.005s | 0.087s | **18x** |
 | `nodes_on_simple_paths` | 24 | 0.00001s | 0.008s | **677x** |
 | Connected Components, edge-masked view | 100K | 0.003s | 0.059s | **21x** |
-| Single-pair `shortest_path` vs `nx.dijkstra_path` | 100K | 0.009s | 0.198s | **23x** |
-| Single-pair `shortest_path` vs `nx.shortest_path` | 100K | 0.009s | 0.0014s | **0.16x — networkx is faster** |
+| Single-pair `shortest_path` vs `nx.dijkstra_path` | 100K | 0.0002s | 0.206s | **1000x** |
+| Single-pair `shortest_path` vs `nx.shortest_path` | 100K | 0.0002s | 0.0015s | **7.5x** |
+| the same, both sides building their graph inside the timer | 100K | 0.0033s | 0.227s | **69x** |
 
-The last row is the one operation where networkx wins: for a single
-source-target pair `nx.shortest_path` dispatches to bidirectional Dijkstra and
-settles a small fraction of the nodes, while pygraphc runs one search from the
-source. Against the same one-directional algorithm (`nx.dijkstra_path`)
-pygraphc stays 23x ahead.
+`nx.shortest_path` dispatches to bidirectional Dijkstra for a single
+source-target pair and pygraphc does the same, so the last two rows are one
+algorithm measured under two fair disciplines: both sides prepared, and both
+sides building their graph inside the timer. Prepared, with weights as a float64
+buffer, pygraphc is 7.5x ahead; building inside the timer it is 69x ahead,
+because constructing an `nx.Graph` over 150,000 weighted edges costs about
+225 ms against 3 ms for the whole pygraphc call. The same prepared call with a
+list of floats instead of a buffer gives 2.2x — the element-by-element
+conversion of the weights costs several times the search.
+
+An earlier version of this table reported **0.16x, "the one operation where
+networkx wins"**. That number compared pygraphc building its graph *inside* the
+timer against a networkx graph built outside it. There is no operation here
+where networkx wins; there was an unfair measurement.
+
+`shortest_path` with a target runs a bidirectional Dijkstra: two searches, one forward from the source and one backward from the target, meet in the middle, so only a small part of a large graph is settled. It is compared against `nx.shortest_path`, which dispatches to networkx's own bidirectional Dijkstra; against the one-directional `nx.dijkstra_path` the same query is ~500x (list weights) to ~12,000x (float64 weights) faster.
+
+**Pass the weights as a float64 buffer** — a numpy `float64` array or `array.array("d", ...)` — to get the fast row. Such a buffer is handed to C as is, so the search reads only the edges it inspects, a few hundred on the graph above. A list of floats has to be converted and validated element by element first, which is proportional to the whole edge list and costs more than the search itself (1.0 ms of the 1.1 ms). Both rows are correct and both beat networkx; only the buffer row shows what the search actually costs. This is the same advice as passing edges as numpy arrays.
+
+`shortest_path_lengths`, `multi_source_shortest_path_lengths` and `eccentricity` need every distance and keep using the single-source search, where the weight conversion is a small part of the total either way.
 
 ### vs pgmpy (DAG structure learning)
 
@@ -72,7 +90,7 @@ Hill-climb with K2 scoring on binary variables. Both produce identical DAGs.
 | 20 vars, 500 samples | 0.0005s | 0.192s | **~420x** |
 | 20 vars, 1000 samples | 0.0007s | 0.192s | **~290x** |
 
-**6x–980x faster** than networkx and **~170x–900x faster** than pgmpy, with identical results — the one exception is single-pair `shortest_path`, noted above. Zero construction overhead for directed graphs (forward + reverse CSR uses the same 2m memory as undirected).
+**2x–980x faster** than networkx and **~170x–900x faster** than pgmpy, with identical results. Zero construction overhead for directed graphs (forward + reverse CSR uses the same 2m memory as undirected).
 
 ## Installation
 
@@ -202,7 +220,8 @@ node_ids = [0, 1, 2, 3]
 edges = [(0, 1), (1, 2), (2, 3)]
 weights = [1.0, 2.0, 3.0]
 
-# Shortest path (Dijkstra with C binary heap)
+# Shortest path (bidirectional Dijkstra with C 4-ary heap)
+# Pass weights as a numpy float64 array or array('d') to skip the per-element conversion
 shortest_path(node_ids, edges, weights, source=0, target=3)  # [0, 1, 2, 3]
 
 # Single-source shortest path lengths (with optional cutoff)
@@ -309,8 +328,10 @@ Sparse random graph, 100K nodes (~3 edges per node), best of 20 runs:
 | Articulation Points | 1.6ms | 1.7ms | +8% |
 | Biconnected Components | 9.9ms | 10.6ms | +7% |
 | BFS | 2.3ms | 2.5ms | +8% |
-| Dijkstra (single pair) | 6.9ms | 7.3ms | +7% |
+| Dijkstra (single pair, bidirectional) | 0.55ms | 0.55ms | +0% |
 | SSSP lengths | 13.6ms | 13.8ms | +2% |
+
+The single-pair row was re-measured after `shortest_path` became bidirectional; the other rows are from the earlier run.
 
 The key win is avoiding O(V + E) graph rebuild per edge modification.
 
