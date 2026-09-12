@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `Graph` and `GraphView` are generic over the caller's node and branch id
+  types (`Graph[NodeIdT, BranchIdT]`, both bound to `int`). Results carry the
+  id types that were passed in, so `NewType` ids round-trip without casts
+  under mypy strict. Edge indices come back as `EdgeIndex`, a `NewType` over
+  `int`, while parameters taking edge indices still accept any `int`. Id
+  parameters accept any `Sequence`. `NodeIdT`, `BranchIdT` and `EdgeIndex` are
+  exported; `NodeId` and `BranchId` stay as `int` aliases.
 - `all_edge_paths(..., ignore_self_loops=True)` on `Graph` and `GraphView`
   never traverses self-loops, so no returned path contains one.
 

@@ -219,6 +219,31 @@ Split-list constructor is also supported: `Graph(node_ids, src, dst)`.
 
 On a 100K-node graph, running 3 algorithms via `Graph` is ~2x faster than 3 separate free-function calls, since input parsing and adjacency-list construction happen only once.
 
+### Typed ids
+
+`Graph` and `GraphView` are generic over the caller's node and branch id types, both bound to `int`. Every result hands back the id objects that were passed in, so branded `NewType` ids keep their brand and mypy strict (including `disallow_any_explicit`) needs no casts on either side:
+
+```python
+from typing import NewType
+
+from pygraphc import EdgeIndex, Graph
+
+NodeId = NewType("NodeId", int)
+BranchId = NewType("BranchId", int)
+
+node_ids = [NodeId(1), NodeId(2), NodeId(3)]
+edges = [(NodeId(1), NodeId(2)), (NodeId(2), NodeId(3))]
+branch_ids = [BranchId(10), BranchId(20)]
+
+g = Graph(node_ids, edges, branch_ids=branch_ids)  # inferred: Graph[NodeId, BranchId]
+components: list[set[NodeId]] = list(g.connected_components())
+bridges: list[tuple[NodeId, NodeId, BranchId]] = g.bridges_with_branch_ids()
+indices: list[EdgeIndex] = g.edge_indices(NodeId(1), NodeId(2))
+view = g.without_branches([BranchId(20)])          # GraphView[NodeId, BranchId]
+```
+
+Edge indices (positions in the edge list) come back as `EdgeIndex`, a `NewType` over `int`, so a returned edge index is never mistaken for a branch id. Parameters that take edge indices stay `Collection[int]`, so both an `EdgeIndex` from a query and a plain literal are accepted. Id parameters take any `Sequence`, so tuples work as well as lists. A graph built without `branch_ids` has `int` as its branch type. `NodeId` and `BranchId` stay exported as `int` aliases.
+
 ### Edge-masked views (exclude edges without rebuilding)
 
 Create lightweight views that exclude edges from the graph without rebuilding the CSR. The base graph is never mutated — views overlay a byte mask on the shared adjacency structure.

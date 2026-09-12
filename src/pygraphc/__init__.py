@@ -1,8 +1,11 @@
 """Fast graph algorithms via C extensions: union-find, Tarjan's, BFS, Dijkstra."""
 
+from __future__ import annotations
+
 import types
 from collections import deque
-from collections.abc import Collection, Generator, Iterable, Iterator
+from collections.abc import Collection, Generator, Iterable, Iterator, Sequence
+from typing import Generic, NewType, TypeVar, overload
 
 from pygraphc._core import all_edge_paths_ctx as _all_edge_paths_ctx
 from pygraphc._core import ap_ctx as _ap_ctx
@@ -46,9 +49,12 @@ from pygraphc._dag_learn import k2_local_score as _k2_local_score
 
 __all__ = [
     "BranchId",
+    "BranchIdT",
+    "EdgeIndex",
     "Graph",
     "GraphView",
     "NodeId",
+    "NodeIdT",
     "articulation_points",
     "bfs",
     "biconnected_components",
@@ -72,18 +78,30 @@ __all__ = [
     "weakly_connected_components",
 ]
 
+NodeIdT = TypeVar("NodeIdT", bound=int)
+"""Node id type of a graph: any ``int`` or ``int``-based ``NewType`` the caller passes in."""
+
+BranchIdT = TypeVar("BranchIdT", bound=int)
+"""Branch id type of a graph, inferred from ``branch_ids``; ``int`` when none are given."""
+
+EdgeIndex = NewType("EdgeIndex", int)
+"""Position of an edge in the sequence passed to ``Graph()``. Not a branch id."""
+
 NodeId = int
+"""Backwards-compatible alias; new code should parameterize ``Graph`` instead."""
+
 BranchId = int
+"""Backwards-compatible alias; new code should parameterize ``Graph`` instead."""
 
 
 # ── Connected Components (legacy index-based API kept for branch_ids) ──
 
 
 def connected_components(
-    node_ids: list[NodeId],
-    edges_or_src: list[tuple[int, int]] | list[int],
-    dst: list[int] | None = None,
-) -> Generator[set[NodeId], None, None]:
+    node_ids: Sequence[NodeIdT],
+    edges_or_src: Sequence[tuple[NodeIdT, NodeIdT]] | Sequence[NodeIdT],
+    dst: Sequence[NodeIdT] | None = None,
+) -> Generator[set[NodeIdT], None, None]:
     """
     Yield each connected component as a set of original node IDs.
 
@@ -98,10 +116,10 @@ def connected_components(
 
 
 def connected_components_with_branch_ids(
-    node_ids: list[NodeId],
-    edges: list[tuple[int, int]],
-    branch_ids: list[int],
-) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+    branch_ids: Sequence[BranchIdT],
+) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
     """
     Yield (node_id_set, branch_id_set) with original node IDs.
 
@@ -114,9 +132,9 @@ def connected_components_with_branch_ids(
 
 
 def cycle_basis(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-) -> list[list[NodeId]]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+) -> list[list[NodeIdT]]:
     """Return a fundamental cycle basis as a list of cycles.
 
     Each cycle is a list of node IDs. The number of fundamental cycles
@@ -128,10 +146,10 @@ def cycle_basis(
 
 
 def dag_longest_path(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
     weights: list[float] | None = None,
-) -> list[NodeId]:
+) -> list[NodeIdT]:
     """Return the longest path in a DAG as a list of node IDs.
 
     Edges are treated as directed: (u, v) means u -> v.
@@ -146,38 +164,38 @@ def dag_longest_path(
 
 
 def bridges(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-) -> list[tuple[NodeId, NodeId]]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+) -> list[tuple[NodeIdT, NodeIdT]]:
     """Return bridge edges as (node_id, node_id) pairs."""
-    result: list[tuple[NodeId, NodeId]] = _bridges_nid(node_ids, edges)
+    result: list[tuple[NodeIdT, NodeIdT]] = _bridges_nid(node_ids, edges)
     return result
 
 
 def articulation_points(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-) -> set[NodeId]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+) -> set[NodeIdT]:
     """Return the set of articulation points."""
-    result: set[NodeId] = _ap_nid(node_ids, edges)
+    result: set[NodeIdT] = _ap_nid(node_ids, edges)
     return result
 
 
 def biconnected_components(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-) -> Generator[set[NodeId], None, None]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+) -> Generator[set[NodeIdT], None, None]:
     """Yield each biconnected component as a set of node IDs."""
     yield from _bcc_nid(node_ids, edges)
 
 
 def bfs(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-    source: NodeId,
-) -> list[NodeId]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+    source: NodeIdT,
+) -> list[NodeIdT]:
     """Return nodes visited in BFS order from source."""
-    result: list[NodeId] = _bfs_nid(node_ids, edges, source)
+    result: list[NodeIdT] = _bfs_nid(node_ids, edges, source)
     return result
 
 
@@ -185,49 +203,49 @@ def bfs(
 
 
 def shortest_path(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
     weights: list[float],
-    source: NodeId,
-    target: NodeId,
-) -> list[NodeId]:
+    source: NodeIdT,
+    target: NodeIdT,
+) -> list[NodeIdT]:
     """Return the shortest weighted path from source to target."""
     _dist, path = _dijkstra_nid(node_ids, edges, weights, source, target)
-    result: list[NodeId] = path
+    result: list[NodeIdT] = path
     return result
 
 
 def shortest_path_lengths(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
     weights: list[float],
-    source: NodeId,
+    source: NodeIdT,
     cutoff: float | None = None,
-) -> dict[NodeId, float]:
+) -> dict[NodeIdT, float]:
     """Return {node_id: distance} for all nodes reachable from source."""
     c = cutoff if cutoff is not None else -1.0
-    result: dict[NodeId, float] = _sssp_nid(node_ids, edges, weights, source, c)
+    result: dict[NodeIdT, float] = _sssp_nid(node_ids, edges, weights, source, c)
     return result
 
 
 def multi_source_shortest_path_lengths(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
     weights: list[float],
-    sources: list[NodeId],
+    sources: Sequence[NodeIdT],
     cutoff: float | None = None,
-) -> dict[NodeId, float]:
+) -> dict[NodeIdT, float]:
     """Return {node_id: distance} from nearest source to each reachable node."""
     c = cutoff if cutoff is not None else -1.0
-    result: dict[NodeId, float] = _msdijk_nid(node_ids, edges, weights, sources, c)
+    result: dict[NodeIdT, float] = _msdijk_nid(node_ids, edges, weights, sources, c)
     return result
 
 
 def eccentricity(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
     weights: list[float],
-    source: NodeId,
+    source: NodeIdT,
 ) -> float:
     """Return the eccentricity of source (max shortest-path distance)."""
     lengths = shortest_path_lengths(node_ids, edges, weights, source)
@@ -240,11 +258,11 @@ def eccentricity(
 
 
 def two_edge_connected_components(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-) -> Generator[set[NodeId], None, None]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+) -> Generator[set[NodeIdT], None, None]:
     """Yield 2-edge-connected components (bridges removed, then CC)."""
-    bridge_set: set[tuple[NodeId, NodeId]] = set()
+    bridge_set: set[tuple[NodeIdT, NodeIdT]] = set()
     for u, v in bridges(node_ids, edges):
         bridge_set.add((min(u, v), max(u, v)))
 
@@ -256,22 +274,22 @@ def two_edge_connected_components(
 
 
 def topological_sort(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-) -> list[NodeId]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+) -> list[NodeIdT]:
     """Return nodes in topological order (Kahn's algorithm, C implementation).
 
     Edges are treated as directed: (u, v) means u -> v.
     Raises ValueError if the graph contains a cycle.
     """
-    result: list[NodeId] = _toposort_nid(node_ids, edges)
+    result: list[NodeIdT] = _toposort_nid(node_ids, edges)
     return result
 
 
 def strongly_connected_components(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-) -> Generator[set[NodeId], None, None]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+) -> Generator[set[NodeIdT], None, None]:
     """Yield each strongly connected component as a set of node IDs.
 
     Edges are treated as directed: (u, v) means u -> v.
@@ -281,9 +299,9 @@ def strongly_connected_components(
 
 
 def weakly_connected_components(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-) -> Generator[set[NodeId], None, None]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+) -> Generator[set[NodeIdT], None, None]:
     """Yield each weakly connected component as a set of node IDs.
 
     Edges are treated as directed but direction is ignored for connectivity.
@@ -293,11 +311,11 @@ def weakly_connected_components(
 
 
 def nodes_on_simple_paths(
-    node_ids: list[NodeId],
-    edges: list[tuple[NodeId, NodeId]],
-    source: NodeId,
-    targets: list[NodeId],
-) -> set[NodeId]:
+    node_ids: Sequence[NodeIdT],
+    edges: Sequence[tuple[NodeIdT, NodeIdT]],
+    source: NodeIdT,
+    targets: Sequence[NodeIdT],
+) -> set[NodeIdT]:
     """Return all nodes on any simple path from source to any target.
 
     Uses the block-cut tree: finds biconnected components, builds the
@@ -309,7 +327,7 @@ def nodes_on_simple_paths(
         return set()
 
     tgts = set(targets)
-    result: set[NodeId] = set()
+    result: set[NodeIdT] = set()
     if source in tgts:
         result.add(source)
         tgts.discard(source)
@@ -332,20 +350,20 @@ def nodes_on_simple_paths(
 
 
 def _build_block_cut_tree(
-    node_ids: list[NodeId],
-    blocks: list[set[NodeId]],
-) -> tuple[dict[NodeId, list[int]], list[list[int]], dict[NodeId, int]]:
+    node_ids: Sequence[NodeIdT],
+    blocks: list[set[NodeIdT]],
+) -> tuple[dict[NodeIdT, list[int]], list[list[int]], dict[NodeIdT, int]]:
     """Build block-cut tree from biconnected components.
 
     Returns (node_blocks, tree_adj, ap_id).
     """
     num_blocks = len(blocks)
-    node_blocks: dict[NodeId, list[int]] = {}
+    node_blocks: dict[NodeIdT, list[int]] = {}
     for bi, block in enumerate(blocks):
         for v in block:
             node_blocks.setdefault(v, []).append(bi)
 
-    ap_id: dict[NodeId, int] = {}
+    ap_id: dict[NodeIdT, int] = {}
     next_id = num_blocks
     for v, blks in node_blocks.items():
         if len(blks) > 1:
@@ -363,18 +381,18 @@ def _build_block_cut_tree(
 
 
 def _collect_path_nodes(
-    node_ids: list[NodeId],
-    blocks: list[set[NodeId]],
-    tree: tuple[dict[NodeId, list[int]], list[list[int]], dict[NodeId, int]],
-    src: NodeId,
-    tgts: set[NodeId],
-    result: set[NodeId],
-) -> set[NodeId]:
+    node_ids: Sequence[NodeIdT],
+    blocks: list[set[NodeIdT]],
+    tree: tuple[dict[NodeIdT, list[int]], list[list[int]], dict[NodeIdT, int]],
+    src: NodeIdT,
+    tgts: set[NodeIdT],
+    result: set[NodeIdT],
+) -> set[NodeIdT]:
     """BFS on block-cut tree, trace paths, collect nodes."""
     node_blocks, tree_adj, ap_id = tree
     num_blocks = len(blocks)
 
-    def tn(v: NodeId) -> int:
+    def tn(v: NodeIdT) -> int:
         if v in ap_id:
             return ap_id[v]
         blks = node_blocks.get(v)
@@ -414,10 +432,10 @@ def _collect_path_nodes(
 
 
 def _merged_branch_ids(
-    base_branch_ids: list[BranchId] | None,
+    base_branch_ids: Sequence[BranchIdT] | None,
     added_count: int,
-    added_branch_ids: list[BranchId] | None,
-) -> list[BranchId] | None:
+    added_branch_ids: Sequence[BranchIdT] | None,
+) -> list[BranchIdT] | None:
     """Branch ids of a rebuilt graph: base ids followed by the added ids."""
     if base_branch_ids is None:
         if added_branch_ids is not None:
@@ -433,16 +451,16 @@ def _merged_branch_ids(
 
 
 def _rerouted_branch_ids(
-    base_branch_ids: list[BranchId] | None,
+    base_branch_ids: Sequence[BranchIdT] | None,
     edge_indices: Collection[int],
-) -> list[BranchId] | None:
+) -> list[BranchIdT] | None:
     """A rerouted edge keeps the branch id of the edge it replaces."""
     if base_branch_ids is None:
         return None
     return [base_branch_ids[edge_idx] for edge_idx in edge_indices]
 
 
-class Graph:
+class Graph(Generic[NodeIdT, BranchIdT]):
     """Parsed graph that supports multiple algorithm calls without re-parsing.
 
     Parses node IDs and edges once into an internal C structure (IntMap + EdgeList
@@ -453,6 +471,11 @@ class Graph:
         Graph(node_ids, edges)                          — edges as pairs of node IDs
         Graph(node_ids, src, dst)                       — two flat lists of node IDs
         Graph(node_ids, edges, branch_ids=branch_ids)   — with branch IDs for exclusion
+
+    The type parameters are the caller's node and branch id types, both bound
+    to ``int``. Every result hands back the id objects that were passed in, so
+    ``Graph[NodeId, BranchId]`` built from ``NewType`` ids returns those types.
+    Without ``branch_ids`` the branch type parameter is ``int``.
     """
 
     __slots__ = (
@@ -466,24 +489,47 @@ class Graph:
         "_directed",
     )
 
-    _edges: list[tuple[int, int]] | None
-    _branch_ids: list[BranchId] | None
-    _branch_id_to_edge_idx: dict[BranchId, int] | None
-    _repeated_branch_edge_idx: dict[BranchId, list[int]] | None
-    _node_id_to_idx: dict[NodeId, int] | None
+    _node_ids: Sequence[NodeIdT]
+    _edges: Sequence[tuple[NodeIdT, NodeIdT]] | None
+    _branch_ids: Sequence[BranchIdT] | None
+    _branch_id_to_edge_idx: dict[BranchIdT, int] | None
+    _repeated_branch_edge_idx: dict[BranchIdT, list[int]] | None
+    _node_id_to_idx: dict[NodeIdT, int] | None
     _directed: bool
+
+    @overload
+    def __init__(
+        self: Graph[NodeIdT, int],
+        node_ids: Sequence[NodeIdT],
+        edges_or_src: Sequence[tuple[NodeIdT, NodeIdT]] | Sequence[NodeIdT],
+        dst: Sequence[NodeIdT] | None = None,
+        *,
+        branch_ids: None = None,
+        directed: bool = False,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        node_ids: Sequence[NodeIdT],
+        edges_or_src: Sequence[tuple[NodeIdT, NodeIdT]] | Sequence[NodeIdT],
+        dst: Sequence[NodeIdT] | None = None,
+        *,
+        branch_ids: Sequence[BranchIdT] | None = None,
+        directed: bool = False,
+    ) -> None: ...
 
     def __init__(
         self,
-        node_ids: list[NodeId],
-        edges_or_src: list[tuple[int, int]] | list[int],
-        dst: list[int] | None = None,
+        node_ids: Sequence[NodeIdT],
+        edges_or_src: Sequence[tuple[NodeIdT, NodeIdT]] | Sequence[NodeIdT],
+        dst: Sequence[NodeIdT] | None = None,
         *,
-        branch_ids: list[BranchId] | None = None,
+        branch_ids: Sequence[BranchIdT] | None = None,
         directed: bool = False,
     ) -> None:
         self._node_ids = node_ids
-        self._edges = edges_or_src if dst is None else None  # type: ignore[assignment]
+        self._edges = edges_or_src if dst is None else None  # type: ignore[assignment]  # dst is None selects the edge-pair half of the union
         self._branch_ids = branch_ids
         self._branch_id_to_edge_idx = None
         self._repeated_branch_edge_idx = None
@@ -503,13 +549,13 @@ class Graph:
         """True if the graph is directed."""
         return self._directed
 
-    def _get_node_id_to_idx(self) -> dict[NodeId, int]:
+    def _get_node_id_to_idx(self) -> dict[NodeIdT, int]:
         """Lazily build and cache the node_id → internal index mapping."""
         if self._node_id_to_idx is None:
             self._node_id_to_idx = {nid: i for i, nid in enumerate(self._node_ids)}
         return self._node_id_to_idx
 
-    def _get_branch_id_to_edge_idx(self) -> dict[BranchId, int]:
+    def _get_branch_id_to_edge_idx(self) -> dict[BranchIdT, int]:
         """Lazily build and cache the branch_id → first edge index mapping.
 
         Several edges may carry the same branch id. The further indices of a
@@ -519,8 +565,8 @@ class Graph:
         if self._branch_id_to_edge_idx is None:
             if self._branch_ids is None:
                 raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-            first: dict[BranchId, int] = {branch_id: edge_idx for edge_idx, branch_id in enumerate(self._branch_ids)}
-            repeated: dict[BranchId, list[int]] = {}
+            first: dict[BranchIdT, int] = {branch_id: edge_idx for edge_idx, branch_id in enumerate(self._branch_ids)}
+            repeated: dict[BranchIdT, list[int]] = {}
             if len(first) != len(self._branch_ids):
                 for edge_idx, branch_id in enumerate(self._branch_ids):
                     if first[branch_id] > edge_idx:
@@ -531,7 +577,7 @@ class Graph:
             self._repeated_branch_edge_idx = repeated
         return self._branch_id_to_edge_idx
 
-    def _edge_indices_of_branches(self, branch_ids: Collection[BranchId]) -> list[int]:
+    def _edge_indices_of_branches(self, branch_ids: Collection[BranchIdT]) -> list[int]:
         """Every edge index carrying one of the given branch ids."""
         first = self._get_branch_id_to_edge_idx()
         edge_indices = [first[branch_id] for branch_id in branch_ids]
@@ -559,7 +605,7 @@ class Graph:
         edges = self._edges
         if edges is None:
             return False
-        seen: set[tuple[int, int]] = set()
+        seen: set[tuple[NodeIdT, NodeIdT]] = set()
         for a, b in edges:
             key = (a, b) if self._directed else (min(a, b), max(a, b))
             if key in seen:
@@ -567,55 +613,55 @@ class Graph:
             seen.add(key)
         return False
 
-    def edge_indices(self, u: NodeId, v: NodeId) -> list[int]:
+    def edge_indices(self, u: NodeIdT, v: NodeIdT) -> list[EdgeIndex]:
         """Return indices of edges between u and v (list, for multigraph support).
 
         For directed graphs, only matches edges where src=u and dst=v.
         """
-        result: list[int] = _edge_indices_ctx(self._ctx, u, v)
+        result: list[EdgeIndex] = _edge_indices_ctx(self._ctx, u, v)
         return result
 
-    def incident_edge_indices(self, node_id: NodeId) -> list[int]:
+    def incident_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all edges incident to the given node.
 
         For directed graphs, returns only outgoing edges (src=node_id).
         Use ``incoming_edge_indices`` for incoming edges.
         """
-        result: list[int] = _incident_edges_ctx(self._ctx, node_id)
+        result: list[EdgeIndex] = _incident_edges_ctx(self._ctx, node_id)
         return result
 
-    def outgoing_edge_indices(self, node_id: NodeId) -> list[int]:
+    def outgoing_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all outgoing edges (src=node_id). Directed graphs only."""
         self._require_directed("outgoing_edge_indices")
-        result: list[int] = _incident_edges_ctx(self._ctx, node_id)
+        result: list[EdgeIndex] = _incident_edges_ctx(self._ctx, node_id)
         return result
 
-    def incoming_edge_indices(self, node_id: NodeId) -> list[int]:
+    def incoming_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all incoming edges (dst=node_id). Directed graphs only."""
         self._require_directed("incoming_edge_indices")
-        result: list[int] = _incoming_edges_ctx(self._ctx, node_id)
+        result: list[EdgeIndex] = _incoming_edges_ctx(self._ctx, node_id)
         return result
 
-    def neighbors(self, node_id: NodeId) -> set[NodeId]:
+    def neighbors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of neighbor node IDs.
 
         For directed graphs, returns successors (outgoing neighbors).
         """
-        result: set[NodeId] = _neighbors_ctx(self._ctx, node_id)
+        result: set[NodeIdT] = _neighbors_ctx(self._ctx, node_id)
         return result
 
-    def successors(self, node_id: NodeId) -> set[NodeId]:
+    def successors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of successor node IDs (outgoing neighbors). Directed graphs only."""
         self._require_directed("successors")
-        result: set[NodeId] = _neighbors_ctx(self._ctx, node_id)
+        result: set[NodeIdT] = _neighbors_ctx(self._ctx, node_id)
         return result
 
-    def predecessors(self, node_id: NodeId) -> set[NodeId]:
+    def predecessors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of predecessor node IDs (incoming neighbors). Directed graphs only."""
-        result: set[NodeId] = _predecessors_ctx(self._ctx, node_id)
+        result: set[NodeIdT] = _predecessors_ctx(self._ctx, node_id)
         return result
 
-    def degree(self, node_id: NodeId) -> int:
+    def degree(self, node_id: NodeIdT) -> int:
         """Return the number of edges incident to the node.
 
         For undirected graphs, self-loops are counted twice (via CSR: each direction counted).
@@ -624,13 +670,13 @@ class Graph:
         result: int = _degree_ctx(self._ctx, node_id)
         return result
 
-    def out_degree(self, node_id: NodeId) -> int:
+    def out_degree(self, node_id: NodeIdT) -> int:
         """Return the out-degree of the node. Directed graphs only."""
         self._require_directed("out_degree")
         result: int = _degree_ctx(self._ctx, node_id)
         return result
 
-    def in_degree(self, node_id: NodeId) -> int:
+    def in_degree(self, node_id: NodeIdT) -> int:
         """Return the in-degree of the node. Directed graphs only."""
         result: int = _in_degree_ctx(self._ctx, node_id)
         return result
@@ -638,15 +684,15 @@ class Graph:
     def without_edges(
         self,
         edge_indices: Collection[int],
-    ) -> "GraphView":
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a lightweight view with the given edges excluded."""
         return GraphView(self, edge_indices)
 
     def with_edges(
         self,
-        added_edges: list[tuple[NodeId, NodeId]],
-        added_branch_ids: list[BranchId] | None = None,
-    ) -> "GraphView":
+        added_edges: Sequence[tuple[NodeIdT, NodeIdT]],
+        added_branch_ids: Sequence[BranchIdT] | None = None,
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a view with extra edges added (rebuilds CSR internally).
 
         The base graph is not modified. The rebuilt graph keeps every base
@@ -666,8 +712,8 @@ class Graph:
 
     def without_branches(
         self,
-        branch_ids: Collection[BranchId],
-    ) -> "GraphView":
+        branch_ids: Collection[BranchIdT],
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a lightweight view with the given branches excluded by ID.
 
         Every edge carrying one of the ids is excluded. Requires the Graph to
@@ -677,8 +723,8 @@ class Graph:
 
     def without_nodes(
         self,
-        node_ids: Collection[int],
-    ) -> "GraphView":
+        node_ids: Collection[NodeIdT],
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a lightweight view with the given nodes excluded.
 
         All edges incident to excluded nodes are also excluded.
@@ -687,10 +733,10 @@ class Graph:
 
     def split_node(
         self,
-        node_id: NodeId,
-        new_node_id: NodeId,
+        node_id: NodeIdT,
+        new_node_id: NodeIdT,
         edge_indices_to_new_node: Collection[int],
-    ) -> "GraphView":
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Split a node by rerouting specified edges to a new node.
 
         Creates a view where the edges identified by ``edge_indices_to_new_node``
@@ -712,7 +758,7 @@ class Graph:
             raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003
         if new_node_id in node_id_to_idx:
             raise ValueError(f"node {new_node_id} already exists in the graph")  # noqa: TRY003
-        rerouted_edges: list[tuple[NodeId, NodeId]] = []
+        rerouted_edges: list[tuple[NodeIdT, NodeIdT]] = []
         for edge_idx in edge_indices_to_new_node:
             u, v = edges[edge_idx]
             if u == node_id:
@@ -728,13 +774,13 @@ class Graph:
 
     def all_edge_paths(
         self,
-        source: NodeId,
-        targets: NodeId | Collection[int],
+        source: NodeIdT,
+        targets: NodeIdT | Collection[NodeIdT],
         cutoff: int | None = None,
         *,
         node_simple: bool = False,
         ignore_self_loops: bool = False,
-    ) -> list[list[int]]:
+    ) -> list[list[EdgeIndex]]:
         """Find all paths from source to targets using each edge at most once.
 
         Returns a list of paths. Each path is a list of edge indices.
@@ -750,7 +796,7 @@ class Graph:
         """
         tgt_list = [targets] if isinstance(targets, int) else list(targets)
         c = cutoff if cutoff is not None else -1
-        result: list[list[int]] = _all_edge_paths_ctx(
+        result: list[list[EdgeIndex]] = _all_edge_paths_ctx(
             self._ctx, source, tgt_list, c, None, None, node_simple, ignore_self_loops
         )
         return result
@@ -763,12 +809,12 @@ class Graph:
         if not self._directed:
             raise TypeError(f"{method_name} requires a directed graph")  # noqa: TRY003
 
-    def connected_components(self) -> Generator[set[NodeId], None, None]:
+    def connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each connected component as a set of original node IDs."""
         self._require_undirected("connected_components")
         yield from _cc_ctx(self._ctx)
 
-    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
+    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
         """Yield (node_id_set, branch_id_set) for each connected component.
 
         Requires the Graph to have been constructed with branch_ids.
@@ -778,12 +824,12 @@ class Graph:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
         yield from _cc_branches_ctx(self._ctx, self._branch_ids)
 
-    def strongly_connected_components(self) -> Generator[set[NodeId], None, None]:
+    def strongly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each strongly connected component as a set of node IDs."""
         self._require_directed("strongly_connected_components")
         yield from _scc_ctx(self._ctx)
 
-    def weakly_connected_components(self) -> Generator[set[NodeId], None, None]:
+    def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each weakly connected component as a set of node IDs.
 
         Ignores edge direction — equivalent to undirected connected components.
@@ -791,22 +837,22 @@ class Graph:
         self._require_directed("weakly_connected_components")
         yield from _cc_ctx(self._ctx)
 
-    def topological_sort(self) -> list[NodeId]:
+    def topological_sort(self) -> list[NodeIdT]:
         """Return nodes in topological order (Kahn's algorithm).
 
         Raises ValueError if the graph contains a cycle.
         """
         self._require_directed("topological_sort")
-        result: list[NodeId] = _toposort_ctx(self._ctx)
+        result: list[NodeIdT] = _toposort_ctx(self._ctx)
         return result
 
-    def bridges(self) -> list[tuple[NodeId, NodeId]]:
+    def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
         """Return bridge edges as (node_id, node_id) pairs."""
         self._require_undirected("bridges")
-        result: list[tuple[NodeId, NodeId]] = _bridges_ctx(self._ctx)
+        result: list[tuple[NodeIdT, NodeIdT]] = _bridges_ctx(self._ctx)
         return result
 
-    def bridges_with_branch_ids(self) -> list[tuple[NodeId, NodeId, BranchId]]:
+    def bridges_with_branch_ids(self) -> list[tuple[NodeIdT, NodeIdT, BranchIdT]]:
         """Return bridge edges as (node_id, node_id, branch_id) triples.
 
         Requires the Graph to have been constructed with branch_ids.
@@ -815,23 +861,23 @@ class Graph:
         if self._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
         bridge_list = self.bridges()
-        result: list[tuple[NodeId, NodeId, BranchId]] = []
+        result: list[tuple[NodeIdT, NodeIdT, BranchIdT]] = []
         for u, v in bridge_list:
             result.extend((u, v, self._branch_ids[edge_idx]) for edge_idx in self.edge_indices(u, v))
         return result
 
-    def articulation_points(self) -> set[NodeId]:
+    def articulation_points(self) -> set[NodeIdT]:
         """Return the set of articulation points."""
         self._require_undirected("articulation_points")
-        result: set[NodeId] = _ap_ctx(self._ctx)
+        result: set[NodeIdT] = _ap_ctx(self._ctx)
         return result
 
-    def biconnected_components(self) -> Generator[set[NodeId], None, None]:
+    def biconnected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each biconnected component as a set of node IDs."""
         self._require_undirected("biconnected_components")
         yield from _bcc_ctx(self._ctx)
 
-    def cycle_basis(self) -> list[list[NodeId]]:
+    def cycle_basis(self) -> list[list[NodeIdT]]:
         """Return a fundamental cycle basis as a list of cycles.
 
         Each cycle is a list of node IDs. The number of fundamental cycles
@@ -839,10 +885,10 @@ class Graph:
         components.
         """
         self._require_undirected("cycle_basis")
-        result: list[list[NodeId]] = _cycle_basis_ctx(self._ctx)
+        result: list[list[NodeIdT]] = _cycle_basis_ctx(self._ctx)
         return result
 
-    def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeId]:
+    def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeIdT]:
         """Return the longest path in the DAG as a list of node IDs.
 
         If weights are provided, edge weights are used to determine path length.
@@ -850,48 +896,48 @@ class Graph:
         Raises ValueError if the graph contains a cycle.
         """
         self._require_directed("dag_longest_path")
-        result: list[NodeId] = _dag_longest_path_ctx(self._ctx, weights)
+        result: list[NodeIdT] = _dag_longest_path_ctx(self._ctx, weights)
         return result
 
-    def bfs(self, source: NodeId) -> list[NodeId]:
+    def bfs(self, source: NodeIdT) -> list[NodeIdT]:
         """Return nodes visited in BFS order from source."""
-        result: list[NodeId] = _bfs_ctx(self._ctx, source)
+        result: list[NodeIdT] = _bfs_ctx(self._ctx, source)
         return result
 
     def shortest_path(
         self,
         weights: list[float],
-        source: NodeId,
-        target: NodeId,
-    ) -> list[NodeId]:
+        source: NodeIdT,
+        target: NodeIdT,
+    ) -> list[NodeIdT]:
         """Return the shortest weighted path from source to target."""
         _dist, path = _dijkstra_ctx(self._ctx, weights, source, target)
-        result: list[NodeId] = path
+        result: list[NodeIdT] = path
         return result
 
     def shortest_path_lengths(
         self,
         weights: list[float],
-        source: NodeId,
+        source: NodeIdT,
         cutoff: float | None = None,
-    ) -> dict[NodeId, float]:
+    ) -> dict[NodeIdT, float]:
         """Return {node_id: distance} for all nodes reachable from source."""
         c = cutoff if cutoff is not None else -1.0
-        result: dict[NodeId, float] = _sssp_ctx(self._ctx, weights, source, c)
+        result: dict[NodeIdT, float] = _sssp_ctx(self._ctx, weights, source, c)
         return result
 
     def multi_source_shortest_path_lengths(
         self,
         weights: list[float],
-        sources: list[NodeId],
+        sources: Sequence[NodeIdT],
         cutoff: float | None = None,
-    ) -> dict[NodeId, float]:
+    ) -> dict[NodeIdT, float]:
         """Return {node_id: distance} from nearest source to each reachable node."""
         c = cutoff if cutoff is not None else -1.0
-        result: dict[NodeId, float] = _msdijk_ctx(self._ctx, weights, sources, c)
+        result: dict[NodeIdT, float] = _msdijk_ctx(self._ctx, weights, sources, c)
         return result
 
-    def eccentricity(self, weights: list[float], source: NodeId) -> float:
+    def eccentricity(self, weights: list[float], source: NodeIdT) -> float:
         """Return the eccentricity of source (max shortest-path distance)."""
         lengths = self.shortest_path_lengths(weights, source)
         if not lengths:
@@ -900,7 +946,7 @@ class Graph:
 
     def two_edge_connected_components(
         self,
-    ) -> Generator[set[NodeId], None, None]:
+    ) -> Generator[set[NodeIdT], None, None]:
         """Yield 2-edge-connected components (bridges removed, then CC)."""
         self._require_undirected("two_edge_connected_components")
         bridge_edge_indices: list[int] = _bridges_as_edge_indices_ctx(self._ctx)
@@ -914,9 +960,9 @@ class Graph:
 
     def nodes_on_simple_paths(
         self,
-        source: NodeId,
-        targets: list[NodeId],
-    ) -> set[NodeId]:
+        source: NodeIdT,
+        targets: Sequence[NodeIdT],
+    ) -> set[NodeIdT]:
         """Return all nodes on any simple path from source to any target."""
         self._require_undirected("nodes_on_simple_paths")
         n = len(self._node_ids)
@@ -924,7 +970,7 @@ class Graph:
             return set()
 
         tgts = set(targets)
-        result: set[NodeId] = set()
+        result: set[NodeIdT] = set()
         if source in tgts:
             result.add(source)
             tgts.discard(source)
@@ -946,7 +992,7 @@ class Graph:
         )
 
 
-class GraphView:
+class GraphView(Generic[NodeIdT, BranchIdT]):
     """Lightweight view of a Graph with excluded edges and/or nodes.
 
     Shares the base graph's parsed data (IntMap, CSR). Holds a
@@ -963,18 +1009,20 @@ class GraphView:
 
     def __init__(
         self,
-        graph: Graph,
+        graph: Graph[NodeIdT, BranchIdT],
         excluded_edge_indices: Collection[int],
     ) -> None:
         self._graph = graph
         self._excluded_edges = bytearray(graph.edge_count)
         for idx in excluded_edge_indices:
             self._excluded_edges[idx] = 1
-        self._added_graph: Graph | None = None
+        self._added_graph: Graph[NodeIdT, BranchIdT] | None = None
         self._excluded_nodes: bytearray | None = None
 
     @classmethod
-    def _from_excluded_edges(cls, graph: Graph, excluded_edges: bytearray) -> "GraphView":
+    def _from_excluded_edges(
+        cls, graph: Graph[NodeIdT, BranchIdT], excluded_edges: bytearray
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a view from an existing excluded-edges bytearray (no copy)."""
         view = object.__new__(cls)
         view._graph = graph
@@ -986,9 +1034,9 @@ class GraphView:
     @classmethod
     def _from_node_exclusion(
         cls,
-        graph: Graph,
-        excluded_node_ids: Collection[int],
-    ) -> "GraphView":
+        graph: Graph[NodeIdT, BranchIdT],
+        excluded_node_ids: Collection[NodeIdT],
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a view excluding the given nodes (and their incident edges)."""
         node_id_to_idx = graph._get_node_id_to_idx()
         excluded_nodes = bytearray(graph.node_count)
@@ -1006,13 +1054,13 @@ class GraphView:
     @classmethod
     def _with_additions(
         cls,
-        base: Graph,
+        base: Graph[NodeIdT, BranchIdT],
         *,
         excluded_edges: bytearray | None,
         excluded_nodes: bytearray | None,
-        added_edges: list[tuple[NodeId, NodeId]],
-        added_branch_ids: list[BranchId] | None,
-    ) -> "GraphView":
+        added_edges: Sequence[tuple[NodeIdT, NodeIdT]],
+        added_branch_ids: Sequence[BranchIdT] | None,
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Rebuild with every base edge kept at its index and added edges appended.
 
         Excluded edges and nodes stay masked in the new view instead of being
@@ -1022,10 +1070,10 @@ class GraphView:
         base_edges = base._edges
         if base_edges is None:
             raise ValueError("with_edges requires edge-pair construction")  # noqa: TRY003 — one clear sentence
-        merged_edges: list[tuple[NodeId, NodeId]] = [*base_edges, *added_edges]
+        merged_edges: list[tuple[NodeIdT, NodeIdT]] = [*base_edges, *added_edges]
 
-        merged_nodes: list[NodeId] = list(base._node_ids)
-        known: set[NodeId] = set(base._node_ids)
+        merged_nodes: list[NodeIdT] = list(base._node_ids)
+        known: set[NodeIdT] = set(base._node_ids)
         for u, v in added_edges:
             for node_id in (u, v):
                 if node_id not in known:
@@ -1049,9 +1097,9 @@ class GraphView:
 
     def with_edges(
         self,
-        added_edges: list[tuple[NodeId, NodeId]],
-        added_branch_ids: list[BranchId] | None = None,
-    ) -> "GraphView":
+        added_edges: Sequence[tuple[NodeIdT, NodeIdT]],
+        added_branch_ids: Sequence[BranchIdT] | None = None,
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a new view adding extra edges to this view.
 
         The exclusions of this view are kept. Base edges keep their indices
@@ -1067,8 +1115,8 @@ class GraphView:
 
     def without_nodes(
         self,
-        node_ids: Collection[int],
-    ) -> "GraphView":
+        node_ids: Collection[NodeIdT],
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a new view also excluding the given nodes."""
         node_id_to_idx = self._graph._get_node_id_to_idx()
         excluded_nodes = bytearray(self._excluded_nodes) if self._excluded_nodes else bytearray(self._graph.node_count)
@@ -1085,8 +1133,8 @@ class GraphView:
 
     def without_branches(
         self,
-        branch_ids: Collection[BranchId],
-    ) -> "GraphView":
+        branch_ids: Collection[BranchIdT],
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a new view also excluding the given branches by ID.
 
         Every edge carrying one of the ids is excluded. Requires the base
@@ -1097,7 +1145,7 @@ class GraphView:
     def without_edges(
         self,
         edge_indices: Collection[int],
-    ) -> "GraphView":
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a new view also excluding the given edges."""
         new_excluded_edges = bytearray(self._excluded_edges)
         for idx in edge_indices:
@@ -1117,43 +1165,47 @@ class GraphView:
         if not self._graph._directed:
             raise TypeError(f"{method_name} requires a directed graph")  # noqa: TRY003
 
-    def incident_edge_indices(self, node_id: NodeId) -> list[int]:
+    def incident_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all non-excluded edges incident to the given node.
 
         For directed graphs, returns only outgoing edges (src=node_id).
         """
-        result: list[int] = _incident_edges_ctx(self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes)
+        result: list[EdgeIndex] = _incident_edges_ctx(
+            self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes
+        )
         return result
 
-    def outgoing_edge_indices(self, node_id: NodeId) -> list[int]:
+    def outgoing_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all non-excluded outgoing edges. Directed graphs only."""
         self._require_directed("outgoing_edge_indices")
         return self.incident_edge_indices(node_id)
 
-    def incoming_edge_indices(self, node_id: NodeId) -> list[int]:
+    def incoming_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all non-excluded incoming edges. Directed graphs only."""
-        result: list[int] = _incoming_edges_ctx(self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes)
+        result: list[EdgeIndex] = _incoming_edges_ctx(
+            self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes
+        )
         return result
 
-    def neighbors(self, node_id: NodeId) -> set[NodeId]:
+    def neighbors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of neighbor node IDs, respecting edge and node exclusions.
 
         For directed graphs, returns successors (outgoing neighbors).
         """
-        result: set[NodeId] = _neighbors_ctx(self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes)
+        result: set[NodeIdT] = _neighbors_ctx(self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes)
         return result
 
-    def successors(self, node_id: NodeId) -> set[NodeId]:
+    def successors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of successor node IDs. Directed graphs only."""
         self._require_directed("successors")
         return self.neighbors(node_id)
 
-    def predecessors(self, node_id: NodeId) -> set[NodeId]:
+    def predecessors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of predecessor node IDs. Directed graphs only."""
-        result: set[NodeId] = _predecessors_ctx(self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes)
+        result: set[NodeIdT] = _predecessors_ctx(self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes)
         return result
 
-    def degree(self, node_id: NodeId) -> int:
+    def degree(self, node_id: NodeIdT) -> int:
         """Return the number of non-excluded edges incident to the node.
 
         For undirected graphs, self-loops are counted twice (via CSR).
@@ -1162,17 +1214,17 @@ class GraphView:
         result: int = _degree_ctx(self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes)
         return result
 
-    def out_degree(self, node_id: NodeId) -> int:
+    def out_degree(self, node_id: NodeIdT) -> int:
         """Return the out-degree of the node. Directed graphs only."""
         self._require_directed("out_degree")
         return self.degree(node_id)
 
-    def in_degree(self, node_id: NodeId) -> int:
+    def in_degree(self, node_id: NodeIdT) -> int:
         """Return the in-degree of the node. Directed graphs only."""
         result: int = _in_degree_ctx(self._graph._ctx, node_id, self._excluded_edges, self._excluded_nodes)
         return result
 
-    def bridges_with_branch_ids(self) -> list[tuple[NodeId, NodeId, BranchId]]:
+    def bridges_with_branch_ids(self) -> list[tuple[NodeIdT, NodeIdT, BranchIdT]]:
         """Return bridge edges as (node_id, node_id, branch_id) triples.
 
         Requires the base Graph to have been constructed with branch_ids.
@@ -1181,7 +1233,7 @@ class GraphView:
         if self._graph._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
         bridge_list = self.bridges()
-        result: list[tuple[NodeId, NodeId, BranchId]] = []
+        result: list[tuple[NodeIdT, NodeIdT, BranchIdT]] = []
         for u, v in bridge_list:
             result.extend(
                 (u, v, self._graph._branch_ids[edge_idx])
@@ -1192,10 +1244,10 @@ class GraphView:
 
     def split_node(
         self,
-        node_id: NodeId,
-        new_node_id: NodeId,
+        node_id: NodeIdT,
+        new_node_id: NodeIdT,
         edge_indices_to_new_node: Collection[int],
-    ) -> "GraphView":
+    ) -> GraphView[NodeIdT, BranchIdT]:
         """Split a node by rerouting specified edges to a new node.
 
         Creates a view where the edges identified by ``edge_indices_to_new_node``
@@ -1211,7 +1263,7 @@ class GraphView:
             raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003
         if new_node_id in node_id_to_idx:
             raise ValueError(f"node {new_node_id} already exists in the graph")  # noqa: TRY003
-        rerouted_edges: list[tuple[NodeId, NodeId]] = []
+        rerouted_edges: list[tuple[NodeIdT, NodeIdT]] = []
         for edge_idx in edge_indices_to_new_node:
             u, v = edges[edge_idx]
             if u == node_id:
@@ -1227,13 +1279,13 @@ class GraphView:
 
     def all_edge_paths(
         self,
-        source: NodeId,
-        targets: NodeId | Collection[int],
+        source: NodeIdT,
+        targets: NodeIdT | Collection[NodeIdT],
         cutoff: int | None = None,
         *,
         node_simple: bool = False,
         ignore_self_loops: bool = False,
-    ) -> list[list[int]]:
+    ) -> list[list[EdgeIndex]]:
         """Find all paths from source to targets using each edge at most once.
 
         Returns a list of paths. Each path is a list of edge indices.
@@ -1244,7 +1296,7 @@ class GraphView:
         """
         tgt_list = [targets] if isinstance(targets, int) else list(targets)
         c = cutoff if cutoff is not None else -1
-        result: list[list[int]] = _all_edge_paths_ctx(
+        result: list[list[EdgeIndex]] = _all_edge_paths_ctx(
             self._graph._ctx,
             source,
             tgt_list,
@@ -1256,12 +1308,12 @@ class GraphView:
         )
         return result
 
-    def connected_components(self) -> Generator[set[NodeId], None, None]:
+    def connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each connected component as a set of original node IDs."""
         self._require_undirected("connected_components")
         yield from _cc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
-    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeId], set[BranchId]], None, None]:
+    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
         """Yield (node_id_set, branch_id_set) for each connected component.
 
         Requires the base Graph to have been constructed with branch_ids.
@@ -1280,67 +1332,69 @@ class GraphView:
             self._excluded_nodes,
         )
 
-    def strongly_connected_components(self) -> Generator[set[NodeId], None, None]:
+    def strongly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each strongly connected component as a set of node IDs."""
         self._require_directed("strongly_connected_components")
         yield from _scc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
-    def weakly_connected_components(self) -> Generator[set[NodeId], None, None]:
+    def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each weakly connected component as a set of node IDs."""
         self._require_directed("weakly_connected_components")
         yield from _cc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
-    def topological_sort(self) -> list[NodeId]:
+    def topological_sort(self) -> list[NodeIdT]:
         """Return nodes in topological order (Kahn's algorithm).
 
         Raises ValueError if the graph contains a cycle.
         """
         self._require_directed("topological_sort")
-        result: list[NodeId] = _toposort_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        result: list[NodeIdT] = _toposort_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
         return result
 
-    def bridges(self) -> list[tuple[NodeId, NodeId]]:
+    def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
         """Return bridge edges as (node_id, node_id) pairs."""
         self._require_undirected("bridges")
-        result: list[tuple[NodeId, NodeId]] = _bridges_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        result: list[tuple[NodeIdT, NodeIdT]] = _bridges_ctx(
+            self._graph._ctx, self._excluded_edges, self._excluded_nodes
+        )
         return result
 
-    def articulation_points(self) -> set[NodeId]:
+    def articulation_points(self) -> set[NodeIdT]:
         """Return the set of articulation points."""
         self._require_undirected("articulation_points")
-        result: set[NodeId] = _ap_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        result: set[NodeIdT] = _ap_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
         return result
 
-    def biconnected_components(self) -> Generator[set[NodeId], None, None]:
+    def biconnected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each biconnected component as a set of node IDs."""
         self._require_undirected("biconnected_components")
         yield from _bcc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
-    def cycle_basis(self) -> list[list[NodeId]]:
+    def cycle_basis(self) -> list[list[NodeIdT]]:
         """Return a fundamental cycle basis as a list of cycles."""
         self._require_undirected("cycle_basis")
-        result: list[list[NodeId]] = _cycle_basis_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        result: list[list[NodeIdT]] = _cycle_basis_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
         return result
 
-    def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeId]:
+    def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeIdT]:
         """Return the longest path in the DAG as a list of node IDs."""
         self._require_directed("dag_longest_path")
-        result: list[NodeId] = _dag_longest_path_ctx(
+        result: list[NodeIdT] = _dag_longest_path_ctx(
             self._graph._ctx, weights, self._excluded_edges, self._excluded_nodes
         )
         return result
 
-    def bfs(self, source: NodeId) -> list[NodeId]:
+    def bfs(self, source: NodeIdT) -> list[NodeIdT]:
         """Return nodes visited in BFS order from source."""
-        result: list[NodeId] = _bfs_ctx(self._graph._ctx, source, self._excluded_edges, self._excluded_nodes)
+        result: list[NodeIdT] = _bfs_ctx(self._graph._ctx, source, self._excluded_edges, self._excluded_nodes)
         return result
 
     def shortest_path(
         self,
         weights: list[float],
-        source: NodeId,
-        target: NodeId,
-    ) -> list[NodeId]:
+        source: NodeIdT,
+        target: NodeIdT,
+    ) -> list[NodeIdT]:
         """Return the shortest weighted path from source to target."""
         _dist, path = _dijkstra_ctx(
             self._graph._ctx,
@@ -1350,18 +1404,18 @@ class GraphView:
             self._excluded_edges,
             self._excluded_nodes,
         )
-        result: list[NodeId] = path
+        result: list[NodeIdT] = path
         return result
 
     def shortest_path_lengths(
         self,
         weights: list[float],
-        source: NodeId,
+        source: NodeIdT,
         cutoff: float | None = None,
-    ) -> dict[NodeId, float]:
+    ) -> dict[NodeIdT, float]:
         """Return {node_id: distance} for all nodes reachable from source."""
         c = cutoff if cutoff is not None else -1.0
-        result: dict[NodeId, float] = _sssp_ctx(
+        result: dict[NodeIdT, float] = _sssp_ctx(
             self._graph._ctx,
             weights,
             source,
@@ -1374,12 +1428,12 @@ class GraphView:
     def multi_source_shortest_path_lengths(
         self,
         weights: list[float],
-        sources: list[NodeId],
+        sources: Sequence[NodeIdT],
         cutoff: float | None = None,
-    ) -> dict[NodeId, float]:
+    ) -> dict[NodeIdT, float]:
         """Return {node_id: distance} from nearest source to each reachable node."""
         c = cutoff if cutoff is not None else -1.0
-        result: dict[NodeId, float] = _msdijk_ctx(
+        result: dict[NodeIdT, float] = _msdijk_ctx(
             self._graph._ctx,
             weights,
             sources,
@@ -1389,7 +1443,7 @@ class GraphView:
         )
         return result
 
-    def eccentricity(self, weights: list[float], source: NodeId) -> float:
+    def eccentricity(self, weights: list[float], source: NodeIdT) -> float:
         """Return the eccentricity of source (max shortest-path distance)."""
         lengths = self.shortest_path_lengths(weights, source)
         if not lengths:
@@ -1398,11 +1452,11 @@ class GraphView:
 
 
 def for_each_edge_excluded(
-    graph: Graph,
+    graph: Graph[NodeIdT, BranchIdT],
     algorithm: str,
     edge_indices: Iterable[int] | None = None,
     **algorithm_kwargs: object,
-) -> Iterator[tuple[int, object]]:
+) -> Iterator[tuple[EdgeIndex, object]]:
     """Run an algorithm once per excluded edge, yielding (edge_index, result).
 
     Reuses a single mask bytearray, toggling one bit per iteration.
@@ -1416,7 +1470,7 @@ def for_each_edge_excluded(
         result = getattr(view, algorithm)(**algorithm_kwargs)
         if isinstance(result, types.GeneratorType):
             result = list(result)
-        yield idx, result
+        yield EdgeIndex(idx), result
         excluded_edges[idx] = 0
 
 
