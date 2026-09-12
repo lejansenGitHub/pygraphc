@@ -5,8 +5,8 @@ from __future__ import annotations
 import types
 from collections import deque
 from collections.abc import Collection, Generator, Iterable, Iterator, Sequence
-from typing import Generic, NewType, TypeVar, overload
 from dataclasses import dataclass
+from typing import Generic, NewType, TypeVar, overload
 
 from pygraphc._core import all_edge_paths_ctx as _all_edge_paths_ctx
 from pygraphc._core import ap_ctx as _ap_ctx
@@ -555,7 +555,7 @@ class ReductionLog:
     surviving_nodes: memoryview
 
     @classmethod
-    def from_buffers(cls, raw: tuple[bytes, ...]) -> "ReductionLog":
+    def from_buffers(cls, raw: tuple[bytes, ...]) -> ReductionLog:
         """The twelve int32 byte buffers of ``series_parallel_reduce_ctx`` as typed views."""
         return cls(*(memoryview(buffer).cast("i") for buffer in raw))
 
