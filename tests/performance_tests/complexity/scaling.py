@@ -4,13 +4,14 @@ Sizes adapt to each operation instead of being fixed: a case starts small and
 doubles until one call takes ``STOP_SECONDS`` or the size reaches
 ``MAX_SIZE``. Each size repeats the call until ``SAMPLE_SECONDS`` have
 accumulated, so even a fast operation yields a clean per-call time at a
-moderate size, and the exponent is fitted over the last ``FIT_POINTS`` sizes,
-where the linear term no longer hides a superlinear one. A quadratic case
+moderate size, and the exponent comes from the last doublings, where the
+linear term no longer hides a superlinear one. A quadratic case
 reaches the stop after a few doublings, long before it costs minutes or
 exhausts memory; the cases this tier found were obvious from 25,000 on.
 
-Noise does not blur the answer: a 20% timing error moves the fit by about
-0.1, while linear and quadratic cases lie 0.3 apart even after cache effects.
+Noise does not blur the answer: a 20% timing error moves one doubling by
+about 0.26, and averaging two of them halves that, while linear and
+quadratic implementations lie 0.4 apart.
 """
 
 import gc
@@ -27,14 +28,14 @@ STOP_SECONDS = 0.1
 SAMPLE_SECONDS = 0.02
 SAMPLES = 2
 FIT_POINTS = 4
+"""Sizes measured before a slow call may end the series: three doublings to judge."""
 BLOW_UP_SECONDS = 1.0
 """A call this slow ends the series after three sizes, enough to fit a blow-up."""
 LINEAR_LIMIT = 1.5
 """Upper bound for linear and n log n operations.
 
-In theory they fit 1.0 to 1.1, but between 64,000 and 512,000 the working set
-moves through the CPU caches and the cost per element rises: linear
-operations measured up to 1.42. Every quadratic case measured 1.73 or more.
+In theory they measure 1.0 to 1.1; with the cache step left out, linear
+operations measured up to 1.29 and every quadratic implementation 1.68 or more.
 """
 
 
@@ -47,17 +48,20 @@ class Scaling:
 
     @property
     def exponent(self) -> float:
-        """Slope of log time over log size across the last ``FIT_POINTS`` sizes."""
-        log_sizes = [math.log(size) for size in self.sizes[-FIT_POINTS:]]
-        log_seconds = [math.log(max(seconds, 1e-9)) for seconds in self.seconds[-FIT_POINTS:]]
-        mean_size = sum(log_sizes) / len(log_sizes)
-        mean_seconds = sum(log_seconds) / len(log_seconds)
-        covariance = sum(
-            (log_size - mean_size) * (log_second - mean_seconds)
-            for log_size, log_second in zip(log_sizes, log_seconds, strict=True)
-        )
-        variance = sum((log_size - mean_size) ** 2 for log_size in log_sizes)
-        return covariance / variance
+        """Doubling exponent over the last three doublings, the largest of them left out.
+
+        Each doubling contributes log2 of its time ratio. Leaving out the
+        largest of the last three ignores one step, the jump where the working
+        set leaves a CPU cache, which lands at a different size on every
+        machine; a superlinear case raises every ratio and is not hidden by it.
+        """
+        doublings = [
+            math.log2(max(later, 1e-12) / max(earlier, 1e-12))
+            for earlier, later in zip(self.seconds, self.seconds[1:], strict=False)
+        ][-3:]
+        if len(doublings) >= 3:
+            return sum(sorted(doublings)[:-1]) / (len(doublings) - 1)
+        return min(doublings)
 
     def __str__(self) -> str:
         rows = ", ".join(

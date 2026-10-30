@@ -1,10 +1,12 @@
 """Deterministic instruction counts of scenarios under callgrind.
 
-A tiny shared library exposes ``run_measured(callback)``, which only calls the
-callback. Callgrind collects inside that function alone
-(``--toggle-collect``) and dumps a profile each time it returns
-(``--dump-after``), so one valgrind process measures many scenarios, each
-counted without its setup, imports or interpreter start.
+A tiny shared library exposes ``run_measured(callback)``, which switches
+callgrind's collection on, calls the callback, switches it off and dumps a
+profile, all through valgrind client requests. Collection starts off
+(``--collect-atstart=no``), so one valgrind process measures many scenarios,
+each counted without its setup, imports or interpreter start. Client requests
+do not depend on callgrind recognising the call by symbol, which on x86-64
+it did not for a function entered from a ctypes callback.
 """
 
 import os
@@ -14,8 +16,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-MARKER_SOURCE = "void run_measured(void (*callback)(void)) { callback(); }\n"
-MARKER_FUNCTION = "run_measured"
+MARKER_SOURCE = """#include <valgrind/callgrind.h>
+
+void run_measured(void (*callback)(void)) {
+    CALLGRIND_TOGGLE_COLLECT;
+    callback();
+    CALLGRIND_TOGGLE_COLLECT;
+    CALLGRIND_DUMP_STATS;
+}
+"""
 
 
 def valgrind_available() -> bool:
@@ -65,8 +74,7 @@ def count_instructions(scenario_names: list[str], python: str = sys.executable) 
             [
                 "valgrind",
                 "--tool=callgrind",
-                f"--toggle-collect={MARKER_FUNCTION}",
-                f"--dump-after={MARKER_FUNCTION}",
+                "--collect-atstart=no",
                 f"--callgrind-out-file={directory / 'callgrind.out'}",
                 python,
                 "-m",

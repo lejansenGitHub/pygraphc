@@ -150,7 +150,8 @@ jobs:
         working-directory: tests
         env:
           COMPLEXITY_FILE: ${{ matrix.file }}
-        run: pytest "performance_tests/complexity/$COMPLEXITY_FILE" -v
+        # -s keeps every measurement in the log: the calibration record of the runner.
+        run: pytest "performance_tests/complexity/$COMPLEXITY_FILE" -v -s
 
   # One realistic large input per workflow against a generous budget.
   experience:
