@@ -11,12 +11,10 @@ Edges use **original node IDs** — no manual index mapping needed. A C-side has
 Sparse random graphs, ~3 edges per node. Algorithm time only: node ids, edge
 lists and the networkx graph are built before the timer starts. Measured on an
 Apple M3 Pro (12 cores, macOS 26.6), CPython 3.11.11, networkx 3.6.1, best of 3
-runs after one warm-up. `tests/performance_tests/test_networkx_baselines.py`
-guards the connected-components rows from 10K up and every row of the second
-table: it asserts that pygraphc and networkx return the same result and that
-pygraphc is faster. The per-algorithm files in the same directory re-measure
-the remaining rows and print the ratio, but assert an absolute time limit
-rather than the ratio.
+runs after one warm-up. `benchmarks/networkx_baselines.py` measures every row
+of both tables and only reports; `tests/unit_tests/test_networkx_differential.py`
+checks that pygraphc and networkx return the same results. Speed itself is
+guarded by the three performance tiers described under [Tests](#tests).
 
 | Algorithm | Nodes | pygraphc | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
@@ -38,7 +36,7 @@ rather than the ratio.
 | Cycle basis | 100K | 0.018s | 17.89s | **979x** |
 
 Further networkx baselines, same machine and discipline, from
-`tests/performance_tests/test_networkx_baselines.py`:
+`benchmarks/networkx_baselines.py`:
 
 | Algorithm | Nodes | pygraphc | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
@@ -1103,7 +1101,7 @@ kernel against the Python objects built around it, and a flat profile hides it.
 
 ```bash
 python benchmarks/profile_workflows.py               # full sizes, writes profiles/
-python benchmarks/profile_workflows.py --size guard   # the small sizes the guard uses
+python benchmarks/profile_workflows.py --size guard   # the sizes the instruction tier counts at
 python benchmarks/profile_workflows.py --list         # the registry
 ```
 
@@ -1112,7 +1110,7 @@ python benchmarks/profile_workflows.py --list         # the registry
 | File | What it is |
 |------|------------|
 | `summary.md` | the table to open first: total wall time, every phase with its time and its share, the `tracemalloc` peak and the networkx reference per workflow |
-| `summary.json` | the same numbers machine-readably, the shape `benchmarks/baseline.json` uses |
+| `summary.json` | the same numbers machine-readably |
 | `<workflow>.prof` | raw `cProfile` output — `python -m pstats` or `snakeviz profiles/<workflow>.prof` |
 | `<workflow>.txt` | that profile's top 25 entries by cumulative and by total time |
 
@@ -1135,52 +1133,12 @@ them to find *which* call, never to quote a duration. `release inputs` is the
 teardown of the workflow's own inputs, attributed on purpose so the phases add
 up to the total.
 
-**The guard.** `tests/unit_tests/test_workflow_profiles.py` runs the harness at
-the small sizes and fails when a phase's share of its workflow's library time
-moves by more than 20 percentage points, when a phase above 50 microseconds or
-a whole workflow's library time exceeds eight times its baseline, or when the
-phases stop accounting for 95% of the measured total. The margins are wide on
-purpose — a guard that fires on CI noise gets deleted — so a failure means the
-shape of a workflow changed, and the failure message prints the whole table.
-
-No gate fails on a single run: a workflow that trips is measured again, and
-only what survives the fastest of three fresh runs is reported, which is what
-keeps a scheduler stall on a shared runner from reading as a regression. That
-applies to the share gate too, and not for symmetry: the harness reports the
-phases of the round with the best total, so one stall inside one phase skews
-every share in that workflow. Measured on an oversubscribed machine, the share
-gate failed ten runs in twenty without the confirmation pass and one with it.
-
-The two gates cover different regressions, and the file says so with the
-arithmetic. A share needs a phase to be a sizeable part of its workflow before
-20 points can move: at half the library time 2.4x fires, at a twentieth 6.4x,
-at a hundredth 26.4x, and above four fifths growth can never fire at all. The
-absolute gate is what covers the kernels, which are single-digit percentages of
-their workflows however large the graph: an injected tenfold regression in the
-label kernel, the degree kernel or the bridge kernel fails the suite every
-time, and in the C reduction loop — a phase of about 100 microseconds — ten
-times fails about two runs in three while twelve times fails every run, because
-both sides of that comparison are minima. Phases
-below the floor stay unguarded and the file names them; the guard sizes of four
-workflows are chosen to keep their kernels above it.
-
-**Regenerating the baseline.**
-
-```bash
-python benchmarks/profile_workflows.py --size guard --write-baseline
-```
-
-Legitimate when the registry changed (a new workflow, a renamed or re-cut
-phase), when a deliberate optimisation moved work from one phase to another, or
-when the reference machine in `benchmarks/baseline.json` is no longer the one
-the numbers should come from. Not legitimate as a way past a red guard: if a
-phase grew and you cannot say why, the baseline is the evidence and overwriting
-it destroys the finding. Regenerate in its own commit, say which phase moved
-and why, and keep the machine, date and revision blocks the file records. The
-revision is the commit the tree was at when the numbers were taken, with a
-dirty marker when it had uncommitted changes — which it normally does, since a
-baseline is regenerated just before the commit that carries it, so expect it to
-name that commit's parent.
+**The guard.** The instruction tier (see [Performance tests](#performance-tests))
+runs every workflow at its guard size under callgrind and counts the
+instructions of each phase, named `workflow/<workflow>/<phase>`. CI compares
+every phase against the merge base and fails on any change, so a phase that
+grows or shrinks by a single instruction is reviewed; nothing is compared
+against a stored baseline, so no baseline needs regenerating.
 
 ### Comparing the reduction engines
 
@@ -1253,8 +1211,7 @@ the change what moved and why. `profiles/engine_comparison.md` and the
 ```bash
 pip install -e ".[benchmark]"
 pip install networkx pgmpy
-pytest tests/performance_tests/ -v -s -k speedup
-pytest tests/performance_tests/test_networkx_baselines.py -v -s  # networkx baseline per operation
+python benchmarks/networkx_baselines.py  # networkx baseline per operation, the README tables
 python benchmarks/bench_all.py       # structured cost breakdown + topology scenarios
 python benchmarks/bench_dag_learn.py  # hill-climb K2: pygraphc vs pgmpy
 ```
@@ -1267,8 +1224,41 @@ After the [development setup](#development-setup):
 pytest tests/unit_tests/ -v
 ```
 
-`tests/performance_tests/test_networkx_baselines.py` holds one networkx
-baseline per graph operation, each asserting identical results and a speedup.
-It needs `networkx` installed and is skipped otherwise; it carries the
-`performance` marker like the other files there, so `-m "not performance"`
-excludes it.
+`tests/unit_tests/test_networkx_differential.py` checks one graph operation per
+test against networkx on seeded random graphs; it needs `networkx` installed
+and is skipped otherwise.
+
+### Performance tests
+
+`tests/performance_tests/` holds three tiers, all marked `performance`:
+
+- **complexity/**: walltime at doubling sizes, chosen per operation until
+  one call takes 0.1 s, asserting the fitted scaling exponent (at most 1.5 for linear and n log n work, which reaches up to 1.42 once the
+  working set leaves the CPU caches; quadratic cases measured 1.73 and more). Each
+  operation runs on several shapes (path, star, singletons, lattice, random),
+  because a superlinear implementation hides on the axis it is quadratic in:
+  degree, depth, component count. Superlinear behaviour often shows only at
+  large sizes, so this tier stays on walltime.
+- **instructions/**: deterministic callgrind instruction counts of small and
+  medium scenarios and of every phase of the workflows in
+  `benchmarks/profile_workflows.py`. CI builds the merge base and the branch
+  with the same packages and fails on any changed count, in either direction:
+  the counts are deterministic, so every change is real and gets reviewed. A
+  pull request labelled `accept-instruction-change` still gets the table but
+  does not fail.
+  The design claims ("a mask costs at most 15%") are instruction-count ratios
+  in `test_claims.py`. Needs valgrind, so it runs on Linux; on macOS:
+
+  ```bash
+  podman run --rm -v "$PWD":/source:ro python:3.13-slim bash -c '
+    apt-get -qq update && apt-get -qq install -y gcc valgrind
+    cp -r /source /work && pip install -q "/work[dev]" && cd /work/tests
+    pytest performance_tests/instructions -v'
+  ```
+- **experience/**: one realistic million-node input per workflow, end to end,
+  against a generous budget. It catches a second turning into a minute, not
+  regressions.
+
+```bash
+cd tests && pytest performance_tests/complexity -v   # or instructions, experience
+```
