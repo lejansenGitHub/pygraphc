@@ -1,6 +1,14 @@
 import os
+from glob import glob
 
 from setuptools import Extension, setup
+
+CORE_SOURCE_DIRECTORY = "src/pygraphc/_core_src"
+
+
+def core_files(pattern: str) -> list[str]:
+    """Files of the `_core` extension below its source directory, sorted so the build order is stable."""
+    return sorted(glob(f"{CORE_SOURCE_DIRECTORY}/**/{pattern}", recursive=True))
 
 
 def compile_args() -> list[str]:
@@ -15,7 +23,8 @@ setup(
     ext_modules=[
         Extension(
             "pygraphc._core",
-            sources=["src/pygraphc/_core.c"],
+            sources=["src/pygraphc/_core.c", *core_files("*.c")],
+            depends=core_files("*.h"),
             extra_compile_args=compile_args(),
         ),
         Extension(

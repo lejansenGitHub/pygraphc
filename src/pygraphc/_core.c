@@ -1,9 +1,4 @@
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
+#include "_core_src/models.h"
 
 /* ── Buffer-format helpers ── */
 
@@ -57,15 +52,6 @@ static inline void uf_union(UF *uf, int a, int b) {
     uf->parent[b] = a;
     if (uf->rank[a] == uf->rank[b]) uf->rank[a]++;
 }
-
-/* ── Edge parsing: supports both list-of-tuples and numpy int32 array ── */
-
-typedef struct {
-    int *src;
-    int *dst;
-    Py_ssize_t m;
-    int owns_memory;  /* 1 = we malloc'd src/dst, 0 = points into numpy buffer */
-} EdgeList;
 
 /*
  * Try the buffer protocol first (numpy int32 array with shape (m,2)).
@@ -157,66 +143,6 @@ static int parse_edges(PyObject *edges_obj, EdgeList *el) {
     }
     Py_DECREF(fast);
     return 0;
-}
-
-/* Inline edge access macros — handles both interleaved and split layouts */
-#define EDGE_SRC(el, i) ((el)->dst == NULL ? (el)->src[(i)*2]   : (el)->src[i])
-#define EDGE_DST(el, i) ((el)->dst == NULL ? (el)->src[(i)*2+1] : (el)->dst[i])
-
-static void free_edges(EdgeList *el) {
-    if (el->owns_memory) {
-        free(el->src);
-        free(el->dst);
-    }
-}
-
-/* ── Integer hash map (open addressing, power-of-2) ── */
-
-typedef struct {
-    long *keys;
-    int *vals;
-    int cap;      /* always power of 2 */
-    int mask;     /* cap - 1 */
-} IntMap;
-
-static int intmap_init(IntMap *m, int n) {
-    int cap = 16;
-    while (cap < n * 2) cap <<= 1;
-    m->cap = cap;
-    m->mask = cap - 1;
-    m->keys = (long *)malloc((size_t)cap * sizeof(long));
-    m->vals = (int *)malloc((size_t)cap * sizeof(int));
-    if (!m->keys || !m->vals) {
-        free(m->keys); free(m->vals);
-        PyErr_NoMemory();
-        return -1;
-    }
-    memset(m->keys, 0xFF, (size_t)cap * sizeof(long)); /* -1 = empty sentinel */
-    return 0;
-}
-
-static void intmap_free(IntMap *m) {
-    free(m->keys);
-    free(m->vals);
-}
-
-static inline void intmap_put(IntMap *m, long key, int val) {
-    int i = (int)((unsigned long)key & (unsigned long)m->mask);
-    while (m->keys[i] != -1) {
-        if (m->keys[i] == key) { m->vals[i] = val; return; }
-        i = (i + 1) & m->mask;
-    }
-    m->keys[i] = key;
-    m->vals[i] = val;
-}
-
-static inline int intmap_get(IntMap *m, long key) {
-    int i = (int)((unsigned long)key & (unsigned long)m->mask);
-    while (m->keys[i] != -1) {
-        if (m->keys[i] == key) return m->vals[i];
-        i = (i + 1) & m->mask;
-    }
-    return -1;  /* not found */
 }
 
 /* ── Edge parsing with node-ID translation via C hash map ── */
@@ -451,16 +377,6 @@ static int parse_edges_mapped_split(IntMap *im, PyObject *src_obj, PyObject *dst
     return 0;
 }
 
-/* ── NidContext: shared setup for node-ID-based API ── */
-
-typedef struct {
-    PyObject *nid_fast;
-    PyObject **nid_items;
-    int n;
-    IntMap im;
-    EdgeList el;
-} NidContext;
-
 static int nid_parse(PyObject *node_ids_obj, PyObject *edges_obj, NidContext *ctx) {
     ctx->nid_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
     if (!ctx->nid_fast) return -1;
@@ -542,12 +458,6 @@ static int nid_parse_split(PyObject *node_ids_obj, PyObject *src_obj, PyObject *
     return 0;
 }
 
-static void nid_free(NidContext *ctx) {
-    free_edges(&ctx->el);
-    if (ctx->im.keys) intmap_free(&ctx->im);
-    Py_DECREF(ctx->nid_fast);
-}
-
 /* ── Edge mask helper ── */
 
 static int parse_mask(PyObject *mask_obj, Py_ssize_t expected_len,
@@ -567,17 +477,6 @@ static int parse_mask(PyObject *mask_obj, Py_ssize_t expected_len,
     *mask_out = (const uint8_t *)mask_buf->buf;
     return 0;
 }
-
-static inline void release_mask(Py_buffer *mask_buf) {
-    if (mask_buf->obj) PyBuffer_Release(mask_buf);
-}
-
-/* ── Helper: run union-find, return component_id array + num_components ── */
-
-typedef struct {
-    int *labels;    /* labels[node] = component_id (sequential 0..num_comp-1) */
-    int num_comp;
-} ComponentResult;
 
 /*
  * Core routine: parse edges, run union-find, assign sequential component IDs.
@@ -893,128 +792,6 @@ cleanup_rb:
     return result;
 }
 
-/* ── Adjacency list (CSR format) for graph traversal ── */
-
-typedef struct {
-    int *offset;      /* size n+1, CSR row pointers */
-    int *adj;         /* size 2*m (undirected) or m (directed), neighbor indices */
-    int *eid;         /* same size, original edge index */
-    int *rev_offset;  /* directed only: size n+1, reverse CSR (NULL if undirected) */
-    int *rev_adj;     /* directed only: size m, predecessor indices */
-    int *rev_eid;     /* directed only: size m, original edge indices */
-} AdjList;
-
-static int build_adj(int n, EdgeList *el, AdjList *al, int directed) {
-    Py_ssize_t m = el->m;
-    Py_ssize_t total = directed ? m : 2 * m;
-    al->offset = (int *)calloc((size_t)(n + 1), sizeof(int));
-    al->adj = total > 0 ? (int *)malloc((size_t)total * sizeof(int)) : NULL;
-    al->eid = total > 0 ? (int *)malloc((size_t)total * sizeof(int)) : NULL;
-    al->rev_offset = NULL;
-    al->rev_adj = NULL;
-    al->rev_eid = NULL;
-    if (!al->offset || (total > 0 && (!al->adj || !al->eid))) {
-        free(al->offset); free(al->adj); free(al->eid);
-        PyErr_NoMemory();
-        return -1;
-    }
-
-    /* Count degrees for forward CSR */
-    for (Py_ssize_t i = 0; i < m; i++) {
-        al->offset[EDGE_SRC(el, i) + 1]++;
-        if (!directed)
-            al->offset[EDGE_DST(el, i) + 1]++;
-    }
-    for (int i = 1; i <= n; i++) al->offset[i] += al->offset[i - 1];
-
-    /* Fill forward CSR */
-    if (total > 0) {
-        int *pos = (int *)malloc((size_t)n * sizeof(int));
-        if (!pos) {
-            free(al->offset); free(al->adj); free(al->eid);
-            PyErr_NoMemory();
-            return -1;
-        }
-        memcpy(pos, al->offset, (size_t)n * sizeof(int));
-        for (Py_ssize_t i = 0; i < m; i++) {
-            int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
-            al->adj[pos[u]] = v; al->eid[pos[u]++] = (int)i;
-            if (!directed) {
-                al->adj[pos[v]] = u; al->eid[pos[v]++] = (int)i;
-            }
-        }
-        free(pos);
-    }
-
-    /* Build reverse CSR for directed graphs */
-    if (directed && m > 0) {
-        al->rev_offset = (int *)calloc((size_t)(n + 1), sizeof(int));
-        al->rev_adj = (int *)malloc((size_t)m * sizeof(int));
-        al->rev_eid = (int *)malloc((size_t)m * sizeof(int));
-        if (!al->rev_offset || !al->rev_adj || !al->rev_eid) {
-            free(al->rev_offset); free(al->rev_adj); free(al->rev_eid);
-            al->rev_offset = NULL; al->rev_adj = NULL; al->rev_eid = NULL;
-            free(al->offset); free(al->adj); free(al->eid);
-            PyErr_NoMemory();
-            return -1;
-        }
-        for (Py_ssize_t i = 0; i < m; i++)
-            al->rev_offset[EDGE_DST(el, i) + 1]++;
-        for (int i = 1; i <= n; i++) al->rev_offset[i] += al->rev_offset[i - 1];
-
-        int *pos = (int *)malloc((size_t)n * sizeof(int));
-        if (!pos) {
-            free(al->rev_offset); free(al->rev_adj); free(al->rev_eid);
-            al->rev_offset = NULL; al->rev_adj = NULL; al->rev_eid = NULL;
-            free(al->offset); free(al->adj); free(al->eid);
-            PyErr_NoMemory();
-            return -1;
-        }
-        memcpy(pos, al->rev_offset, (size_t)n * sizeof(int));
-        for (Py_ssize_t i = 0; i < m; i++) {
-            int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
-            al->rev_adj[pos[v]] = u; al->rev_eid[pos[v]++] = (int)i;
-        }
-        free(pos);
-    }
-
-    return 0;
-}
-
-static void free_adj(AdjList *al) {
-    free(al->offset);
-    free(al->adj);
-    free(al->eid);
-    free(al->rev_offset);
-    free(al->rev_adj);
-    free(al->rev_eid);
-}
-
-/* ── GraphCtx: cached parsed graph for reuse across algorithms ── */
-
-typedef struct {
-    NidContext nid;
-    AdjList    al;
-    int        has_adj;
-    int        directed;  /* 0 = undirected, 1 = directed */
-} GraphCtx;
-
-static void graphctx_destructor(PyObject *capsule) {
-    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
-    if (!g) { PyErr_Clear(); return; }
-    if (g->has_adj) free_adj(&g->al);
-    free_edges(&g->nid.el);
-    if (g->nid.im.keys) intmap_free(&g->nid.im);
-    Py_DECREF(g->nid.nid_fast);
-    free(g);
-}
-
-static inline GraphCtx *get_graphctx(PyObject *capsule) {
-    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
-    if (!g) PyErr_SetString(PyExc_TypeError, "expected a parsed Graph capsule");
-    return g;
-}
-
 static PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     PyObject *nids, *edges_or_src, *dst_obj = Py_None;
     int directed = 0;
@@ -1069,14 +846,6 @@ static PyObject *py_graph_node_count(PyObject *self, PyObject *args) {
     return PyLong_FromLong(g->nid.n);
 }
 
-/* ── Weight parsing: list of floats or numpy float64 array ── */
-
-typedef struct {
-    double *w;
-    Py_ssize_t n;
-    int owns_memory;
-} WeightList;
-
 static int check_weight_count(WeightList *wl, Py_ssize_t expected_m) {
     if (wl->n == expected_m) return 0;
     PyErr_Format(PyExc_ValueError,
@@ -1117,10 +886,6 @@ static int parse_weights(PyObject *obj, WeightList *wl, Py_ssize_t expected_m) {
     }
     Py_DECREF(fast);
     return check_weight_count(wl, expected_m);
-}
-
-static void free_weights(WeightList *wl) {
-    if (wl->owns_memory) free(wl->w);
 }
 
 /* ── Bridges (iterative Tarjan's) ── */
