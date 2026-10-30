@@ -1136,8 +1136,8 @@ up to the total.
 **The guard.** The instruction tier (see [Performance tests](#performance-tests))
 runs every workflow at its guard size under callgrind and counts the
 instructions of each phase, named `workflow/<workflow>/<phase>`. CI compares
-every phase against the merge base and fails on any change, so a phase that
-grows or shrinks by a single instruction is reviewed; nothing is compared
+every phase against the merge base and fails on a phase that moves by more than
+0.5%, while every smaller change is listed too; nothing is compared
 against a stored baseline, so no baseline needs regenerating.
 
 ### Comparing the reduction engines
@@ -1242,10 +1242,12 @@ and is skipped otherwise.
 - **instructions/**: deterministic callgrind instruction counts of small and
   medium scenarios and of every phase of the workflows in
   `benchmarks/profile_workflows.py`. CI builds the merge base and the branch
-  with the same packages and fails on any changed count, in either direction:
-  the counts are deterministic, so every change is real and gets reviewed. A
-  pull request labelled `accept-instruction-change` still gets the table but
-  does not fail.
+  with the same packages, on x86-64 and arm64, and fails on a count that moves
+  by more than 0.5% in either direction. Within one binary the counts are
+  exact; a changed C extension moves unchanged Python work by up to about 0.5%
+  through the allocator, so that is the floor. Every change is in the table,
+  largest first. A pull request labelled `accept-instruction-change` still gets
+  the table but does not fail.
   The design claims ("a mask costs at most 15%") are instruction-count ratios
   in `test_claims.py`. Needs valgrind, so it runs on Linux; on macOS:
 

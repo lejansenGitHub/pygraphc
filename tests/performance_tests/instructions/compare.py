@@ -1,11 +1,15 @@
 """Compare the instruction counts of a branch build against its merge-base build.
 
 Both interpreters run the scenarios and workflow phases of this checkout, each
-importing its own installed pygraphc. Counts are deterministic, so any
-difference is a real change: by default every changed count fails the run, in
-either direction, because an unexpected drop can mean skipped work as much as
-a rise can mean added work. The reviewer accepts a change by labelling the
-pull request; the table goes to stdout and, in CI, to the job summary.
+importing its own installed pygraphc. Within one binary the counts are exact,
+but a changed C extension shifts memory addresses, and CPython's allocator
+then takes slightly different paths: Python work that did not change moves by
+up to about 0.5%. A count that moves by more than ``DEFAULT_THRESHOLD`` fails
+the run, in either direction, because an unexpected drop can mean skipped
+work as much as a rise can mean added work; every other change still appears
+in the table, which is sorted by the size of the change. The reviewer accepts
+a change by labelling the pull request; the table goes to stdout and, in CI,
+to the job summary.
 
     python -m performance_tests.instructions.compare --base-python BASE --head-python HEAD
 """
@@ -19,32 +23,35 @@ from performance_tests.instructions.callgrind import count_instructions
 from performance_tests.instructions.scenarios import SCENARIOS
 from performance_tests.instructions.workflows import workflow_scenario_names
 
-DEFAULT_THRESHOLD = 0.0
+DEFAULT_THRESHOLD = 0.005
+"""The layout noise floor: Python-only phases moved by up to 0.46% when only C code changed."""
 
 
 def comparison_table(base: dict[str, int], head: dict[str, int], threshold: float) -> tuple[str, list[str]]:
     """Markdown table of every measured name and the names whose count changed by more than the threshold."""
-    lines = ["| scenario | base | head | change |", "|---|---:|---:|---:|"]
+    rows: list[tuple[float, str]] = []
     changed: list[str] = []
     for name in dict.fromkeys([*head, *base]):
         if name not in head:
             changed.append(name)
-            lines.append(f"| {name} | {base[name]:,} | not measured | **changed** |")
+            rows.append((float("inf"), f"| {name} | {base[name]:,} | not measured | **changed** |"))
             continue
         if name not in base:
-            lines.append(f"| {name} | new | {head[name]:,} | |")
+            rows.append((float("inf"), f"| {name} | new | {head[name]:,} | |"))
             continue
         change = head[name] / base[name] - 1 if base[name] else float(head[name] != 0)
         marker = ""
         if abs(change) > threshold:
             changed.append(name)
             marker = " **changed**"
-        lines.append(f"| {name} | {base[name]:,} | {head[name]:,} | {change:+.2%}{marker} |")
+        rows.append((abs(change), f"| {name} | {base[name]:,} | {head[name]:,} | {change:+.2%}{marker} |"))
+    lines = ["| scenario | base | head | change |", "|---|---:|---:|---:|"]
+    lines += [row for _size, row in sorted(rows, key=lambda size_and_row: -size_and_row[0])]
     return "\n".join(lines), changed
 
 
 def main() -> int:
-    """Run both builds, print the table and return 1 when a count changed."""
+    """Run both builds, print the table and return 1 when a count moved beyond the threshold."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-python", required=True)
     parser.add_argument("--head-python", required=True)
@@ -54,7 +61,7 @@ def main() -> int:
     base = count_instructions(names, arguments.base_python)
     head = count_instructions(names, arguments.head_python)
     table, changed = comparison_table(base, head, arguments.threshold)
-    heading = f"Instruction counts against the merge base ({len(changed)} changed)"
+    heading = f"Instruction counts against the merge base ({len(changed)} beyond {arguments.threshold:.1%})"
     report = f"### {heading}\n\n{table}\n"
     print(report)  # noqa: T201 — the table is the command's output
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
