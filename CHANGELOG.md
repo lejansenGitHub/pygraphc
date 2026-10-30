@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Performance tests are three tiers instead of walltime limits. `complexity/`
+  asserts the scaling exponent over five sizes and several graph shapes;
+  `instructions/` counts instructions with callgrind, compares every scenario
+  against the merge base in CI and checks the design claims as instruction
+  ratios; `experience/` runs one million-node input per workflow against a
+  generous budget. The networkx equality checks moved to
+  `tests/unit_tests/test_networkx_differential.py`, the README speedups to
+  `benchmarks/networkx_baselines.py`, which reports without asserting.
+
 ### Added
 - `Graph` and `GraphView` are generic over the caller's node and branch id
   types (`Graph[NodeIdT, BranchIdT]`, both bound to `int`). Results carry the

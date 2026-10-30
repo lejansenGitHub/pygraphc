@@ -11,12 +11,10 @@ Edges use **original node IDs** — no manual index mapping needed. A C-side has
 Sparse random graphs, ~3 edges per node. Algorithm time only: node ids, edge
 lists and the networkx graph are built before the timer starts. Measured on an
 Apple M3 Pro (12 cores, macOS 26.6), CPython 3.11.11, networkx 3.6.1, best of 3
-runs after one warm-up. `tests/performance_tests/test_networkx_baselines.py`
-guards the connected-components rows from 10K up and every row of the second
-table: it asserts that pygraphc and networkx return the same result and that
-pygraphc is faster. The per-algorithm files in the same directory re-measure
-the remaining rows and print the ratio, but assert an absolute time limit
-rather than the ratio.
+runs after one warm-up. `benchmarks/networkx_baselines.py` measures every row
+of both tables and only reports; `tests/unit_tests/test_networkx_differential.py`
+checks that pygraphc and networkx return the same results. Speed itself is
+guarded by the three performance tiers described under [Tests](#tests).
 
 | Algorithm | Nodes | pygraphc | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
@@ -38,7 +36,7 @@ rather than the ratio.
 | Cycle basis | 100K | 0.018s | 17.89s | **979x** |
 
 Further networkx baselines, same machine and discipline, from
-`tests/performance_tests/test_networkx_baselines.py`:
+`benchmarks/networkx_baselines.py`:
 
 | Algorithm | Nodes | pygraphc | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
@@ -1253,8 +1251,7 @@ the change what moved and why. `profiles/engine_comparison.md` and the
 ```bash
 pip install -e ".[benchmark]"
 pip install networkx pgmpy
-pytest tests/performance_tests/ -v -s -k speedup
-pytest tests/performance_tests/test_networkx_baselines.py -v -s  # networkx baseline per operation
+python benchmarks/networkx_baselines.py  # networkx baseline per operation, the README tables
 python benchmarks/bench_all.py       # structured cost breakdown + topology scenarios
 python benchmarks/bench_dag_learn.py  # hill-climb K2: pygraphc vs pgmpy
 ```
@@ -1267,8 +1264,38 @@ After the [development setup](#development-setup):
 pytest tests/unit_tests/ -v
 ```
 
-`tests/performance_tests/test_networkx_baselines.py` holds one networkx
-baseline per graph operation, each asserting identical results and a speedup.
-It needs `networkx` installed and is skipped otherwise; it carries the
-`performance` marker like the other files there, so `-m "not performance"`
-excludes it.
+`tests/unit_tests/test_networkx_differential.py` checks one graph operation per
+test against networkx on seeded random graphs; it needs `networkx` installed
+and is skipped otherwise.
+
+### Performance tests
+
+`tests/performance_tests/` holds three tiers, all marked `performance`:
+
+- **complexity/**: walltime at doubling sizes, chosen per operation until
+  one call takes 0.1 s, asserting the fitted scaling exponent (at most 1.5 for linear and n log n work, which reaches up to 1.42 once the
+  working set leaves the CPU caches; quadratic cases measured 1.73 and more). Each
+  operation runs on several shapes (path, star, singletons, lattice, random),
+  because a superlinear implementation hides on the axis it is quadratic in:
+  degree, depth, component count. Superlinear behaviour often shows only at
+  large sizes, so this tier stays on walltime.
+- **instructions/**: deterministic callgrind instruction counts of small and
+  medium scenarios. CI builds the merge base and the branch and fails on a
+  scenario that grows by more than 2%; a pull request labelled
+  `accept-instruction-regression` still gets the table but does not fail.
+  The design claims ("a mask costs at most 15%") are instruction-count ratios
+  in `test_claims.py`. Needs valgrind, so it runs on Linux; on macOS:
+
+  ```bash
+  podman run --rm -v "$PWD":/source:ro python:3.13-slim bash -c '
+    apt-get -qq update && apt-get -qq install -y gcc valgrind
+    cp -r /source /work && pip install -q "/work[dev]" && cd /work/tests
+    pytest performance_tests/instructions -v'
+  ```
+- **experience/**: one realistic million-node input per workflow, end to end,
+  against a generous budget. It catches a second turning into a minute, not
+  regressions.
+
+```bash
+cd tests && pytest performance_tests/complexity -v   # or instructions, experience
+```

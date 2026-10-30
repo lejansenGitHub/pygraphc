@@ -51,20 +51,20 @@ jobs:
           name: coverage
           path: coverage.xml
 
-  # Reads the performance matrix off the directory so that adding a test file
+  # Reads the complexity matrix off the directory so that adding a test file
   # is enough to make it run. A hand-written list had silently stopped running
-  # two of the nine files.
-  performance-files:
+  # two of the nine files of the earlier walltime suite.
+  complexity-files:
     runs-on: ubuntu-latest
     outputs:
       files: ${{ steps.list.outputs.files }}
     steps:
       - uses: actions/checkout@v4
-      - name: List the performance test files
+      - name: List the complexity test files
         id: list
         run: |
           set -o pipefail
-          files=$(ls tests/performance_tests/test_*.py | xargs -n 1 basename |
+          files=$(ls tests/performance_tests/complexity/test_*.py | xargs -n 1 basename |
             jq -R -s -c 'split("\n") | map(select(. != ""))')
           echo "files=$files" >> "$GITHUB_OUTPUT"
           echo "$files"
@@ -90,27 +90,81 @@ jobs:
       - name: Integration cases
         run: pytest tests/integration_tests/ -x -v
 
-  performance:
-    needs: performance-files
+  # Deterministic tier: callgrind instruction counts of the branch against its
+  # merge base, both built the same way in this job, so a toolchain bump never
+  # shows up as a regression. A pull request labelled
+  # accept-instruction-regression still prints the table but does not fail.
+  instructions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+      - name: Build the merge base and the branch
+        env:
+          BASE_REF: origin/${{ github.base_ref || 'main' }}
+        run: |
+          base=$(git merge-base "$BASE_REF" HEAD)
+          # A push to main is its own merge base: compare with the commit before it.
+          if [ "$base" = "$(git rev-parse HEAD)" ]; then base=$(git rev-parse HEAD^); fi
+          git worktree add "$RUNNER_TEMP/base" "$base"
+          python -m venv "$RUNNER_TEMP/base-venv"
+          "$RUNNER_TEMP/base-venv/bin/pip" install "$RUNNER_TEMP/base"
+          python -m venv "$RUNNER_TEMP/head-venv"
+          "$RUNNER_TEMP/head-venv/bin/pip" install ".[dev]"
+      - name: Instruction counts against the merge base
+        working-directory: tests
+        env:
+          ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'accept-instruction-regression') }}
+        run: |
+          "$RUNNER_TEMP/head-venv/bin/python" -m performance_tests.instructions.compare \
+            --base-python "$RUNNER_TEMP/base-venv/bin/python" \
+            --head-python "$RUNNER_TEMP/head-venv/bin/python" || [ "$ACCEPTED" = "true" ]
+      - name: Design and memory claims
+        working-directory: tests
+        run: '"$RUNNER_TEMP/head-venv/bin/pytest" performance_tests/instructions -v'
+
+  # Walltime at rising sizes, asserting the scaling exponent: superlinear
+  # behaviour only shows on inputs too large for callgrind.
+  complexity:
+    needs: complexity-files
     runs-on: ubuntu-latest
     strategy:
       # Every file reports: a failure in one must not cancel the others.
       fail-fast: false
       matrix:
-        file: ${{ fromJSON(needs.performance-files.outputs.files) }}
+        file: ${{ fromJSON(needs.complexity-files.outputs.files) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - name: Install
-        run: pip install -e ".[dev,benchmark]" vendor/blueprint_linters-*.whl
-      - name: Performance tests
+        run: pip install ".[dev]"
+      - name: Complexity tests
+        working-directory: tests
         env:
-          PERFORMANCE_FILE: ${{ matrix.file }}
-        run: |
-          cd tests/performance_tests
-          pytest "$PERFORMANCE_FILE" -v -s
+          COMPLEXITY_FILE: ${{ matrix.file }}
+        run: pytest "performance_tests/complexity/$COMPLEXITY_FILE" -v
+
+  # One realistic large input per workflow against a generous budget.
+  experience:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: pip install ".[dev]"
+      - name: Customer experience tests
+        working-directory: tests
+        run: pytest performance_tests/experience -v
 
   profiles:
     runs-on: ubuntu-latest
