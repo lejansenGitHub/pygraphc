@@ -90,10 +90,11 @@ jobs:
       - name: Integration cases
         run: pytest tests/integration_tests/ -x -v
 
-  # Deterministic tier: callgrind instruction counts of the branch against its
-  # merge base, both built the same way in this job, so a toolchain bump never
-  # shows up as a regression. A pull request labelled
-  # accept-instruction-regression still prints the table but does not fail.
+  # Deterministic tier: callgrind instruction counts of the scenarios and of
+  # every workflow phase, branch against merge base, both built the same way in
+  # this job, so a toolchain bump never shows up as a change. Any changed count
+  # fails; a pull request labelled accept-instruction-change still prints the
+  # table but does not fail.
   instructions:
     runs-on: ubuntu-latest
     steps:
@@ -122,7 +123,7 @@ jobs:
       - name: Instruction counts against the merge base
         working-directory: tests
         env:
-          ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'accept-instruction-regression') }}
+          ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'accept-instruction-change') }}
         run: |
           "$RUNNER_TEMP/head-venv/bin/python" -m performance_tests.instructions.compare \
             --base-python "$RUNNER_TEMP/base-venv/bin/python" \
@@ -173,8 +174,8 @@ jobs:
     runs-on: ubuntu-latest
     # Off the critical path on purpose: the uploaded artifact is the point, the
     # timing on a shared runner is not, so this job never gates a merge. The
-    # guard lives in the unit suite, where it compares both phase shares and
-    # absolute phase times against benchmarks/baseline.json.
+    # guard is the instructions job, which counts every phase of these
+    # workflows against the merge base.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

@@ -1101,7 +1101,7 @@ kernel against the Python objects built around it, and a flat profile hides it.
 
 ```bash
 python benchmarks/profile_workflows.py               # full sizes, writes profiles/
-python benchmarks/profile_workflows.py --size guard   # the small sizes the guard uses
+python benchmarks/profile_workflows.py --size guard   # the sizes the instruction tier counts at
 python benchmarks/profile_workflows.py --list         # the registry
 ```
 
@@ -1110,7 +1110,7 @@ python benchmarks/profile_workflows.py --list         # the registry
 | File | What it is |
 |------|------------|
 | `summary.md` | the table to open first: total wall time, every phase with its time and its share, the `tracemalloc` peak and the networkx reference per workflow |
-| `summary.json` | the same numbers machine-readably, the shape `benchmarks/baseline.json` uses |
+| `summary.json` | the same numbers machine-readably |
 | `<workflow>.prof` | raw `cProfile` output — `python -m pstats` or `snakeviz profiles/<workflow>.prof` |
 | `<workflow>.txt` | that profile's top 25 entries by cumulative and by total time |
 
@@ -1133,52 +1133,12 @@ them to find *which* call, never to quote a duration. `release inputs` is the
 teardown of the workflow's own inputs, attributed on purpose so the phases add
 up to the total.
 
-**The guard.** `tests/unit_tests/test_workflow_profiles.py` runs the harness at
-the small sizes and fails when a phase's share of its workflow's library time
-moves by more than 20 percentage points, when a phase above 50 microseconds or
-a whole workflow's library time exceeds eight times its baseline, or when the
-phases stop accounting for 95% of the measured total. The margins are wide on
-purpose — a guard that fires on CI noise gets deleted — so a failure means the
-shape of a workflow changed, and the failure message prints the whole table.
-
-No gate fails on a single run: a workflow that trips is measured again, and
-only what survives the fastest of three fresh runs is reported, which is what
-keeps a scheduler stall on a shared runner from reading as a regression. That
-applies to the share gate too, and not for symmetry: the harness reports the
-phases of the round with the best total, so one stall inside one phase skews
-every share in that workflow. Measured on an oversubscribed machine, the share
-gate failed ten runs in twenty without the confirmation pass and one with it.
-
-The two gates cover different regressions, and the file says so with the
-arithmetic. A share needs a phase to be a sizeable part of its workflow before
-20 points can move: at half the library time 2.4x fires, at a twentieth 6.4x,
-at a hundredth 26.4x, and above four fifths growth can never fire at all. The
-absolute gate is what covers the kernels, which are single-digit percentages of
-their workflows however large the graph: an injected tenfold regression in the
-label kernel, the degree kernel or the bridge kernel fails the suite every
-time, and in the C reduction loop — a phase of about 100 microseconds — ten
-times fails about two runs in three while twelve times fails every run, because
-both sides of that comparison are minima. Phases
-below the floor stay unguarded and the file names them; the guard sizes of four
-workflows are chosen to keep their kernels above it.
-
-**Regenerating the baseline.**
-
-```bash
-python benchmarks/profile_workflows.py --size guard --write-baseline
-```
-
-Legitimate when the registry changed (a new workflow, a renamed or re-cut
-phase), when a deliberate optimisation moved work from one phase to another, or
-when the reference machine in `benchmarks/baseline.json` is no longer the one
-the numbers should come from. Not legitimate as a way past a red guard: if a
-phase grew and you cannot say why, the baseline is the evidence and overwriting
-it destroys the finding. Regenerate in its own commit, say which phase moved
-and why, and keep the machine, date and revision blocks the file records. The
-revision is the commit the tree was at when the numbers were taken, with a
-dirty marker when it had uncommitted changes — which it normally does, since a
-baseline is regenerated just before the commit that carries it, so expect it to
-name that commit's parent.
+**The guard.** The instruction tier (see [Performance tests](#performance-tests))
+runs every workflow at its guard size under callgrind and counts the
+instructions of each phase, named `workflow/<workflow>/<phase>`. CI compares
+every phase against the merge base and fails on any change, so a phase that
+grows or shrinks by a single instruction is reviewed; nothing is compared
+against a stored baseline, so no baseline needs regenerating.
 
 ### Comparing the reduction engines
 
@@ -1280,9 +1240,12 @@ and is skipped otherwise.
   degree, depth, component count. Superlinear behaviour often shows only at
   large sizes, so this tier stays on walltime.
 - **instructions/**: deterministic callgrind instruction counts of small and
-  medium scenarios. CI builds the merge base and the branch and fails on a
-  scenario that grows by more than 2%; a pull request labelled
-  `accept-instruction-regression` still gets the table but does not fail.
+  medium scenarios and of every phase of the workflows in
+  `benchmarks/profile_workflows.py`. CI builds the merge base and the branch
+  with the same packages and fails on any changed count, in either direction:
+  the counts are deterministic, so every change is real and gets reviewed. A
+  pull request labelled `accept-instruction-change` still gets the table but
+  does not fail.
   The design claims ("a mask costs at most 15%") are instruction-count ratios
   in `test_claims.py`. Needs valgrind, so it runs on Linux; on macOS:
 

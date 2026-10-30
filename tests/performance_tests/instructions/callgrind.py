@@ -18,11 +18,17 @@ from pathlib import Path
 
 MARKER_SOURCE = """#include <valgrind/callgrind.h>
 
-void run_measured(void (*callback)(void)) {
-    CALLGRIND_TOGGLE_COLLECT;
-    callback();
+void start_measure(void) { CALLGRIND_TOGGLE_COLLECT; }
+
+void stop_measure(void) {
     CALLGRIND_TOGGLE_COLLECT;
     CALLGRIND_DUMP_STATS;
+}
+
+void run_measured(void (*callback)(void)) {
+    start_measure();
+    callback();
+    stop_measure();
 }
 """
 
@@ -57,7 +63,11 @@ def _dump_number(profile: Path) -> int:
 
 
 def count_instructions(scenario_names: list[str], python: str = sys.executable) -> dict[str, int]:
-    """Instruction count of every scenario that the given interpreter can prepare; others are left out."""
+    """Instruction count of every scenario that the given interpreter can prepare; others are left out.
+
+    A ``workflow/<name>`` entry expands to one count per phase of that
+    workflow; a phase entered several times is the sum of its dumps.
+    """
     with tempfile.TemporaryDirectory() as directory_name:
         directory = Path(directory_name)
         library = build_marker(directory)
@@ -87,7 +97,7 @@ def count_instructions(scenario_names: list[str], python: str = sys.executable) 
             capture_output=True,
             text=True,
         )
-        measured_names = manifest.read_text(encoding="utf-8").split()
+        measured_names = manifest.read_text(encoding="utf-8").splitlines()
         profiles = sorted(directory.glob("callgrind.out.*"), key=_dump_number)
         if len(profiles) != len(measured_names):
             message = (
@@ -96,4 +106,7 @@ def count_instructions(scenario_names: list[str], python: str = sys.executable) 
                 f"valgrind stderr: {completed.stderr[-3000:]}"
             )
             raise RuntimeError(message)
-        return {name: _total_instructions(profile) for name, profile in zip(measured_names, profiles, strict=True)}
+        counts: dict[str, int] = {}
+        for name, profile in zip(measured_names, profiles, strict=True):
+            counts[name] = counts.get(name, 0) + _total_instructions(profile)
+        return counts

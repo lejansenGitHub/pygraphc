@@ -16,9 +16,8 @@ comes from a third run for the same reason.
 Usage::
 
     python benchmarks/profile_workflows.py                  # full sizes
-    python benchmarks/profile_workflows.py --size guard      # the guard's sizes
+    python benchmarks/profile_workflows.py --size guard      # the instruction tier's sizes
     python benchmarks/profile_workflows.py --only reduction_log
-    python benchmarks/profile_workflows.py --size guard --write-baseline
     python benchmarks/profile_workflows.py --compare-engines   # the four reduction engines
 
 Artifacts land in ``profiles/`` (gitignored): one ``.prof`` per workflow for
@@ -39,7 +38,7 @@ import sys
 import textwrap
 import time
 import tracemalloc
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -79,7 +78,7 @@ class PhaseTimer:
         self.setup_phases: set[str] = set()
 
     @contextmanager
-    def phase(self, name: str, *, setup: bool = False) -> Iterator[None]:
+    def phase(self, name: str, *, setup: bool = False) -> Generator[None, None, None]:
         """Add the wall time of the block to ``name``; re-entering a name accumulates."""
         if setup:
             self.setup_phases.add(name)
@@ -116,12 +115,11 @@ class Workflow:
     body: WorkflowBody
     default_size: int
     guard_size: int
-    """The size the guard test measures at.
+    """The size the instruction tier counts every phase at.
 
-    Small enough to run in a unit test suite, large enough that the phases the
-    workflow exists to watch stay above the guard's absolute floor of 50
-    microseconds; ``tests/unit_tests/test_workflow_profiles.py`` says which
-    phases fall below it anyway.
+    Small enough to run under callgrind, large enough that the phases the
+    workflow exists to watch do real work; see
+    ``tests/performance_tests/instructions/workflows.py``.
     """
     networkx_reference: NetworkxReference | None = None
     networkx_note: str = ""
@@ -1592,11 +1590,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--size", choices=["default", "guard"], default="default", help="which size profile to run")
     parser.add_argument("--only", action="append", default=[], help="run only this workflow, repeatable")
     parser.add_argument("--output", type=Path, default=Path("profiles"), help="artifact directory")
-    parser.add_argument(
-        "--write-baseline",
-        action="store_true",
-        help="also write benchmarks/baseline.json from this run (guard sizes only)",
-    )
     parser.add_argument("--list", action="store_true", help="list the workflows and exit")
     parser.add_argument(
         "--compare-engines",
@@ -1638,10 +1631,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     selected = tuple(WORKFLOWS_BY_NAME[name] for name in arguments.only) if arguments.only else WORKFLOWS
 
-    if arguments.write_baseline and arguments.size != "guard":
-        emit("--write-baseline needs --size guard: the guard compares against the small sizes")
-        return 2
-
     emit(f"profiling {len(selected)} workflows at the {arguments.size} sizes")
     measurements = run(selected, arguments.size, arguments.output)
     emit("")
@@ -1649,10 +1638,6 @@ def main(argv: list[str] | None = None) -> int:
     emit("")
     emit(f"artifacts in {arguments.output}/: one .prof and .txt per workflow, summary.md, summary.json")
 
-    if arguments.write_baseline:
-        baseline_path = Path(__file__).with_name("baseline.json")
-        baseline_path.write_text(json.dumps(summary_payload(measurements, arguments.size), indent=2) + "\n")
-        emit(f"baseline written to {baseline_path}")
     return 0
 
 
