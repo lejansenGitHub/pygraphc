@@ -97,7 +97,8 @@ jobs:
   # still prints the table but does not fail.
   instructions:
     # Code generation differs by architecture (splitting _core.c made bridges 6%
-    # dearer on arm64 and 3% cheaper on x86-64), so both are counted.
+    # dearer on arm64 and 3% cheaper on x86-64), so a change to the C sources or
+    # the build is counted on both; any other change only on x86-64.
     strategy:
       fail-fast: false
       matrix:
@@ -110,15 +111,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install valgrind
-        run: sudo apt-get update && sudo apt-get install -y valgrind
-      - name: Build the merge base and the branch
+      - name: Find the merge base and whether arm64 needs counting
+        id: base
         env:
           BASE_REF: origin/${{ github.base_ref || 'main' }}
         run: |
           base=$(git merge-base "$BASE_REF" HEAD)
           # A push to main is its own merge base: compare with the commit before it.
           if [ "$base" = "$(git rev-parse HEAD)" ]; then base=$(git rev-parse HEAD^); fi
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+          if git diff --quiet "$base" HEAD -- 'src/*.c' 'src/*.h' setup.py pyproject.toml; then
+            echo "native=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "native=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install valgrind
+        if: matrix.runner == 'ubuntu-latest' || steps.base.outputs.native == 'true'
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+      - name: Build the merge base and the branch
+        if: matrix.runner == 'ubuntu-latest' || steps.base.outputs.native == 'true'
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          base="$BASE_SHA"
           git worktree add "$RUNNER_TEMP/base" "$base"
           # Both interpreters get exactly the same packages: a different set of
           # installed modules shifts the heap layout and the counts by about 1%.
@@ -127,6 +142,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/head-venv"
           "$RUNNER_TEMP/head-venv/bin/pip" install . pytest
       - name: Instruction counts against the merge base
+        if: matrix.runner == 'ubuntu-latest' || steps.base.outputs.native == 'true'
         working-directory: tests
         env:
           ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'accept-instruction-change') }}
@@ -135,6 +151,7 @@ jobs:
             --base-python "$RUNNER_TEMP/base-venv/bin/python" \
             --head-python "$RUNNER_TEMP/head-venv/bin/python" || [ "$ACCEPTED" = "true" ]
       - name: Design and memory claims
+        if: matrix.runner == 'ubuntu-latest' || steps.base.outputs.native == 'true'
         working-directory: tests
         run: '"$RUNNER_TEMP/head-venv/bin/pytest" performance_tests/instructions -v'
 

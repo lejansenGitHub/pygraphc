@@ -9,7 +9,8 @@ the run, in either direction, because an unexpected drop can mean skipped
 work as much as a rise can mean added work; every other change still appears
 in the table, which is sorted by the size of the change. The reviewer accepts
 a change by labelling the pull request; the table goes to stdout and, in CI,
-to the job summary.
+to the job summary. Both builds run at the same time: an instruction count does
+not depend on the load next to it.
 
     python -m performance_tests.instructions.compare --base-python BASE --head-python HEAD
 """
@@ -17,6 +18,7 @@ to the job summary.
 import argparse
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from performance_tests.instructions.callgrind import count_instructions
@@ -58,8 +60,10 @@ def main() -> int:
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     arguments = parser.parse_args()
     names = [*SCENARIOS, *workflow_scenario_names()]
-    base = count_instructions(names, arguments.base_python)
-    head = count_instructions(names, arguments.head_python)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        base_counts = executor.submit(count_instructions, names, arguments.base_python)
+        head_counts = executor.submit(count_instructions, names, arguments.head_python)
+        base, head = base_counts.result(), head_counts.result()
     table, changed = comparison_table(base, head, arguments.threshold)
     heading = f"Instruction counts against the merge base ({len(changed)} beyond {arguments.threshold:.1%})"
     report = f"### {heading}\n\n{table}\n"
