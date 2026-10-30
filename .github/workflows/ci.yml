@@ -92,11 +92,17 @@ jobs:
 
   # Deterministic tier: callgrind instruction counts of the scenarios and of
   # every workflow phase, branch against merge base, both built the same way in
-  # this job, so a toolchain bump never shows up as a change. Any changed count
-  # fails; a pull request labelled accept-instruction-change still prints the
-  # table but does not fail.
+  # this job, so a toolchain bump never shows up as a change. A count that moves
+  # by more than 0.5% fails; a pull request labelled accept-instruction-change
+  # still prints the table but does not fail.
   instructions:
-    runs-on: ubuntu-latest
+    # Code generation differs by architecture (splitting _core.c made bridges 6%
+    # dearer on arm64 and 3% cheaper on x86-64), so both are counted.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
