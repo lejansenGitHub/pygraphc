@@ -113,10 +113,12 @@ jobs:
           # A push to main is its own merge base: compare with the commit before it.
           if [ "$base" = "$(git rev-parse HEAD)" ]; then base=$(git rev-parse HEAD^); fi
           git worktree add "$RUNNER_TEMP/base" "$base"
+          # Both interpreters get exactly the same packages: a different set of
+          # installed modules shifts the heap layout and the counts by about 1%.
           python -m venv "$RUNNER_TEMP/base-venv"
-          "$RUNNER_TEMP/base-venv/bin/pip" install "$RUNNER_TEMP/base"
+          "$RUNNER_TEMP/base-venv/bin/pip" install "$RUNNER_TEMP/base" pytest
           python -m venv "$RUNNER_TEMP/head-venv"
-          "$RUNNER_TEMP/head-venv/bin/pip" install ".[dev]"
+          "$RUNNER_TEMP/head-venv/bin/pip" install . pytest
       - name: Instruction counts against the merge base
         working-directory: tests
         env:
