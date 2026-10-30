@@ -61,14 +61,13 @@ def count_instructions(scenario_names: list[str], python: str = sys.executable) 
             "PERFORMANCE_MANIFEST": str(manifest),
         }
         tests_directory = Path(__file__).resolve().parents[2]
-        subprocess.run(
+        completed = subprocess.run(
             [
                 "valgrind",
                 "--tool=callgrind",
                 f"--toggle-collect={MARKER_FUNCTION}",
                 f"--dump-after={MARKER_FUNCTION}",
                 f"--callgrind-out-file={directory / 'callgrind.out'}",
-                "--quiet",
                 python,
                 "-m",
                 "performance_tests.instructions.measure",
@@ -77,7 +76,16 @@ def count_instructions(scenario_names: list[str], python: str = sys.executable) 
             check=True,
             cwd=tests_directory,
             env=environment,
+            capture_output=True,
+            text=True,
         )
         measured_names = manifest.read_text(encoding="utf-8").split()
         profiles = sorted(directory.glob("callgrind.out.*"), key=_dump_number)
-        return {name: _total_instructions(profile) for name, profile in zip(measured_names, profiles, strict=False)}
+        if len(profiles) != len(measured_names):
+            message = (
+                f"{len(measured_names)} scenarios measured but {len(profiles)} callgrind dumps; "
+                f"files: {sorted(path.name for path in directory.iterdir())}; "
+                f"valgrind stderr: {completed.stderr[-3000:]}"
+            )
+            raise RuntimeError(message)
+        return {name: _total_instructions(profile) for name, profile in zip(measured_names, profiles, strict=True)}
