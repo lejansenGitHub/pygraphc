@@ -23,7 +23,7 @@ setup(
     ext_modules=[
         Extension(
             "pygraphc._core",
-            sources=["src/pygraphc/_core.c", *core_files("*.c")],
+            sources=core_files("*.c"),
             depends=core_files("*.h"),
             extra_compile_args=compile_args(),
         ),
