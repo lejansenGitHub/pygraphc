@@ -11,35 +11,35 @@ typedef struct {
     int node_count;
 } UnionFind;
 
-static inline int union_find_init(UnionFind *uf, int n) {
-    uf->node_count = n;
-    uf->parent = (int *)malloc(2 * (size_t)n * sizeof(int));
-    if (!uf->parent) return -1;
-    uf->rank = uf->parent + n;
-    for (int i = 0; i < n; i++) { uf->parent[i] = i; uf->rank[i] = 0; }
+static inline int union_find_init(UnionFind *union_find, int node_count) {
+    union_find->node_count = node_count;
+    union_find->parent = (int *)malloc(2 * (size_t)node_count * sizeof(int));
+    if (!union_find->parent) return -1;
+    union_find->rank = union_find->parent + node_count;
+    for (int node = 0; node < node_count; node++) { union_find->parent[node] = node; union_find->rank[node] = 0; }
     return 0;
 }
 
-static inline void union_find_free(UnionFind *uf) {
-    free(uf->parent);  /* rank is part of same allocation */
+static inline void union_find_free(UnionFind *union_find) {
+    free(union_find->parent);  /* rank is part of same allocation */
 }
 
-static inline int union_find_find(UnionFind *uf, int x) {
-    while (uf->parent[x] != x) {
-        int next = uf->parent[uf->parent[x]];
-        uf->parent[x] = next;
-        x = next;
+static inline int union_find_find(UnionFind *union_find, int node) {
+    while (union_find->parent[node] != node) {
+        int next = union_find->parent[union_find->parent[node]];
+        union_find->parent[node] = next;
+        node = next;
     }
-    return x;
+    return node;
 }
 
-static inline void union_find_union(UnionFind *uf, int a, int b) {
-    a = union_find_find(uf, a);
-    b = union_find_find(uf, b);
-    if (a == b) return;
-    if (uf->rank[a] < uf->rank[b]) { int t = a; a = b; b = t; }
-    uf->parent[b] = a;
-    if (uf->rank[a] == uf->rank[b]) uf->rank[a]++;
+static inline void union_find_union(UnionFind *union_find, int first_node, int second_node) {
+    first_node = union_find_find(union_find, first_node);
+    second_node = union_find_find(union_find, second_node);
+    if (first_node == second_node) return;
+    if (union_find->rank[first_node] < union_find->rank[second_node]) { int swap = first_node; first_node = second_node; second_node = swap; }
+    union_find->parent[second_node] = first_node;
+    if (union_find->rank[first_node] == union_find->rank[second_node]) union_find->rank[first_node]++;
 }
 
 #endif
