@@ -432,7 +432,7 @@ list(view.connected_components())  # [{1, 2, 3}] — still connected via edge 1
 > request, before the code exists.
 
 An edge joins its **ports**, and every port sits at a node. An edge is written
-as a tuple of node ids: a pair is a line, exactly as before, and a longer tuple
+as a tuple of node ids: a pair is a two-port edge, exactly as before, and a longer tuple
 is an edge with that many ports. The position in the tuple is the port index,
 so ports are addressed as `(edge_index, port_index)`, never by node, and two
 ports of one edge at the same node stay distinguishable. pygraphc knows nothing
@@ -442,7 +442,7 @@ mapping.
 ```python
 graph = Graph(
     [1, 2, 3, 4, 5],
-    [(1, 2), (2, 3, 4), (4, 5)],   # a line, a three-port edge, a line
+    [(1, 2), (2, 3, 4), (4, 5)],   # a two-port edge, a three-port edge, a two-port edge
 )
 ```
 
@@ -458,7 +458,7 @@ Graph(node_ids, [(1, 2), ((1,), (2, 3)), ((4, 5), (6,))], directed=True)
 #                 1 -> 2   1 feeds 2 and 3   4 and 5 both feed 6
 ```
 
-**Graphs of lines behave exactly as before.** Every existing call, input
+**Graphs of two-port edges behave exactly as before.** Every existing call, input
 format and result keeps its meaning; edges with more ports only add to the
 interface.
 
@@ -486,7 +486,7 @@ named test.
 | 2 | Some ports masked, two or more active | the active ports stay joined; a masked port only detaches its node from this edge | the component of the active ports |
 | 3 | Exactly one active port | joins nothing, never critical | the component of that port |
 | 4 | No active port | as case 1 | none |
-| 5 | Two-port line with one port masked | case 3: joins nothing, as if the line were masked | the component of the active end |
+| 5 | Two-port edge with one port masked | case 3: joins nothing, as if the edge were masked | the component of the active end |
 | 6 | Node masked | the node leaves every result; its ports are inactive, the other ports of those edges stay joined | as cases 2 to 4 for the remaining ports |
 | 7 | Two ports of one edge at the same node, one masked | the node stays attached through the other port | unchanged |
 | 8 | All ports at one node | joins nothing, with or without masks | that node's component |
@@ -508,17 +508,17 @@ graph.without_nodes([3])          # node 3 leaves; ports at 2 and 4 stay joined 
 graph.without_ports([(1, 0)]).without_nodes([4])   # one active port left: joins nothing (case 3)
 ```
 
-`without_ports` takes `(edge_index, port_index)` pairs. A line's port 0 is its
-first node and port 1 its second, so masking one port of a line detaches it
-like masking the line (case 5).
+`without_ports` takes `(edge_index, port_index)` pairs. A two-port edge's port 0
+is its first node and port 1 its second, so masking one of its ports detaches
+it like masking the edge (case 5).
 
 #### Weights per port
 
 Weighted algorithms take one weight per port, in edge order and, within an
 edge, in port order. Passing through an edge from one port to another costs
 the entry port's weight plus the exit port's weight, which is how the star
-equivalent of a three-winding transformer is written down. A line keeps its
-single weight per edge: weights with one entry per edge are read as before,
+equivalent of a three-winding transformer is written down. Two-port edges keep
+their single weight per edge: weights with one entry per edge are read as before,
 and the per-port form is only needed when a graph has an edge with more than
 two ports.
 
@@ -535,9 +535,9 @@ so it has at least two ports.
 name an edge with more than two ports, so on a graph that has one, these
 methods raise an error naming their replacement instead of answering
 incompletely: `critical_edges()` returns the edge indices of every edge whose
-removal disconnects its component, lines and multiport edges alike, and
+removal disconnects its component, two-port and multiport edges alike, and
 `edge_indices_at(node_ids)` finds edges by their port nodes. On a graph of
-lines they behave as before, and the `*_with_branch_ids` methods stay as they
+two-port edges they behave as before, and the `*_with_branch_ids` methods stay as they
 are.
 
 #### Open points
