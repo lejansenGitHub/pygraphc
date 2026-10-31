@@ -26,7 +26,7 @@ jobs:
         run: python -c "from pygraphc._core import connected_components_ctx; from pygraphc._dag_learn import hill_climb_k2"
       - name: ruff check
         if: matrix.check == 'ruff'
-        run: ruff check src/ tests/ && ruff format --check src/ tests/
+        run: ruff check src/ tests/ dev_helpers/ && ruff format --check src/ tests/ dev_helpers/
       - name: mypy
         if: matrix.check == 'mypy'
         run: mypy src/
