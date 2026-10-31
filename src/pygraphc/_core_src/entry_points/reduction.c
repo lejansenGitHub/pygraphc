@@ -24,14 +24,14 @@ PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject
     if (!PyArg_ParseTupleAndKeywords(args, keywords, "OOO|OOOO", names, &capsule, &terminal_obj,
                                      &protected_obj, &emask_obj, &nmask_obj, &keep_obj, &blocked_obj))
         return NULL;
-    GraphCtx *graph = get_graphctx(capsule);
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
     if (graph->directed) {
         PyErr_SetString(PyExc_TypeError, "series_parallel_reduce requires an undirected graph");
         return NULL;
     }
-    int n = graph->nid.n;
-    Py_ssize_t m = graph->nid.el.m;
+    int n = graph->node_ids.node_count;
+    Py_ssize_t m = graph->node_ids.edges.edge_count;
     SPMasks masks;
     if (sp_parse_masks(terminal_obj, protected_obj, emask_obj, nmask_obj, keep_obj, blocked_obj, n, m, &masks) < 0)
         return NULL;
@@ -44,13 +44,13 @@ PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject
         return NULL;
     }
     for (int node = 0; node < n; node++)
-        state.node_alive[node] = !(masks.node && masks.node[node]);
+        state.node_alive[node] = !(masks.node_mask && masks.node_mask[node]);
 
-    int status = sp_load_edges(&state, graph, masks.edge, masks.node);
-    if (status == 0) status = sp_drop_terminal_free(&state, graph, n, masks.edge, masks.node, masks.terminal);
+    int status = sp_load_edges(&state, graph, masks.edge_mask, masks.node_mask);
+    if (status == 0) status = sp_drop_terminal_free(&state, graph, n, masks.edge_mask, masks.node_mask, masks.terminal);
     if (status == 0) status = sp_merge_all_parallels(&state, n, masks.protect);
     if (status == 0) {
-        sp_seed_candidates(&state, n, masks.terminal);
+        sp_enqueue_all_candidates(&state, n, masks.terminal);
         while (state.heap_size > 0 && status == 0) {
             int node = sp_pop(&state);
             if (!state.node_alive[node]) continue;
@@ -77,14 +77,14 @@ PyObject *py_sp_state_new(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "OOO|OOOO", &capsule, &terminal_obj, &protected_obj, &emask_obj,
                           &nmask_obj, &keep_obj, &blocked_obj))
         return NULL;
-    GraphCtx *graph = get_graphctx(capsule);
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
     if (graph->directed) {
         PyErr_SetString(PyExc_TypeError, "series_parallel_reduce requires an undirected graph");
         return NULL;
     }
-    int n = graph->nid.n;
-    Py_ssize_t m = graph->nid.el.m;
+    int n = graph->node_ids.node_count;
+    Py_ssize_t m = graph->node_ids.edges.edge_count;
     SPMasks masks;
     if (sp_parse_masks(terminal_obj, protected_obj, emask_obj, nmask_obj, keep_obj, blocked_obj, n, m, &masks) < 0)
         return NULL;
@@ -117,14 +117,14 @@ PyObject *py_sp_state_new(PyObject *self, PyObject *args) {
     memcpy(handle->pendant_keep_mask, masks.keep, nodes);
     memcpy(handle->series_blocked_mask, masks.blocked, nodes);
     for (int node = 0; node < n; node++)
-        handle->state.node_alive[node] = !(masks.node && masks.node[node]);
+        handle->state.node_alive[node] = !(masks.node_mask && masks.node_mask[node]);
 
-    int status = sp_load_edges(&handle->state, graph, masks.edge, masks.node);
+    int status = sp_load_edges(&handle->state, graph, masks.edge_mask, masks.node_mask);
     if (status == 0)
-        status = sp_drop_terminal_free(&handle->state, graph, n, masks.edge, masks.node, handle->terminal_mask);
+        status = sp_drop_terminal_free(&handle->state, graph, n, masks.edge_mask, masks.node_mask, handle->terminal_mask);
     sp_release_masks(&masks);
     if (status < 0) { sp_handle_release(handle); free(handle); return NULL; }
-    sp_seed_candidates(&handle->state, n, handle->terminal_mask);
+    sp_enqueue_all_candidates(&handle->state, n, handle->terminal_mask);
 
     PyObject *result = PyCapsule_New(handle, "pygraphc.SPHandle", sp_handle_destructor);
     if (!result) { sp_handle_release(handle); free(handle); return NULL; }
@@ -136,7 +136,7 @@ PyObject *py_sp_state_new(PyObject *self, PyObject *args) {
 PyObject *py_sp_state_free(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    SPHandle *handle = get_sphandle(capsule);
+    SPHandle *handle = get_sp_handle(capsule);
     if (!handle) return NULL;
     sp_handle_release(handle);
     Py_RETURN_NONE;
@@ -146,7 +146,7 @@ PyObject *py_sp_state_free(PyObject *self, PyObject *args) {
 PyObject *py_sp_state_graph(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    SPHandle *handle = get_sphandle(capsule);
+    SPHandle *handle = get_sp_handle(capsule);
     if (!handle) return NULL;
     return Py_NewRef(handle->owner);
 }
@@ -161,7 +161,7 @@ PyObject *py_sp_state_graph(PyObject *self, PyObject *args) {
 PyObject *py_sp_next_move(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    SPHandle *handle = get_sphandle(capsule);
+    SPHandle *handle = get_sp_handle(capsule);
     if (!handle) return NULL;
     SPState *state = &handle->state;
     int parts[4];
@@ -189,7 +189,7 @@ PyObject *py_sp_apply_move(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "O(iiiiii)", &capsule, &kind, &node, &edge_a, &edge_b,
                           &neighbour_a, &neighbour_b))
         return NULL;
-    SPHandle *handle = get_sphandle(capsule);
+    SPHandle *handle = get_sp_handle(capsule);
     if (!handle) return NULL;
     SPState *state = &handle->state;
     if (sp_check_edge(handle, edge_a, node, neighbour_a) < 0) return NULL;
@@ -222,7 +222,7 @@ PyObject *py_sp_pair_edges(PyObject *self, PyObject *args) {
     PyObject *capsule;
     int from_node, to_node;
     if (!PyArg_ParseTuple(args, "Oii", &capsule, &from_node, &to_node)) return NULL;
-    SPHandle *handle = get_sphandle(capsule);
+    SPHandle *handle = get_sp_handle(capsule);
     if (!handle) return NULL;
     SPState *state = &handle->state;
     if (from_node < 0 || from_node >= handle->node_count || to_node < 0 || to_node >= handle->node_count) {
@@ -247,7 +247,7 @@ PyObject *py_sp_apply_parallel(PyObject *self, PyObject *args) {
     PyObject *capsule, *edges_obj;
     int from_node, to_node;
     if (!PyArg_ParseTuple(args, "OiiO", &capsule, &from_node, &to_node, &edges_obj)) return NULL;
-    SPHandle *handle = get_sphandle(capsule);
+    SPHandle *handle = get_sp_handle(capsule);
     if (!handle) return NULL;
     Py_buffer view;
     if (PyObject_GetBuffer(edges_obj, &view, PyBUF_SIMPLE) < 0) return NULL;
@@ -274,7 +274,7 @@ PyObject *py_sp_batch_moves(PyObject *self, PyObject *args) {
     PyObject *capsule;
     int kind;
     if (!PyArg_ParseTuple(args, "Oi", &capsule, &kind)) return NULL;
-    SPHandle *handle = get_sphandle(capsule);
+    SPHandle *handle = get_sp_handle(capsule);
     if (!handle) return NULL;
     SPState *state = &handle->state;
 
@@ -332,7 +332,7 @@ PyObject *py_sp_apply_batch(PyObject *self, PyObject *args) {
     PyObject *capsule, *batch_obj;
     int kind;
     if (!PyArg_ParseTuple(args, "OiO", &capsule, &kind, &batch_obj)) return NULL;
-    SPHandle *handle = get_sphandle(capsule);
+    SPHandle *handle = get_sp_handle(capsule);
     if (!handle) return NULL;
     Py_buffer view;
     if (PyObject_GetBuffer(batch_obj, &view, PyBUF_SIMPLE) < 0) return NULL;
@@ -397,7 +397,7 @@ PyObject *py_sp_apply_batch(PyObject *self, PyObject *args) {
 PyObject *py_sp_state_log(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    SPHandle *handle = get_sphandle(capsule);
+    SPHandle *handle = get_sp_handle(capsule);
     if (!handle) return NULL;
     return sp_build_log(&handle->state, handle->node_count);
 }

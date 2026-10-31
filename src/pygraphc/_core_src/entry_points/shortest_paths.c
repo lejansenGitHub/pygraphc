@@ -28,10 +28,10 @@ PyObject *py_dijkstra(PyObject *self, PyObject *args) {
     EdgeList el;
     if (parse_edges(edges_obj, &el) < 0) return NULL;
     WeightList wl;
-    if (parse_weights(weights_obj, &wl, el.m) < 0) { free_edges(&el); return NULL; }
+    if (parse_weights(weights_obj, &wl, el.edge_count) < 0) { free_edges(&el); return NULL; }
 
-    AdjList al;
-    if (build_adj(n, &el, &al, 0) < 0) {
+    AdjacencyList al;
+    if (build_adjacency(n, &el, &al, 0) < 0) {
         free_edges(&el); free_weights(&wl); return NULL;
     }
     free_edges(&el);
@@ -43,7 +43,7 @@ PyObject *py_dijkstra(PyObject *self, PyObject *args) {
 
     if (!dist || !prev || !heap || !pos) {
         free(dist); free(prev); free(heap); free(pos);
-        free_adj(&al); free_weights(&wl);
+        free_adjacency(&al); free_weights(&wl);
         PyErr_NoMemory();
         return NULL;
     }
@@ -61,13 +61,13 @@ PyObject *py_dijkstra(PyObject *self, PyObject *args) {
     mh.size = 1;
 
     while (mh.size > 0) {
-        int u = mh_pop(&mh);
+        int u = min_heap_pop(&mh);
         if (u == target) break;
         if (dist[u] == HUGE_VAL) break;
 
         for (int i = al.offset[u]; i < al.offset[u + 1]; i++) {
-            int v = al.adj[i];
-            double w = wl.w[al.eid[i]];
+            int v = al.neighbors[i];
+            double w = wl.values[al.edge_indices[i]];
             double nd = dist[u] + w;
             if (nd < dist[v]) {
                 prev[v] = u;
@@ -76,10 +76,10 @@ PyObject *py_dijkstra(PyObject *self, PyObject *args) {
                     int p = mh.size++;
                     heap[p] = v;
                     pos[v] = p;
-                    mh_sift_up(&mh, p);
+                    min_heap_sift_up(&mh, p);
                 } else {
                     dist[v] = nd;
-                    mh_sift_up(&mh, pos[v]);
+                    min_heap_sift_up(&mh, pos[v]);
                 }
             }
         }
@@ -95,7 +95,7 @@ PyObject *py_dijkstra(PyObject *self, PyObject *args) {
         path_list = PyList_New(plen);
         if (!path_list) {
             free(dist); free(prev); free(heap); free(pos);
-            free_adj(&al); free_weights(&wl);
+            free_adjacency(&al); free_weights(&wl);
             return NULL;
         }
         int v = target;
@@ -107,14 +107,14 @@ PyObject *py_dijkstra(PyObject *self, PyObject *args) {
         path_list = PyList_New(0);
         if (!path_list) {
             free(dist); free(prev); free(heap); free(pos);
-            free_adj(&al); free_weights(&wl);
+            free_adjacency(&al); free_weights(&wl);
             return NULL;
         }
     }
 
     PyObject *res = Py_BuildValue("(dN)", final_dist, path_list);
     free(dist); free(prev); free(heap); free(pos);
-    free_adj(&al); free_weights(&wl);
+    free_adjacency(&al); free_weights(&wl);
     return res;
 }
 
@@ -137,12 +137,12 @@ PyObject *py_sssp_lengths(PyObject *self, PyObject *args) {
     EdgeList el;
     if (parse_edges(edges_obj, &el) < 0) { Py_DECREF(result_dict); return NULL; }
     WeightList wl;
-    if (parse_weights(weights_obj, &wl, el.m) < 0) {
+    if (parse_weights(weights_obj, &wl, el.edge_count) < 0) {
         free_edges(&el); Py_DECREF(result_dict); return NULL;
     }
 
-    AdjList al;
-    if (build_adj(n, &el, &al, 0) < 0) {
+    AdjacencyList al;
+    if (build_adjacency(n, &el, &al, 0) < 0) {
         free_edges(&el); free_weights(&wl);
         Py_DECREF(result_dict); return NULL;
     }
@@ -154,7 +154,7 @@ PyObject *py_sssp_lengths(PyObject *self, PyObject *args) {
 
     if (!dist || !heap || !pos) {
         free(dist); free(heap); free(pos);
-        free_adj(&al); free_weights(&wl); Py_DECREF(result_dict);
+        free_adjacency(&al); free_weights(&wl); Py_DECREF(result_dict);
         PyErr_NoMemory();
         return NULL;
     }
@@ -171,13 +171,13 @@ PyObject *py_sssp_lengths(PyObject *self, PyObject *args) {
     mh.size = 1;
 
     while (mh.size > 0) {
-        int u = mh_pop(&mh);
+        int u = min_heap_pop(&mh);
         if (dist[u] == HUGE_VAL) break;
         if (use_cutoff && dist[u] > cutoff) break;
 
         for (int i = al.offset[u]; i < al.offset[u + 1]; i++) {
-            int v = al.adj[i];
-            double w = wl.w[al.eid[i]];
+            int v = al.neighbors[i];
+            double w = wl.values[al.edge_indices[i]];
             double nd = dist[u] + w;
             if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
                 if (pos[v] == -1) {
@@ -185,10 +185,10 @@ PyObject *py_sssp_lengths(PyObject *self, PyObject *args) {
                     int p = mh.size++;
                     heap[p] = v;
                     pos[v] = p;
-                    mh_sift_up(&mh, p);
+                    min_heap_sift_up(&mh, p);
                 } else {
                     dist[v] = nd;
-                    mh_sift_up(&mh, pos[v]);
+                    min_heap_sift_up(&mh, pos[v]);
                 }
             }
         }
@@ -204,7 +204,7 @@ PyObject *py_sssp_lengths(PyObject *self, PyObject *args) {
     }
 
     free(dist); free(heap); free(pos);
-    free_adj(&al); free_weights(&wl);
+    free_adjacency(&al); free_weights(&wl);
     return result_dict;
 }
 
@@ -233,13 +233,13 @@ PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
         Py_DECREF(src_fast); Py_DECREF(result_dict); return NULL;
     }
     WeightList wl;
-    if (parse_weights(weights_obj, &wl, el.m) < 0) {
+    if (parse_weights(weights_obj, &wl, el.edge_count) < 0) {
         free_edges(&el); Py_DECREF(src_fast); Py_DECREF(result_dict);
         return NULL;
     }
 
-    AdjList al;
-    if (build_adj(n, &el, &al, 0) < 0) {
+    AdjacencyList al;
+    if (build_adjacency(n, &el, &al, 0) < 0) {
         free_edges(&el); free_weights(&wl);
         Py_DECREF(src_fast); Py_DECREF(result_dict);
         return NULL;
@@ -252,7 +252,7 @@ PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
 
     if (!dist || !heap || !pos) {
         free(dist); free(heap); free(pos);
-        free_adj(&al); free_weights(&wl);
+        free_adjacency(&al); free_weights(&wl);
         Py_DECREF(src_fast); Py_DECREF(result_dict);
         PyErr_NoMemory();
         return NULL;
@@ -271,7 +271,7 @@ PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
         int s = (int)PyLong_AsLong(src_items[i]);
         if (PyErr_Occurred()) {
             free(dist); free(heap); free(pos);
-            free_adj(&al); free_weights(&wl);
+            free_adjacency(&al); free_weights(&wl);
             Py_DECREF(src_fast); Py_DECREF(result_dict);
             return NULL;
         }
@@ -280,19 +280,19 @@ PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
             int p = mh.size++;
             heap[p] = s;
             pos[s] = p;
-            mh_sift_up(&mh, p);
+            min_heap_sift_up(&mh, p);
         }
     }
     Py_DECREF(src_fast);
 
     while (mh.size > 0) {
-        int u = mh_pop(&mh);
+        int u = min_heap_pop(&mh);
         if (dist[u] == HUGE_VAL) break;
         if (use_cutoff && dist[u] > cutoff) break;
 
         for (int i = al.offset[u]; i < al.offset[u + 1]; i++) {
-            int v = al.adj[i];
-            double w = wl.w[al.eid[i]];
+            int v = al.neighbors[i];
+            double w = wl.values[al.edge_indices[i]];
             double nd = dist[u] + w;
             if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
                 if (pos[v] == -1) {
@@ -300,10 +300,10 @@ PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
                     int p = mh.size++;
                     heap[p] = v;
                     pos[v] = p;
-                    mh_sift_up(&mh, p);
+                    min_heap_sift_up(&mh, p);
                 } else {
                     dist[v] = nd;
-                    mh_sift_up(&mh, pos[v]);
+                    min_heap_sift_up(&mh, pos[v]);
                 }
             }
         }
@@ -319,7 +319,7 @@ PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
     }
 
     free(dist); free(heap); free(pos);
-    free_adj(&al); free_weights(&wl);
+    free_adjacency(&al); free_weights(&wl);
     return result_dict;
 }
 
@@ -330,41 +330,41 @@ PyObject *py_dijkstra_nid(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "OOOOO", &nids, &edges, &wobj, &src_obj, &tgt_obj))
         return NULL;
 
-    NidContext ctx;
-    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
-    int n = ctx.n;
+    NodeIdContext ctx;
+    if (node_id_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.node_count;
 
     long sn = PyLong_AsLong(src_obj), tn = PyLong_AsLong(tgt_obj);
-    if (PyErr_Occurred()) { nid_free(&ctx); return NULL; }
-    int source = n > 0 ? intmap_get(&ctx.im, sn) : -1;
-    int target = n > 0 ? intmap_get(&ctx.im, tn) : -1;
+    if (PyErr_Occurred()) { node_id_context_free(&ctx); return NULL; }
+    int source = n > 0 ? intmap_get(&ctx.node_index_by_node_id, sn) : -1;
+    int target = n > 0 ? intmap_get(&ctx.node_index_by_node_id, tn) : -1;
 
     if (source == target && source >= 0) {
         PyObject *path = PyList_New(1);
-        Py_INCREF(ctx.nid_items[source]);
-        PyList_SET_ITEM(path, 0, ctx.nid_items[source]);
-        nid_free(&ctx);
+        Py_INCREF(ctx.node_id_items[source]);
+        PyList_SET_ITEM(path, 0, ctx.node_id_items[source]);
+        node_id_context_free(&ctx);
         return Py_BuildValue("(dN)", 0.0, path);
     }
     if (n == 0 || source < 0 || target < 0) {
-        nid_free(&ctx);
+        node_id_context_free(&ctx);
         PyObject *p = PyList_New(0);
         return Py_BuildValue("(dN)", HUGE_VAL, p);
     }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl, ctx.el.m) < 0) { nid_free(&ctx); return NULL; }
-    AdjList al;
-    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); free_weights(&wl); return NULL; }
+    if (parse_weights(wobj, &wl, ctx.edges.edge_count) < 0) { node_id_context_free(&ctx); return NULL; }
+    AdjacencyList al;
+    if (build_adjacency(n, &ctx.edges, &al, 0) < 0) { node_id_context_free(&ctx); free_weights(&wl); return NULL; }
 
-    BidiPath bp;
-    int failed = bidi_dijkstra(n, &al, wl.w, NULL, NULL, 0, source, target, &bp) < 0;
-    PyObject *path = failed ? NULL : bidi_path_to_list(&bp, &ctx);
+    BidirectionalPath bp;
+    int failed = bidirectional_dijkstra(n, &al, wl.values, NULL, NULL, 0, source, target, &bp) < 0;
+    PyObject *path = failed ? NULL : bidirectional_path_to_list(&bp, &ctx);
     free(bp.path);
-    free_adj(&al); free_weights(&wl);
-    if (!path) { nid_free(&ctx); return NULL; }
+    free_adjacency(&al); free_weights(&wl);
+    if (!path) { node_id_context_free(&ctx); return NULL; }
     PyObject *res = Py_BuildValue("(dN)", bp.weight, path);
-    nid_free(&ctx);
+    node_id_context_free(&ctx);
     return res;
 }
 
@@ -377,28 +377,28 @@ PyObject *py_sssp_nid(PyObject *self, PyObject *args) {
         return NULL;
 
     int use_cutoff = (cutoff >= 0.0);
-    NidContext ctx;
-    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
-    int n = ctx.n;
+    NodeIdContext ctx;
+    if (node_id_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.node_count;
 
     PyObject *rd = PyDict_New();
-    if (!rd) { nid_free(&ctx); return NULL; }
+    if (!rd) { node_id_context_free(&ctx); return NULL; }
 
     long sn = PyLong_AsLong(src_obj);
-    if (PyErr_Occurred()) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
-    int source = n > 0 ? intmap_get(&ctx.im, sn) : -1;
-    if (n == 0 || source < 0) { nid_free(&ctx); return rd; }
+    if (PyErr_Occurred()) { node_id_context_free(&ctx); Py_DECREF(rd); return NULL; }
+    int source = n > 0 ? intmap_get(&ctx.node_index_by_node_id, sn) : -1;
+    if (n == 0 || source < 0) { node_id_context_free(&ctx); return rd; }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl, ctx.el.m) < 0) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
-    AdjList al;
-    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); free_weights(&wl); Py_DECREF(rd); return NULL; }
+    if (parse_weights(wobj, &wl, ctx.edges.edge_count) < 0) { node_id_context_free(&ctx); Py_DECREF(rd); return NULL; }
+    AdjacencyList al;
+    if (build_adjacency(n, &ctx.edges, &al, 0) < 0) { node_id_context_free(&ctx); free_weights(&wl); Py_DECREF(rd); return NULL; }
 
     double *dist = malloc(n*sizeof(double));
     int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
     if (!dist||!heap||!pos) {
         free(dist);free(heap);free(pos);
-        free_adj(&al); free_weights(&wl); nid_free(&ctx); Py_DECREF(rd);
+        free_adjacency(&al); free_weights(&wl); node_id_context_free(&ctx); Py_DECREF(rd);
         PyErr_NoMemory(); return NULL;
     }
     for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; pos[i]=-1; }
@@ -406,14 +406,14 @@ PyObject *py_sssp_nid(PyObject *self, PyObject *args) {
     dist[source]=0.0; heap[0]=source; pos[source]=0; mh.size=1;
 
     while (mh.size > 0) {
-        int u = mh_pop(&mh);
+        int u = min_heap_pop(&mh);
         if (dist[u]==HUGE_VAL) break;
         if (use_cutoff && dist[u]>cutoff) break;
         for (int i=al.offset[u]; i<al.offset[u+1]; i++) {
-            int v=al.adj[i]; double nd=dist[u]+wl.w[al.eid[i]];
+            int v=al.neighbors[i]; double nd=dist[u]+wl.values[al.edge_indices[i]];
             if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
-                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
-                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; min_heap_sift_up(&mh,p); }
+                else { dist[v]=nd; min_heap_sift_up(&mh, pos[v]); }
             }
         }
     }
@@ -421,13 +421,13 @@ PyObject *py_sssp_nid(PyObject *self, PyObject *args) {
     for (int i=0;i<n;i++) {
         if (dist[i] < HUGE_VAL && (!use_cutoff || dist[i] <= cutoff)) {
             PyObject *val = PyFloat_FromDouble(dist[i]);
-            PyDict_SetItem(rd, ctx.nid_items[i], val);
+            PyDict_SetItem(rd, ctx.node_id_items[i], val);
             Py_DECREF(val);
         }
     }
 
     free(dist);free(heap);free(pos);
-    free_adj(&al); free_weights(&wl); nid_free(&ctx);
+    free_adjacency(&al); free_weights(&wl); node_id_context_free(&ctx);
     return rd;
 }
 
@@ -440,27 +440,27 @@ PyObject *py_msdijk_nid(PyObject *self, PyObject *args) {
         return NULL;
 
     int use_cutoff = (cutoff >= 0.0);
-    NidContext ctx;
-    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
-    int n = ctx.n;
+    NodeIdContext ctx;
+    if (node_id_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.node_count;
 
     PyObject *rd = PyDict_New();
-    if (!rd) { nid_free(&ctx); return NULL; }
-    if (n == 0) { nid_free(&ctx); return rd; }
+    if (!rd) { node_id_context_free(&ctx); return NULL; }
+    if (n == 0) { node_id_context_free(&ctx); return rd; }
 
     PyObject *sf = PySequence_Fast(srcs_obj, "sources must be a sequence");
-    if (!sf) { nid_free(&ctx); Py_DECREF(rd); return NULL; }
+    if (!sf) { node_id_context_free(&ctx); Py_DECREF(rd); return NULL; }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl, ctx.el.m) < 0) { Py_DECREF(sf); nid_free(&ctx); Py_DECREF(rd); return NULL; }
-    AdjList al;
-    if (build_adj(n, &ctx.el, &al, 0) < 0) { Py_DECREF(sf); free_weights(&wl); nid_free(&ctx); Py_DECREF(rd); return NULL; }
+    if (parse_weights(wobj, &wl, ctx.edges.edge_count) < 0) { Py_DECREF(sf); node_id_context_free(&ctx); Py_DECREF(rd); return NULL; }
+    AdjacencyList al;
+    if (build_adjacency(n, &ctx.edges, &al, 0) < 0) { Py_DECREF(sf); free_weights(&wl); node_id_context_free(&ctx); Py_DECREF(rd); return NULL; }
 
     double *dist = malloc(n*sizeof(double));
     int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
     if (!dist||!heap||!pos) {
         free(dist);free(heap);free(pos);
-        free_adj(&al); free_weights(&wl); Py_DECREF(sf); nid_free(&ctx); Py_DECREF(rd);
+        free_adjacency(&al); free_weights(&wl); Py_DECREF(sf); node_id_context_free(&ctx); Py_DECREF(rd);
         PyErr_NoMemory(); return NULL;
     }
     for (int i=0;i<n;i++) { dist[i]=HUGE_VAL; pos[i]=-1; }
@@ -472,25 +472,25 @@ PyObject *py_msdijk_nid(PyObject *self, PyObject *args) {
         long sn = PyLong_AsLong(si[i]);
         if (PyErr_Occurred()) {
             free(dist);free(heap);free(pos);
-            free_adj(&al); free_weights(&wl); Py_DECREF(sf); nid_free(&ctx); Py_DECREF(rd);
+            free_adjacency(&al); free_weights(&wl); Py_DECREF(sf); node_id_context_free(&ctx); Py_DECREF(rd);
             return NULL;
         }
-        int s = intmap_get(&ctx.im, sn);
+        int s = intmap_get(&ctx.node_index_by_node_id, sn);
         if (s >= 0 && dist[s] > 0.0) {
-            dist[s]=0.0; int p=mh.size++; heap[p]=s; pos[s]=p; mh_sift_up(&mh,p);
+            dist[s]=0.0; int p=mh.size++; heap[p]=s; pos[s]=p; min_heap_sift_up(&mh,p);
         }
     }
     Py_DECREF(sf);
 
     while (mh.size > 0) {
-        int u = mh_pop(&mh);
+        int u = min_heap_pop(&mh);
         if (dist[u]==HUGE_VAL) break;
         if (use_cutoff && dist[u]>cutoff) break;
         for (int i=al.offset[u]; i<al.offset[u+1]; i++) {
-            int v=al.adj[i]; double nd=dist[u]+wl.w[al.eid[i]];
+            int v=al.neighbors[i]; double nd=dist[u]+wl.values[al.edge_indices[i]];
             if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
-                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
-                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; min_heap_sift_up(&mh,p); }
+                else { dist[v]=nd; min_heap_sift_up(&mh, pos[v]); }
             }
         }
     }
@@ -498,13 +498,13 @@ PyObject *py_msdijk_nid(PyObject *self, PyObject *args) {
     for (int i=0;i<n;i++) {
         if (dist[i] < HUGE_VAL && (!use_cutoff || dist[i] <= cutoff)) {
             PyObject *val = PyFloat_FromDouble(dist[i]);
-            PyDict_SetItem(rd, ctx.nid_items[i], val);
+            PyDict_SetItem(rd, ctx.node_id_items[i], val);
             Py_DECREF(val);
         }
     }
 
     free(dist);free(heap);free(pos);
-    free_adj(&al); free_weights(&wl); nid_free(&ctx);
+    free_adjacency(&al); free_weights(&wl); node_id_context_free(&ctx);
     return rd;
 }
 
@@ -512,19 +512,19 @@ PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *wobj, *src_obj, *tgt_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OOOO|OO", &capsule, &wobj, &src_obj, &tgt_obj, &mask_obj, &nmask_obj))
         return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
+    int n = g->node_ids.node_count;
 
     long sn = PyLong_AsLong(src_obj), tn = PyLong_AsLong(tgt_obj);
     if (PyErr_Occurred()) return NULL;
-    int source = n > 0 ? intmap_get(&g->nid.im, sn) : -1;
-    int target = n > 0 ? intmap_get(&g->nid.im, tn) : -1;
+    int source = n > 0 ? intmap_get(&g->node_ids.node_index_by_node_id, sn) : -1;
+    int target = n > 0 ? intmap_get(&g->node_ids.node_index_by_node_id, tn) : -1;
 
     if (source == target && source >= 0) {
         PyObject *path = PyList_New(1);
-        Py_INCREF(g->nid.nid_items[source]);
-        PyList_SET_ITEM(path, 0, g->nid.nid_items[source]);
+        Py_INCREF(g->node_ids.node_id_items[source]);
+        PyList_SET_ITEM(path, 0, g->node_ids.node_id_items[source]);
         return Py_BuildValue("(dN)", 0.0, path);
     }
     if (n == 0 || source < 0 || target < 0) {
@@ -533,7 +533,7 @@ PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     }
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) return NULL;
     const uint8_t *nmask; Py_buffer nmbuf;
     if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
 
@@ -544,12 +544,12 @@ PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl, g->nid.el.m) < 0) { release_mask(&nmbuf); release_mask(&mbuf); return NULL; }
-    if (!g->has_adj) { free_weights(&wl); release_mask(&nmbuf); release_mask(&mbuf); PyObject *p = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, p); }
+    if (parse_weights(wobj, &wl, g->node_ids.edges.edge_count) < 0) { release_mask(&nmbuf); release_mask(&mbuf); return NULL; }
+    if (!g->has_adjacency) { free_weights(&wl); release_mask(&nmbuf); release_mask(&mbuf); PyObject *p = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, p); }
 
-    BidiPath bp;
-    int failed = bidi_dijkstra(n, &g->al, wl.w, mask, nmask, g->directed, source, target, &bp) < 0;
-    PyObject *path = failed ? NULL : bidi_path_to_list(&bp, &g->nid);
+    BidirectionalPath bp;
+    int failed = bidirectional_dijkstra(n, &g->adjacency, wl.values, mask, nmask, g->directed, source, target, &bp) < 0;
+    PyObject *path = failed ? NULL : bidirectional_path_to_list(&bp, &g->node_ids);
     free(bp.path);
     free_weights(&wl); release_mask(&nmbuf); release_mask(&mbuf);
     if (!path) return NULL;
@@ -561,9 +561,9 @@ PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
     double cutoff;
     if (!PyArg_ParseTuple(args, "OOOd|OO", &capsule, &wobj, &src_obj, &cutoff, &mask_obj, &nmask_obj))
         return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
+    int n = g->node_ids.node_count;
     int use_cutoff = (cutoff >= 0.0);
 
     PyObject *rd = PyDict_New();
@@ -571,11 +571,11 @@ PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
 
     long sn = PyLong_AsLong(src_obj);
     if (PyErr_Occurred()) { Py_DECREF(rd); return NULL; }
-    int source = n > 0 ? intmap_get(&g->nid.im, sn) : -1;
-    if (n == 0 || source < 0 || !g->has_adj) return rd;
+    int source = n > 0 ? intmap_get(&g->node_ids.node_index_by_node_id, sn) : -1;
+    if (n == 0 || source < 0 || !g->has_adjacency) return rd;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(rd); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(rd); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
     if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(rd); return NULL; }
 
@@ -585,8 +585,8 @@ PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
     }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl, g->nid.el.m) < 0) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
-    AdjList *al = &g->al;
+    if (parse_weights(wobj, &wl, g->node_ids.edges.edge_count) < 0) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
+    AdjacencyList *al = &g->adjacency;
 
     double *dist = malloc(n*sizeof(double));
     int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
@@ -599,17 +599,17 @@ PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
     dist[source]=0.0; heap[0]=source; pos[source]=0; mh.size=1;
 
     while (mh.size > 0) {
-        int u = mh_pop(&mh);
+        int u = min_heap_pop(&mh);
         if (dist[u]==HUGE_VAL) break;
         if (use_cutoff && dist[u]>cutoff) break;
         for (int i=al->offset[u]; i<al->offset[u+1]; i++) {
-            if (mask && mask[al->eid[i]]) continue;
-            int v=al->adj[i];
+            if (mask && mask[al->edge_indices[i]]) continue;
+            int v=al->neighbors[i];
             if (nmask && nmask[v]) continue;
-            double nd=dist[u]+wl.w[al->eid[i]];
+            double nd=dist[u]+wl.values[al->edge_indices[i]];
             if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
-                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
-                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; min_heap_sift_up(&mh,p); }
+                else { dist[v]=nd; min_heap_sift_up(&mh, pos[v]); }
             }
         }
     }
@@ -618,7 +618,7 @@ PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
         if (nmask && nmask[i]) continue;
         if (dist[i] < HUGE_VAL && (!use_cutoff || dist[i] <= cutoff)) {
             PyObject *val = PyFloat_FromDouble(dist[i]);
-            PyDict_SetItem(rd, g->nid.nid_items[i], val);
+            PyDict_SetItem(rd, g->node_ids.node_id_items[i], val);
             Py_DECREF(val);
         }
     }
@@ -632,17 +632,17 @@ PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
     double cutoff;
     if (!PyArg_ParseTuple(args, "OOOd|OO", &capsule, &wobj, &srcs_obj, &cutoff, &mask_obj, &nmask_obj))
         return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
+    int n = g->node_ids.node_count;
     int use_cutoff = (cutoff >= 0.0);
 
     PyObject *rd = PyDict_New();
     if (!rd) return NULL;
-    if (n == 0 || !g->has_adj) return rd;
+    if (n == 0 || !g->has_adjacency) return rd;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(rd); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(rd); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
     if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(rd); return NULL; }
 
@@ -650,8 +650,8 @@ PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
     if (!sf) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
 
     WeightList wl;
-    if (parse_weights(wobj, &wl, g->nid.el.m) < 0) { Py_DECREF(sf); release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
-    AdjList *al = &g->al;
+    if (parse_weights(wobj, &wl, g->node_ids.edges.edge_count) < 0) { Py_DECREF(sf); release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd); return NULL; }
+    AdjacencyList *al = &g->adjacency;
 
     double *dist = malloc(n*sizeof(double));
     int *heap = malloc(n*sizeof(int)), *pos = malloc(n*sizeof(int));
@@ -672,25 +672,25 @@ PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
             free_weights(&wl); Py_DECREF(sf); release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(rd);
             return NULL;
         }
-        int s = intmap_get(&g->nid.im, sn);
+        int s = intmap_get(&g->node_ids.node_index_by_node_id, sn);
         if (s >= 0 && !(nmask && nmask[s]) && dist[s] > 0.0) {
-            dist[s]=0.0; int p=mh.size++; heap[p]=s; pos[s]=p; mh_sift_up(&mh,p);
+            dist[s]=0.0; int p=mh.size++; heap[p]=s; pos[s]=p; min_heap_sift_up(&mh,p);
         }
     }
     Py_DECREF(sf);
 
     while (mh.size > 0) {
-        int u = mh_pop(&mh);
+        int u = min_heap_pop(&mh);
         if (dist[u]==HUGE_VAL) break;
         if (use_cutoff && dist[u]>cutoff) break;
         for (int i=al->offset[u]; i<al->offset[u+1]; i++) {
-            if (mask && mask[al->eid[i]]) continue;
-            int v=al->adj[i];
+            if (mask && mask[al->edge_indices[i]]) continue;
+            int v=al->neighbors[i];
             if (nmask && nmask[v]) continue;
-            double nd=dist[u]+wl.w[al->eid[i]];
+            double nd=dist[u]+wl.values[al->edge_indices[i]];
             if (nd < dist[v] && (!use_cutoff || nd <= cutoff)) {
-                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; mh_sift_up(&mh,p); }
-                else { dist[v]=nd; mh_sift_up(&mh, pos[v]); }
+                if (pos[v]==-1) { dist[v]=nd; int p=mh.size++; heap[p]=v; pos[v]=p; min_heap_sift_up(&mh,p); }
+                else { dist[v]=nd; min_heap_sift_up(&mh, pos[v]); }
             }
         }
     }
@@ -699,7 +699,7 @@ PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
         if (nmask && nmask[i]) continue;
         if (dist[i] < HUGE_VAL && (!use_cutoff || dist[i] <= cutoff)) {
             PyObject *val = PyFloat_FromDouble(dist[i]);
-            PyDict_SetItem(rd, g->nid.nid_items[i], val);
+            PyDict_SetItem(rd, g->node_ids.node_id_items[i], val);
             Py_DECREF(val);
         }
     }

@@ -8,8 +8,8 @@
  * Returns topological order in *out_order (caller must free).
  * Returns number of nodes in order (== n if acyclic).
  */
-int toposort_core(int n, EdgeList *el, int **out_order) {
-    Py_ssize_t m = el->m;
+int topological_order(int n, EdgeList *el, int **out_order) {
+    Py_ssize_t m = el->edge_count;
     int *in_deg = (int *)calloc(n, sizeof(int));
     int *head   = (int *)calloc(n, sizeof(int));  /* per-node adjacency list head */
     int *nxt    = m > 0 ? (int *)malloc((size_t)m * sizeof(int)) : NULL;
@@ -27,7 +27,7 @@ int toposort_core(int n, EdgeList *el, int **out_order) {
 
     /* Build directed adjacency list + compute in-degrees */
     for (Py_ssize_t i = 0; i < m; i++) {
-        int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
+        int u = EDGE_FIRST_ENDPOINT(el, i), v = EDGE_SECOND_ENDPOINT(el, i);
         in_deg[v]++;
         adj_dst[i] = v;
         nxt[i] = head[u];
@@ -56,9 +56,9 @@ int toposort_core(int n, EdgeList *el, int **out_order) {
 
 /* ── toposort_ctx: topological sort from cached graph context ── */
 
-int toposort_core_masked(int n, EdgeList *el, const uint8_t *mask,
+int topological_order_masked(int n, EdgeList *el, const uint8_t *mask,
                          const uint8_t *node_mask, int **out_order) {
-    Py_ssize_t m = el->m;
+    Py_ssize_t m = el->edge_count;
     int *in_deg  = (int *)calloc(n, sizeof(int));
     int *head    = (int *)malloc((size_t)n * sizeof(int));
     int *nxt     = m > 0 ? (int *)malloc((size_t)m * sizeof(int)) : NULL;
@@ -76,7 +76,7 @@ int toposort_core_masked(int n, EdgeList *el, const uint8_t *mask,
     /* Build directed adjacency list + compute in-degrees, respecting masks */
     for (Py_ssize_t i = 0; i < m; i++) {
         if (mask && mask[i]) continue;
-        int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
+        int u = EDGE_FIRST_ENDPOINT(el, i), v = EDGE_SECOND_ENDPOINT(el, i);
         if (node_mask && (node_mask[u] || node_mask[v])) continue;
         in_deg[v]++;
         adj_dst[i] = v;

@@ -34,15 +34,15 @@ typedef struct {
     int interior;    /* eliminated node of a series move, removed node of a pendant move */
     int leaf_edge;   /* input edge index of a leaf */
     int absorber;    /* neighbour that absorbs the payload of a pendant move */
-} SPOp;
+} SPOperation;
 
 typedef struct {
-    int *edge_u;
-    int *edge_v;
-    int *edge_op;
+    int *edge_first_node;
+    int *edge_second_node;
+    int *edge_operation;
     int *loop_next;     /* next self-loop of the same node, -1 at the end */
     uint8_t *edge_alive;
-    int *half_next;     /* half 2e sits at edge_u[e], half 2e+1 at edge_v[e] */
+    int *half_next;     /* half 2e sits at edge_first_node[e], half 2e+1 at edge_second_node[e] */
     int *half_prev;
     int *node_head;     /* first half-edge of the node, -1 when isolated */
     int *degree;        /* non-loop incidences */
@@ -51,9 +51,9 @@ typedef struct {
     int *heap;          /* min-heap of candidate node indices, deduplicated by queued */
     uint8_t *queued;
     int *pair_scratch;  /* edges between one endpoint pair, gathered per series move */
-    SPOp *ops;
-    Py_ssize_t op_count;
-    Py_ssize_t op_capacity;
+    SPOperation *operations;
+    Py_ssize_t operation_count;
+    Py_ssize_t operation_capacity;
     int heap_size;
     int edge_slots;
     Py_ssize_t edge_capacity;
@@ -66,8 +66,8 @@ typedef struct { int first_slot; int start; int count; int from_node; int to_nod
 /* The four masks of a reduction, parsed together and released together. */
 typedef struct {
     const uint8_t *terminal; const uint8_t *protect; const uint8_t *keep; const uint8_t *blocked;
-    const uint8_t *edge; const uint8_t *node;
-    Py_buffer terminal_buf, protect_buf, keep_buf, blocked_buf, edge_buf, node_buf;
+    const uint8_t *edge_mask; const uint8_t *node_mask;
+    Py_buffer terminal_buffer, protect_buffer, keep_buffer, blocked_buffer, edge_mask_buffer, node_mask_buffer;
     uint8_t *no_members;
 } SPMasks;
 
@@ -87,7 +87,7 @@ typedef struct {
 typedef struct {
     SPState state;
     PyObject *owner;         /* graph capsule the state was built from */
-    uint8_t *terminal_mask;  /* owned copies, one byte per node index */
+    uint8_t *terminal_mask;  /* owned copies, one byte per node index; a non-zero byte marks membership */
     uint8_t *protected_mask;
     uint8_t *pendant_keep_mask;
     uint8_t *series_blocked_mask;
@@ -115,10 +115,10 @@ PYGRAPHC_INTERNAL int sp_gather_pair(SPState *state, int from_node, int to_node,
                                      const uint8_t *protected_mask, int *members);
 PYGRAPHC_INTERNAL int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const uint8_t *protected_mask,
                               const uint8_t *pendant_keep_mask, const uint8_t *series_blocked_mask);
-PYGRAPHC_INTERNAL int sp_load_edges(SPState *state, GraphCtx *graph, const uint8_t *edge_mask, const uint8_t *node_mask);
-PYGRAPHC_INTERNAL int sp_drop_terminal_free(SPState *state, GraphCtx *graph, int n, const uint8_t *edge_mask,
+PYGRAPHC_INTERNAL int sp_load_edges(SPState *state, GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask);
+PYGRAPHC_INTERNAL int sp_drop_terminal_free(SPState *state, GraphContext *graph, int n, const uint8_t *edge_mask,
                                             const uint8_t *node_mask, const uint8_t *terminal_mask);
-PYGRAPHC_INTERNAL void sp_seed_candidates(SPState *state, int n, const uint8_t *terminal_mask);
+PYGRAPHC_INTERNAL void sp_enqueue_all_candidates(SPState *state, int n, const uint8_t *terminal_mask);
 PYGRAPHC_INTERNAL PyObject *sp_build_log(SPState *state, int n);
 PYGRAPHC_INTERNAL void sp_release_masks(SPMasks *masks);
 PYGRAPHC_INTERNAL int sp_parse_masks(PyObject *terminal_obj, PyObject *protected_obj, PyObject *emask_obj,
@@ -126,7 +126,7 @@ PYGRAPHC_INTERNAL int sp_parse_masks(PyObject *terminal_obj, PyObject *protected
                                      int n, Py_ssize_t m, SPMasks *masks);
 PYGRAPHC_INTERNAL void sp_handle_release(SPHandle *handle);
 PYGRAPHC_INTERNAL void sp_handle_destructor(PyObject *capsule);
-PYGRAPHC_INTERNAL SPHandle *get_sphandle(PyObject *capsule);
+PYGRAPHC_INTERNAL SPHandle *get_sp_handle(PyObject *capsule);
 PYGRAPHC_INTERNAL int sp_check_edge(SPHandle *handle, int edge, int node, int neighbour);
 PYGRAPHC_INTERNAL int sp_check_distinct_edges(int edge_a, int edge_b);
 PYGRAPHC_INTERNAL int sp_check_node_removable(SPHandle *handle, int node);

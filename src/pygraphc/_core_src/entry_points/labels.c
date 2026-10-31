@@ -19,12 +19,12 @@
 PyObject *py_component_labels_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
+    int n = g->node_ids.node_count;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) return NULL;
     const uint8_t *nmask; Py_buffer nmbuf;
     if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
 
@@ -32,16 +32,16 @@ PyObject *py_component_labels_ctx(PyObject *self, PyObject *args) {
     if (!result || n == 0) { release_mask(&nmbuf); release_mask(&mbuf); return result; }
 
     ComponentResult cr;
-    if (compute_components_masked(n, &g->nid.el, mask, nmask, &cr) < 0) {
+    if (compute_components_masked(n, &g->node_ids.edges, mask, nmask, &cr) < 0) {
         Py_DECREF(result); release_mask(&nmbuf); release_mask(&mbuf); return NULL;
     }
     release_mask(&mbuf);
 
-    int *smallest_index = (int *)malloc((size_t)cr.num_comp * sizeof(int));
+    int *smallest_index = (int *)malloc((size_t)cr.component_count * sizeof(int));
     if (!smallest_index) {
         free(cr.labels); Py_DECREF(result); release_mask(&nmbuf); PyErr_NoMemory(); return NULL;
     }
-    memset(smallest_index, -1, (size_t)cr.num_comp * sizeof(int));
+    memset(smallest_index, -1, (size_t)cr.component_count * sizeof(int));
     int32_t *labels = (int32_t *)PyBytes_AS_STRING(result);
     for (int i = 0; i < n; i++) {
         int component = cr.labels[i];
@@ -65,10 +65,10 @@ PyObject *py_component_labels_ctx(PyObject *self, PyObject *args) {
 PyObject *py_quotient_edges_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *labels_obj, *mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|O", &capsule, &labels_obj, &mask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
-    Py_ssize_t m = g->nid.el.m;
+    int n = g->node_ids.node_count;
+    Py_ssize_t m = g->node_ids.edges.edge_count;
 
     const int32_t *labels; Py_buffer lbuf;
     if (parse_labels(labels_obj, n, &labels, &lbuf) < 0) return NULL;
@@ -85,8 +85,8 @@ PyObject *py_quotient_edges_ctx(PyObject *self, PyObject *args) {
 
     for (Py_ssize_t i = 0; i < m; i++) {
         if (mask && mask[i]) continue;
-        int32_t from_label = labels[EDGE_SRC(&g->nid.el, i)];
-        int32_t to_label = labels[EDGE_DST(&g->nid.el, i)];
+        int32_t from_label = labels[EDGE_FIRST_ENDPOINT(&g->node_ids.edges, i)];
+        int32_t to_label = labels[EDGE_SECOND_ENDPOINT(&g->node_ids.edges, i)];
         if (from_label < 0 || to_label < 0) continue;
         if (from_label == to_label) { internal[internal_count++] = (int32_t)i; continue; }
         src_labels[crossing_count] = from_label;
@@ -115,10 +115,10 @@ PyObject *py_quotient_edges_ctx(PyObject *self, PyObject *args) {
 PyObject *py_degrees_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
-    Py_ssize_t m = g->nid.el.m;
+    int n = g->node_ids.node_count;
+    Py_ssize_t m = g->node_ids.edges.edge_count;
 
     const uint8_t *mask; Py_buffer mbuf;
     if (parse_mask(mask_obj, m, &mask, &mbuf) < 0) return NULL;
@@ -132,7 +132,7 @@ PyObject *py_degrees_ctx(PyObject *self, PyObject *args) {
 
     for (Py_ssize_t i = 0; i < m; i++) {
         if (mask && mask[i]) continue;
-        int u = EDGE_SRC(&g->nid.el, i), v = EDGE_DST(&g->nid.el, i);
+        int u = EDGE_FIRST_ENDPOINT(&g->node_ids.edges, i), v = EDGE_SECOND_ENDPOINT(&g->node_ids.edges, i);
         if (nmask && (nmask[u] || nmask[v])) continue;
         degrees[u]++;
         if (!g->directed) degrees[v]++;
@@ -151,23 +151,23 @@ PyObject *py_degrees_ctx(PyObject *self, PyObject *args) {
 PyObject *py_bcc_edge_labels_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
-    Py_ssize_t m = g->nid.el.m;
+    int n = g->node_ids.node_count;
+    Py_ssize_t m = g->node_ids.edges.edge_count;
 
     PyObject *result = PyBytes_FromStringAndSize(NULL, m * (Py_ssize_t)sizeof(int32_t));
     if (!result) return NULL;
     int32_t *labels = (int32_t *)PyBytes_AS_STRING(result);
     memset(labels, -1, (size_t)m * sizeof(int32_t));
-    if (n == 0 || m == 0 || !g->has_adj) return result;
+    if (n == 0 || m == 0 || !g->has_adjacency) return result;
 
     const uint8_t *mask; Py_buffer mbuf;
     if (parse_mask(mask_obj, m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
     if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     int *edge_stack = (int *)malloc((size_t)m * sizeof(int));
     if (!buf5 || !edge_stack) {
@@ -189,7 +189,7 @@ PyObject *py_bcc_edge_labels_ctx(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al->offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al->adj[i], eid = al->eid[i];
+                int v = al->neighbors[i], eid = al->edge_indices[i];
                 if (mask && mask[eid]) continue;
                 if (nmask && nmask[v]) continue;
                 if (eid == peid[u]) continue;

@@ -8,34 +8,34 @@ PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "OO|Op", &nids, &edges_or_src, &dst_obj, &directed))
         return NULL;
 
-    GraphCtx *g = (GraphCtx *)malloc(sizeof(GraphCtx));
+    GraphContext *g = (GraphContext *)malloc(sizeof(GraphContext));
     if (!g) { PyErr_NoMemory(); return NULL; }
-    g->has_adj = 0;
+    g->has_adjacency = 0;
     g->directed = directed;
 
     int rc;
     if (dst_obj != Py_None)
-        rc = nid_parse_split(nids, edges_or_src, dst_obj, &g->nid);
+        rc = node_id_parse_split(nids, edges_or_src, dst_obj, &g->node_ids);
     else
-        rc = nid_parse(nids, edges_or_src, &g->nid);
+        rc = node_id_parse(nids, edges_or_src, &g->node_ids);
     if (rc < 0) { free(g); return NULL; }
 
-    if (g->nid.n > 0 && g->nid.el.m > 0) {
-        if (build_adj(g->nid.n, &g->nid.el, &g->al, directed) < 0) {
-            nid_free(&g->nid);
+    if (g->node_ids.node_count > 0 && g->node_ids.edges.edge_count > 0) {
+        if (build_adjacency(g->node_ids.node_count, &g->node_ids.edges, &g->adjacency, directed) < 0) {
+            node_id_context_free(&g->node_ids);
             free(g);
             return NULL;
         }
-        g->has_adj = 1;
+        g->has_adjacency = 1;
     }
 
-    return PyCapsule_New(g, "pygraphc.GraphCtx", graphctx_destructor);
+    return PyCapsule_New(g, "pygraphc.GraphCtx", graph_context_destructor);
 }
 
 PyObject *py_graph_is_directed(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
     return PyBool_FromLong(g->directed);
 }
@@ -43,17 +43,17 @@ PyObject *py_graph_is_directed(PyObject *self, PyObject *args) {
 PyObject *py_graph_edge_count(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    return PyLong_FromSsize_t(g->nid.el.m);
+    return PyLong_FromSsize_t(g->node_ids.edges.edge_count);
 }
 
 PyObject *py_graph_node_count(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    return PyLong_FromLong(g->nid.n);
+    return PyLong_FromLong(g->node_ids.node_count);
 }
 
 /* ── translate_edges(node_ids, nid_edges) -> index-based edges ── */

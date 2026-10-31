@@ -6,11 +6,11 @@
 /* Helper: resolve a node ID to its internal index via the IntMap.
  * Returns -1 if not found. Sets *found to 0 if not found, 1 if found.
  * Does NOT set a Python exception on not-found (callers return empty). */
-static int resolve_node(GraphCtx *g, PyObject *nid_obj, int *found) {
+static int resolve_node(GraphContext *g, PyObject *nid_obj, int *found) {
     long nid = PyLong_AsLong(nid_obj);
     if (nid == -1 && PyErr_Occurred()) { *found = -1; return -1; }
-    if (g->nid.n == 0 || !g->nid.im.keys) { *found = 0; return -1; }
-    int idx = intmap_get(&g->nid.im, nid);
+    if (g->node_ids.node_count == 0 || !g->node_ids.node_index_by_node_id.keys) { *found = 0; return -1; }
+    int idx = intmap_get(&g->node_ids.node_index_by_node_id, nid);
     *found = (idx >= 0) ? 1 : 0;
     return idx;
 }
@@ -19,7 +19,7 @@ static int resolve_node(GraphCtx *g, PyObject *nid_obj, int *found) {
 PyObject *py_neighbors_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
 
     int found;
@@ -28,22 +28,22 @@ PyObject *py_neighbors_ctx(PyObject *self, PyObject *args) {
 
     PyObject *result = PySet_New(NULL);
     if (!result) return NULL;
-    if (!found || !g->has_adj) return result;
+    if (!found || !g->has_adjacency) return result;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+    if (parse_mask(nmask_obj, g->node_ids.node_count, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
 
     if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return result; }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
-        int v = al->adj[e];
+        int v = al->neighbors[e];
         if (v == u) continue;  /* skip self-loops */
-        if (mask && mask[al->eid[e]]) continue;
+        if (mask && mask[al->edge_indices[e]]) continue;
         if (nmask && nmask[v]) continue;
-        PySet_Add(result, g->nid.nid_items[v]);
+        PySet_Add(result, g->node_ids.node_id_items[v]);
     }
     release_mask(&nmbuf); release_mask(&mbuf);
     return result;
@@ -53,7 +53,7 @@ PyObject *py_neighbors_ctx(PyObject *self, PyObject *args) {
 PyObject *py_predecessors_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
     if (!g->directed) {
         PyErr_SetString(PyExc_TypeError, "predecessors requires a directed graph");
@@ -66,22 +66,22 @@ PyObject *py_predecessors_ctx(PyObject *self, PyObject *args) {
 
     PyObject *result = PySet_New(NULL);
     if (!result) return NULL;
-    if (!found || !g->has_adj || !g->al.rev_offset) return result;
+    if (!found || !g->has_adjacency || !g->adjacency.reverse_offset) return result;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+    if (parse_mask(nmask_obj, g->node_ids.node_count, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
 
     if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return result; }
 
-    AdjList *al = &g->al;
-    for (int e = al->rev_offset[u]; e < al->rev_offset[u + 1]; e++) {
-        int v = al->rev_adj[e];
+    AdjacencyList *al = &g->adjacency;
+    for (int e = al->reverse_offset[u]; e < al->reverse_offset[u + 1]; e++) {
+        int v = al->reverse_neighbors[e];
         if (v == u) continue;
-        if (mask && mask[al->rev_eid[e]]) continue;
+        if (mask && mask[al->reverse_edge_indices[e]]) continue;
         if (nmask && nmask[v]) continue;
-        PySet_Add(result, g->nid.nid_items[v]);
+        PySet_Add(result, g->node_ids.node_id_items[v]);
     }
     release_mask(&nmbuf); release_mask(&mbuf);
     return result;
@@ -91,33 +91,33 @@ PyObject *py_predecessors_ctx(PyObject *self, PyObject *args) {
 PyObject *py_degree_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
 
     int found;
     int u = resolve_node(g, nid_obj, &found);
     if (found < 0) return NULL;
-    if (!found || !g->has_adj) return PyLong_FromLong(0);
+    if (!found || !g->has_adjacency) return PyLong_FromLong(0);
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) return NULL;
     const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
+    if (parse_mask(nmask_obj, g->node_ids.node_count, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
 
     if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return PyLong_FromLong(0); }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     int count = 0;
     if (g->directed) {
         for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
-            if (mask && mask[al->eid[e]]) continue;
-            if (nmask && nmask[al->adj[e]]) continue;
+            if (mask && mask[al->edge_indices[e]]) continue;
+            if (nmask && nmask[al->neighbors[e]]) continue;
             count++;
         }
     } else {
         for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
-            if (mask && mask[al->eid[e]]) continue;
-            int v = al->adj[e];
+            if (mask && mask[al->edge_indices[e]]) continue;
+            int v = al->neighbors[e];
             if (nmask && nmask[v]) continue;
             count += (v == u) ? 1 : 1;  /* self-loops appear twice in CSR, each counts 1 */
         }
@@ -130,7 +130,7 @@ PyObject *py_degree_ctx(PyObject *self, PyObject *args) {
 PyObject *py_in_degree_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
     if (!g->directed) {
         PyErr_SetString(PyExc_TypeError, "in_degree requires a directed graph");
@@ -140,20 +140,20 @@ PyObject *py_in_degree_ctx(PyObject *self, PyObject *args) {
     int found;
     int u = resolve_node(g, nid_obj, &found);
     if (found < 0) return NULL;
-    if (!found || !g->has_adj || !g->al.rev_offset) return PyLong_FromLong(0);
+    if (!found || !g->has_adjacency || !g->adjacency.reverse_offset) return PyLong_FromLong(0);
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) return NULL;
     const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
+    if (parse_mask(nmask_obj, g->node_ids.node_count, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
 
     if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return PyLong_FromLong(0); }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     int count = 0;
-    for (int e = al->rev_offset[u]; e < al->rev_offset[u + 1]; e++) {
-        if (mask && mask[al->rev_eid[e]]) continue;
-        if (nmask && nmask[al->rev_adj[e]]) continue;
+    for (int e = al->reverse_offset[u]; e < al->reverse_offset[u + 1]; e++) {
+        if (mask && mask[al->reverse_edge_indices[e]]) continue;
+        if (nmask && nmask[al->reverse_neighbors[e]]) continue;
         count++;
     }
     release_mask(&nmbuf); release_mask(&mbuf);
@@ -164,7 +164,7 @@ PyObject *py_in_degree_ctx(PyObject *self, PyObject *args) {
 PyObject *py_incident_edges_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
 
     int found;
@@ -173,23 +173,23 @@ PyObject *py_incident_edges_ctx(PyObject *self, PyObject *args) {
 
     PyObject *result = PyList_New(0);
     if (!result) return NULL;
-    if (!found || !g->has_adj) return result;
+    if (!found || !g->has_adjacency) return result;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+    if (parse_mask(nmask_obj, g->node_ids.node_count, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
 
     if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return result; }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     int prev_eid = -1;
     for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
-        int eid = al->eid[e];
+        int eid = al->edge_indices[e];
         if (eid == prev_eid) continue;  /* deduplicate self-loops in undirected CSR */
         prev_eid = eid;
         if (mask && mask[eid]) continue;
-        if (nmask && nmask[al->adj[e]]) continue;
+        if (nmask && nmask[al->neighbors[e]]) continue;
         PyObject *val = PyLong_FromLong(eid);
         PyList_Append(result, val);
         Py_DECREF(val);
@@ -202,7 +202,7 @@ PyObject *py_incident_edges_ctx(PyObject *self, PyObject *args) {
 PyObject *py_incoming_edges_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *nid_obj, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &nid_obj, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
     if (!g->directed) {
         PyErr_SetString(PyExc_TypeError, "incoming_edge_indices requires a directed graph");
@@ -215,20 +215,20 @@ PyObject *py_incoming_edges_ctx(PyObject *self, PyObject *args) {
 
     PyObject *result = PyList_New(0);
     if (!result) return NULL;
-    if (!found || !g->has_adj || !g->al.rev_offset) return result;
+    if (!found || !g->has_adjacency || !g->adjacency.reverse_offset) return result;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, g->nid.n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+    if (parse_mask(nmask_obj, g->node_ids.node_count, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
 
     if (nmask && nmask[u]) { release_mask(&nmbuf); release_mask(&mbuf); return result; }
 
-    AdjList *al = &g->al;
-    for (int e = al->rev_offset[u]; e < al->rev_offset[u + 1]; e++) {
-        int eid = al->rev_eid[e];
+    AdjacencyList *al = &g->adjacency;
+    for (int e = al->reverse_offset[u]; e < al->reverse_offset[u + 1]; e++) {
+        int eid = al->reverse_edge_indices[e];
         if (mask && mask[eid]) continue;
-        if (nmask && nmask[al->rev_adj[e]]) continue;
+        if (nmask && nmask[al->reverse_neighbors[e]]) continue;
         PyObject *val = PyLong_FromLong(eid);
         PyList_Append(result, val);
         Py_DECREF(val);
@@ -241,7 +241,7 @@ PyObject *py_incoming_edges_ctx(PyObject *self, PyObject *args) {
 PyObject *py_edge_indices_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *u_obj, *v_obj, *mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OOO|O", &capsule, &u_obj, &v_obj, &mask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
 
     int fu, fv;
@@ -252,16 +252,16 @@ PyObject *py_edge_indices_ctx(PyObject *self, PyObject *args) {
 
     PyObject *result = PyList_New(0);
     if (!result) return NULL;
-    if (!fu || !fv || !g->has_adj) return result;
+    if (!fu || !fv || !g->has_adjacency) return result;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     int prev_eid = -1;
     for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
-        if (al->adj[e] != v) continue;
-        int eid = al->eid[e];
+        if (al->neighbors[e] != v) continue;
+        int eid = al->edge_indices[e];
         if (eid == prev_eid) continue;  /* deduplicate self-loops in undirected CSR */
         prev_eid = eid;
         if (mask && mask[eid]) continue;

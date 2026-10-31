@@ -15,16 +15,16 @@ PyObject *py_bridges(PyObject *self, PyObject *args) {
 
     EdgeList el;
     if (parse_edges(edges_obj, &el) < 0) { Py_DECREF(result); return NULL; }
-    if (el.m == 0) { free_edges(&el); return result; }
+    if (el.edge_count == 0) { free_edges(&el); return result; }
 
-    AdjList al;
-    if (build_adj(n, &el, &al, 0) < 0) {
+    AdjacencyList al;
+    if (build_adjacency(n, &el, &al, 0) < 0) {
         free_edges(&el); Py_DECREF(result); return NULL;
     }
 
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     if (!buf5) {
-        free_adj(&al); free_edges(&el); Py_DECREF(result);
+        free_adjacency(&al); free_edges(&el); Py_DECREF(result);
         PyErr_NoMemory();
         return NULL;
     }
@@ -45,8 +45,8 @@ PyObject *py_bridges(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al.offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al.adj[i];
-                int eid = al.eid[i];
+                int v = al.neighbors[i];
+                int eid = al.edge_indices[i];
                 if (eid == peid[u]) continue;
                 if (disc[v] == -1) {
                     disc[v] = low[v] = timer++;
@@ -64,10 +64,10 @@ PyObject *py_bridges(PyObject *self, PyObject *args) {
                     if (low[u] > disc[p]) {
                         int eid = peid[u];
                         PyObject *tup = Py_BuildValue(
-                            "(ii)", EDGE_SRC(&el, eid), EDGE_DST(&el, eid));
+                            "(ii)", EDGE_FIRST_ENDPOINT(&el, eid), EDGE_SECOND_ENDPOINT(&el, eid));
                         if (!tup) {
                             free(buf5);
-                            free_adj(&al); free_edges(&el);
+                            free_adjacency(&al); free_edges(&el);
                             Py_DECREF(result);
                             return NULL;
                         }
@@ -81,7 +81,7 @@ PyObject *py_bridges(PyObject *self, PyObject *args) {
     }
 
     free(buf5);
-    free_adj(&al); free_edges(&el);
+    free_adjacency(&al); free_edges(&el);
     return result;
 }
 
@@ -99,15 +99,15 @@ PyObject *py_articulation_points(PyObject *self, PyObject *args) {
     EdgeList el;
     if (parse_edges(edges_obj, &el) < 0) { Py_DECREF(result); return NULL; }
 
-    AdjList al;
-    if (build_adj(n, &el, &al, 0) < 0) {
+    AdjacencyList al;
+    if (build_adjacency(n, &el, &al, 0) < 0) {
         free_edges(&el); Py_DECREF(result); return NULL;
     }
     free_edges(&el);
 
     int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
     if (!buf6) {
-        free_adj(&al); Py_DECREF(result);
+        free_adjacency(&al); Py_DECREF(result);
         PyErr_NoMemory();
         return NULL;
     }
@@ -130,8 +130,8 @@ PyObject *py_articulation_points(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al.offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al.adj[i];
-                int eid = al.eid[i];
+                int v = al.neighbors[i];
+                int eid = al.edge_indices[i];
                 if (eid == peid[u]) continue;
                 if (disc[v] == -1) {
                     disc[v] = low[v] = timer++;
@@ -168,7 +168,7 @@ PyObject *py_articulation_points(PyObject *self, PyObject *args) {
     }
 
     free(buf6);
-    free_adj(&al);
+    free_adjacency(&al);
     return result;
 }
 
@@ -185,11 +185,11 @@ PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
 
     EdgeList el;
     if (parse_edges(edges_obj, &el) < 0) { Py_DECREF(result); return NULL; }
-    if (el.m == 0) { free_edges(&el); return result; }
+    if (el.edge_count == 0) { free_edges(&el); return result; }
 
-    Py_ssize_t m = el.m;
-    AdjList al;
-    if (build_adj(n, &el, &al, 0) < 0) {
+    Py_ssize_t m = el.edge_count;
+    AdjacencyList al;
+    if (build_adjacency(n, &el, &al, 0) < 0) {
         free_edges(&el); Py_DECREF(result); return NULL;
     }
     free_edges(&el);
@@ -198,7 +198,7 @@ PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
     int *esbuf = (int *)malloc(2 * (size_t)m * sizeof(int));
     if (!buf5 || !esbuf) {
         free(buf5); free(esbuf);
-        free_adj(&al); Py_DECREF(result);
+        free_adjacency(&al); Py_DECREF(result);
         PyErr_NoMemory();
         return NULL;
     }
@@ -222,8 +222,8 @@ PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al.offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al.adj[i];
-                int eid = al.eid[i];
+                int v = al.neighbors[i];
+                int eid = al.edge_indices[i];
                 if (eid == peid[u]) continue;
                 if (disc[v] == -1) {
                     /* Tree edge */
@@ -247,7 +247,7 @@ PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
                         PyObject *comp = PySet_New(NULL);
                         if (!comp) {
                             free(buf5); free(esbuf);
-                            free_adj(&al); Py_DECREF(result);
+                            free_adjacency(&al); Py_DECREF(result);
                             return NULL;
                         }
                         while (esp > 0) {
@@ -270,7 +270,7 @@ PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
     }
 
     free(buf5); free(esbuf);
-    free_adj(&al);
+    free_adjacency(&al);
     return result;
 }
 
@@ -280,19 +280,19 @@ PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
     PyObject *nids, *edges;
     if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
 
-    NidContext ctx;
-    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
-    int n = ctx.n;
+    NodeIdContext ctx;
+    if (node_id_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.node_count;
 
     PyObject *result = PyList_New(0);
-    if (!result || n == 0 || ctx.el.m == 0) { nid_free(&ctx); return result; }
+    if (!result || n == 0 || ctx.edges.edge_count == 0) { node_id_context_free(&ctx); return result; }
 
-    AdjList al;
-    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
+    AdjacencyList al;
+    if (build_adjacency(n, &ctx.edges, &al, 0) < 0) { node_id_context_free(&ctx); Py_DECREF(result); return NULL; }
 
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     if (!buf5) {
-        free_adj(&al); nid_free(&ctx); Py_DECREF(result);
+        free_adjacency(&al); node_id_context_free(&ctx); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
     int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
@@ -309,7 +309,7 @@ PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al.offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al.adj[i], eid = al.eid[i];
+                int v = al.neighbors[i], eid = al.edge_indices[i];
                 if (eid == peid[u]) continue;
                 if (disc[v] == -1) {
                     disc[v] = low[v] = timer++; peid[v] = eid;
@@ -321,11 +321,11 @@ PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
                     if (low[p] > low[u]) low[p] = low[u];
                     if (low[u] > disc[p]) {
                         int ei = peid[u];
-                        int su = EDGE_SRC(&ctx.el, ei), sv = EDGE_DST(&ctx.el, ei);
+                        int su = EDGE_FIRST_ENDPOINT(&ctx.edges, ei), sv = EDGE_SECOND_ENDPOINT(&ctx.edges, ei);
                         PyObject *t = PyTuple_New(2);
-                        Py_INCREF(ctx.nid_items[su]); Py_INCREF(ctx.nid_items[sv]);
-                        PyTuple_SET_ITEM(t, 0, ctx.nid_items[su]);
-                        PyTuple_SET_ITEM(t, 1, ctx.nid_items[sv]);
+                        Py_INCREF(ctx.node_id_items[su]); Py_INCREF(ctx.node_id_items[sv]);
+                        PyTuple_SET_ITEM(t, 0, ctx.node_id_items[su]);
+                        PyTuple_SET_ITEM(t, 1, ctx.node_id_items[sv]);
                         PyList_Append(result, t); Py_DECREF(t);
                     }
                 }
@@ -335,7 +335,7 @@ PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
     }
 
     free(buf5);
-    free_adj(&al); nid_free(&ctx);
+    free_adjacency(&al); node_id_context_free(&ctx);
     return result;
 }
 
@@ -345,19 +345,19 @@ PyObject *py_ap_nid(PyObject *self, PyObject *args) {
     PyObject *nids, *edges;
     if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
 
-    NidContext ctx;
-    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
-    int n = ctx.n;
+    NodeIdContext ctx;
+    if (node_id_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.node_count;
 
     PyObject *result = PySet_New(NULL);
-    if (!result || n == 0) { nid_free(&ctx); return result; }
+    if (!result || n == 0) { node_id_context_free(&ctx); return result; }
 
-    AdjList al;
-    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
+    AdjacencyList al;
+    if (build_adjacency(n, &ctx.edges, &al, 0) < 0) { node_id_context_free(&ctx); Py_DECREF(result); return NULL; }
 
     int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
     if (!buf6) {
-        free_adj(&al); nid_free(&ctx); Py_DECREF(result);
+        free_adjacency(&al); node_id_context_free(&ctx); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
     int *disc = buf6, *low = buf6 + n, *stk = buf6 + 2*n;
@@ -375,7 +375,7 @@ PyObject *py_ap_nid(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al.offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al.adj[i], eid = al.eid[i];
+                int v = al.neighbors[i], eid = al.edge_indices[i];
                 if (eid == peid[u]) continue;
                 if (disc[v] == -1) {
                     disc[v] = low[v] = timer++; peid[v] = eid; ch[v] = 0; ch[u]++;
@@ -386,17 +386,17 @@ PyObject *py_ap_nid(PyObject *self, PyObject *args) {
                     int p = stk[sp-1];
                     if (low[p] > low[u]) low[p] = low[u];
                     if (peid[p] != -1 && low[u] >= disc[p])
-                        PySet_Add(result, ctx.nid_items[p]);
+                        PySet_Add(result, ctx.node_id_items[p]);
                 }
                 sp--;
             }
         }
         if (ch[start] >= 2)
-            PySet_Add(result, ctx.nid_items[start]);
+            PySet_Add(result, ctx.node_id_items[start]);
     }
 
     free(buf6);
-    free_adj(&al); nid_free(&ctx);
+    free_adjacency(&al); node_id_context_free(&ctx);
     return result;
 }
 
@@ -406,22 +406,22 @@ PyObject *py_bcc_nid(PyObject *self, PyObject *args) {
     PyObject *nids, *edges;
     if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
 
-    NidContext ctx;
-    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
-    int n = ctx.n;
+    NodeIdContext ctx;
+    if (node_id_parse(nids, edges, &ctx) < 0) return NULL;
+    int n = ctx.node_count;
 
     PyObject *result = PyList_New(0);
-    if (!result || n == 0 || ctx.el.m == 0) { nid_free(&ctx); return result; }
+    if (!result || n == 0 || ctx.edges.edge_count == 0) { node_id_context_free(&ctx); return result; }
 
-    Py_ssize_t m = ctx.el.m;
-    AdjList al;
-    if (build_adj(n, &ctx.el, &al, 0) < 0) { nid_free(&ctx); Py_DECREF(result); return NULL; }
+    Py_ssize_t m = ctx.edges.edge_count;
+    AdjacencyList al;
+    if (build_adjacency(n, &ctx.edges, &al, 0) < 0) { node_id_context_free(&ctx); Py_DECREF(result); return NULL; }
 
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     int *esbuf = (int *)malloc(2 * (size_t)m * sizeof(int));
     if (!buf5 || !esbuf) {
         free(buf5); free(esbuf);
-        free_adj(&al); nid_free(&ctx); Py_DECREF(result);
+        free_adjacency(&al); node_id_context_free(&ctx); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
     int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
@@ -439,7 +439,7 @@ PyObject *py_bcc_nid(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al.offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al.adj[i], eid = al.eid[i];
+                int v = al.neighbors[i], eid = al.edge_indices[i];
                 if (eid == peid[u]) continue;
                 if (disc[v] == -1) {
                     esu[esp] = u; esv[esp] = v; esp++;
@@ -457,8 +457,8 @@ PyObject *py_bcc_nid(PyObject *self, PyObject *args) {
                         PyObject *comp = PySet_New(NULL);
                         while (esp > 0) {
                             esp--;
-                            PySet_Add(comp, ctx.nid_items[esu[esp]]);
-                            PySet_Add(comp, ctx.nid_items[esv[esp]]);
+                            PySet_Add(comp, ctx.node_id_items[esu[esp]]);
+                            PySet_Add(comp, ctx.node_id_items[esv[esp]]);
                             if (esu[esp] == p && esv[esp] == u) break;
                         }
                         PyList_Append(result, comp); Py_DECREF(comp);
@@ -470,26 +470,26 @@ PyObject *py_bcc_nid(PyObject *self, PyObject *args) {
     }
 
     free(buf5); free(esbuf);
-    free_adj(&al); nid_free(&ctx);
+    free_adjacency(&al); node_id_context_free(&ctx);
     return result;
 }
 
 PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
+    int n = g->node_ids.node_count;
 
     PyObject *result = PyList_New(0);
-    if (!result || n == 0 || g->nid.el.m == 0 || !g->has_adj) return result;
+    if (!result || n == 0 || g->node_ids.edges.edge_count == 0 || !g->has_adjacency) return result;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
     if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     if (!buf5) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
     int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
@@ -507,7 +507,7 @@ PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al->offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al->adj[i], eid = al->eid[i];
+                int v = al->neighbors[i], eid = al->edge_indices[i];
                 if (mask && mask[eid]) continue;
                 if (nmask && nmask[v]) continue;
                 if (eid == peid[u]) continue;
@@ -521,11 +521,11 @@ PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
                     if (low[p] > low[u]) low[p] = low[u];
                     if (low[u] > disc[p]) {
                         int ei = peid[u];
-                        int su = EDGE_SRC(&g->nid.el, ei), sv = EDGE_DST(&g->nid.el, ei);
+                        int su = EDGE_FIRST_ENDPOINT(&g->node_ids.edges, ei), sv = EDGE_SECOND_ENDPOINT(&g->node_ids.edges, ei);
                         PyObject *t = PyTuple_New(2);
-                        Py_INCREF(g->nid.nid_items[su]); Py_INCREF(g->nid.nid_items[sv]);
-                        PyTuple_SET_ITEM(t, 0, g->nid.nid_items[su]);
-                        PyTuple_SET_ITEM(t, 1, g->nid.nid_items[sv]);
+                        Py_INCREF(g->node_ids.node_id_items[su]); Py_INCREF(g->node_ids.node_id_items[sv]);
+                        PyTuple_SET_ITEM(t, 0, g->node_ids.node_id_items[su]);
+                        PyTuple_SET_ITEM(t, 1, g->node_ids.node_id_items[sv]);
                         PyList_Append(result, t); Py_DECREF(t);
                     }
                 }
@@ -541,19 +541,19 @@ PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
 PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
+    int n = g->node_ids.node_count;
 
     PyObject *result = PySet_New(NULL);
-    if (!result || n == 0 || !g->has_adj) return result;
+    if (!result || n == 0 || !g->has_adjacency) return result;
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
     if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
     if (!buf6) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
     int *disc = buf6, *low = buf6 + n, *stk = buf6 + 2*n;
@@ -572,7 +572,7 @@ PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al->offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al->adj[i], eid = al->eid[i];
+                int v = al->neighbors[i], eid = al->edge_indices[i];
                 if (mask && mask[eid]) continue;
                 if (nmask && nmask[v]) continue;
                 if (eid == peid[u]) continue;
@@ -585,13 +585,13 @@ PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
                     int p = stk[sp-1];
                     if (low[p] > low[u]) low[p] = low[u];
                     if (peid[p] != -1 && low[u] >= disc[p])
-                        PySet_Add(result, g->nid.nid_items[p]);
+                        PySet_Add(result, g->node_ids.node_id_items[p]);
                 }
                 sp--;
             }
         }
         if (ch[start] >= 2)
-            PySet_Add(result, g->nid.nid_items[start]);
+            PySet_Add(result, g->node_ids.node_id_items[start]);
     }
     free(buf6);
     release_mask(&nmbuf); release_mask(&mbuf);
@@ -601,20 +601,20 @@ PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
 PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
+    int n = g->node_ids.node_count;
 
     PyObject *result = PyList_New(0);
-    if (!result || n == 0 || g->nid.el.m == 0 || !g->has_adj) return result;
+    if (!result || n == 0 || g->node_ids.edges.edge_count == 0 || !g->has_adjacency) return result;
 
-    Py_ssize_t m = g->nid.el.m;
+    Py_ssize_t m = g->node_ids.edges.edge_count;
     const uint8_t *mask; Py_buffer mbuf;
     if (parse_mask(mask_obj, m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
     if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     int *esbuf = (int *)malloc(2 * (size_t)m * sizeof(int));
     if (!buf5 || !esbuf) {
@@ -637,7 +637,7 @@ PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al->offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al->adj[i], eid = al->eid[i];
+                int v = al->neighbors[i], eid = al->edge_indices[i];
                 if (mask && mask[eid]) continue;
                 if (nmask && nmask[v]) continue;
                 if (eid == peid[u]) continue;
@@ -657,8 +657,8 @@ PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
                         PyObject *comp = PySet_New(NULL);
                         while (esp > 0) {
                             esp--;
-                            PySet_Add(comp, g->nid.nid_items[esu[esp]]);
-                            PySet_Add(comp, g->nid.nid_items[esv[esp]]);
+                            PySet_Add(comp, g->node_ids.node_id_items[esu[esp]]);
+                            PySet_Add(comp, g->node_ids.node_id_items[esv[esp]]);
                             if (esu[esp] == p && esv[esp] == u) break;
                         }
                         PyList_Append(result, comp); Py_DECREF(comp);
@@ -677,12 +677,12 @@ PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
 PyObject *py_bridges_as_edge_indices_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
+    GraphContext *g = get_graph_context(capsule);
     if (!g) return NULL;
-    int n = g->nid.n;
+    int n = g->node_ids.node_count;
 
     PyObject *result = PyList_New(0);
-    if (!result || n == 0 || g->nid.el.m == 0 || !g->has_adj) return result;
+    if (!result || n == 0 || g->node_ids.edges.edge_count == 0 || !g->has_adjacency) return result;
 
     if (g->directed) {
         Py_DECREF(result);
@@ -691,11 +691,11 @@ PyObject *py_bridges_as_edge_indices_ctx(PyObject *self, PyObject *args) {
     }
 
     const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
+    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *nmask; Py_buffer nmbuf;
     if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
 
-    AdjList *al = &g->al;
+    AdjacencyList *al = &g->adjacency;
     int *buf5 = (int *)malloc(5 * (size_t)n * sizeof(int));
     if (!buf5) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
     int *disc = buf5, *low = buf5 + n, *stk = buf5 + 2*n;
@@ -713,7 +713,7 @@ PyObject *py_bridges_as_edge_indices_ctx(PyObject *self, PyObject *args) {
             int u = stk[sp];
             if (sidx[sp] < al->offset[u + 1]) {
                 int i = sidx[sp]++;
-                int v = al->adj[i], eid = al->eid[i];
+                int v = al->neighbors[i], eid = al->edge_indices[i];
                 if (mask && mask[eid]) continue;
                 if (nmask && nmask[v]) continue;
                 if (eid == peid[u]) continue;

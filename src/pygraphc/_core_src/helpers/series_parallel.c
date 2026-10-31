@@ -4,21 +4,21 @@
 #include "components.h"
 
 void sp_free(SPState *state) {
-    free(state->edge_u); free(state->edge_v); free(state->edge_op);
+    free(state->edge_first_node); free(state->edge_second_node); free(state->edge_operation);
     free(state->loop_next); free(state->edge_alive);
     free(state->half_next); free(state->half_prev);
     free(state->node_head); free(state->degree); free(state->loop_head);
     free(state->node_alive); free(state->heap); free(state->queued);
-    free(state->pair_scratch); free(state->ops);
+    free(state->pair_scratch); free(state->operations);
 }
 
 int sp_alloc(SPState *state, int n, Py_ssize_t edge_capacity) {
     size_t nodes = (size_t)(n > 0 ? n : 1);
     size_t slots = (size_t)edge_capacity;
     memset(state, 0, sizeof(*state));
-    state->edge_u = (int *)malloc(slots * sizeof(int));
-    state->edge_v = (int *)malloc(slots * sizeof(int));
-    state->edge_op = (int *)malloc(slots * sizeof(int));
+    state->edge_first_node = (int *)malloc(slots * sizeof(int));
+    state->edge_second_node = (int *)malloc(slots * sizeof(int));
+    state->edge_operation = (int *)malloc(slots * sizeof(int));
     state->loop_next = (int *)malloc(slots * sizeof(int));
     state->edge_alive = (uint8_t *)calloc(slots, 1);
     state->half_next = (int *)malloc(2 * slots * sizeof(int));
@@ -30,13 +30,13 @@ int sp_alloc(SPState *state, int n, Py_ssize_t edge_capacity) {
     state->heap = (int *)malloc(nodes * sizeof(int));
     state->queued = (uint8_t *)calloc(nodes, 1);
     state->pair_scratch = (int *)malloc(slots * sizeof(int));
-    state->op_capacity = 64;
-    state->ops = (SPOp *)malloc((size_t)state->op_capacity * sizeof(SPOp));
-    if (!state->edge_u || !state->edge_v || !state->edge_op || !state->loop_next
+    state->operation_capacity = 64;
+    state->operations = (SPOperation *)malloc((size_t)state->operation_capacity * sizeof(SPOperation));
+    if (!state->edge_first_node || !state->edge_second_node || !state->edge_operation || !state->loop_next
         || !state->edge_alive || !state->half_next || !state->half_prev
         || !state->node_head || !state->degree || !state->loop_head
         || !state->node_alive || !state->heap || !state->queued
-        || !state->pair_scratch || !state->ops) {
+        || !state->pair_scratch || !state->operations) {
         sp_free(state);
         PyErr_NoMemory();
         return -1;
@@ -48,26 +48,26 @@ int sp_alloc(SPState *state, int n, Py_ssize_t edge_capacity) {
 
 static int sp_emit(SPState *state, int kind, int left, int right,
                    int endpoint_u, int endpoint_v, int interior, int leaf_edge, int absorber) {
-    if (state->op_count == state->op_capacity) {
-        Py_ssize_t grown = state->op_capacity * 2;
-        SPOp *moved = (SPOp *)realloc(state->ops, (size_t)grown * sizeof(SPOp));
+    if (state->operation_count == state->operation_capacity) {
+        Py_ssize_t grown = state->operation_capacity * 2;
+        SPOperation *moved = (SPOperation *)realloc(state->operations, (size_t)grown * sizeof(SPOperation));
         if (!moved) { PyErr_NoMemory(); return -1; }
-        state->ops = moved;
-        state->op_capacity = grown;
+        state->operations = moved;
+        state->operation_capacity = grown;
     }
-    SPOp *op = &state->ops[state->op_count];
+    SPOperation *op = &state->operations[state->operation_count];
     op->kind = kind; op->left = left; op->right = right;
     op->endpoint_u = endpoint_u; op->endpoint_v = endpoint_v;
     op->interior = interior; op->leaf_edge = leaf_edge; op->absorber = absorber;
-    return (int)state->op_count++;
+    return (int)state->operation_count++;
 }
 
-#define SP_OTHER_END(state, half) (((half) & 1) ? (state)->edge_u[(half) >> 1] : (state)->edge_v[(half) >> 1])
+#define SP_OTHER_END(state, half) (((half) & 1) ? (state)->edge_first_node[(half) >> 1] : (state)->edge_second_node[(half) >> 1])
 
 static void sp_link(SPState *state, int edge) {
     for (int side = 0; side < 2; side++) {
         int half = 2 * edge + side;
-        int node = side ? state->edge_v[edge] : state->edge_u[edge];
+        int node = side ? state->edge_second_node[edge] : state->edge_first_node[edge];
         int first = state->node_head[node];
         state->half_prev[half] = -1;
         state->half_next[half] = first;
@@ -80,7 +80,7 @@ static void sp_link(SPState *state, int edge) {
 static void sp_unlink(SPState *state, int edge) {
     for (int side = 0; side < 2; side++) {
         int half = 2 * edge + side;
-        int node = side ? state->edge_v[edge] : state->edge_u[edge];
+        int node = side ? state->edge_second_node[edge] : state->edge_first_node[edge];
         int previous = state->half_prev[half], following = state->half_next[half];
         if (previous >= 0) state->half_next[previous] = following;
         else state->node_head[node] = following;
@@ -103,9 +103,9 @@ static int sp_add_edge(SPState *state, int from_node, int to_node, int op) {
         return -1;
     }
     int edge = state->edge_slots++;
-    state->edge_u[edge] = from_node;
-    state->edge_v[edge] = to_node;
-    state->edge_op[edge] = op;
+    state->edge_first_node[edge] = from_node;
+    state->edge_second_node[edge] = to_node;
+    state->edge_operation[edge] = op;
     state->edge_alive[edge] = 1;
     state->loop_next[edge] = -1;
     sp_link(state, edge);
@@ -147,10 +147,10 @@ void sp_push(SPState *state, int node) {
  * k-ary parallel node and flattens them.
  */
 int sp_merge_parallel(SPState *state, int from_node, int to_node, const int *members, int count) {
-    int combined = state->edge_op[members[0]];
+    int combined = state->edge_operation[members[0]];
     for (int index = 1; index < count; index++) {
         int last = index == count - 1;
-        combined = sp_emit(state, SP_OP_PARALLEL, combined, state->edge_op[members[index]],
+        combined = sp_emit(state, SP_OP_PARALLEL, combined, state->edge_operation[members[index]],
                            last ? from_node : -1, last ? to_node : -1, -1, -1, -1);
         if (combined < 0) return -1;
     }
@@ -191,7 +191,7 @@ int sp_collect_parallels(SPState *state, int n, const uint8_t *protected_mask,
     *entries_out = NULL; *candidates_out = NULL; *count_out = 0;
     int live = 0;
     for (int edge = 0; edge < state->edge_slots; edge++)
-        if (state->edge_alive[edge] && state->edge_u[edge] != state->edge_v[edge]) live++;
+        if (state->edge_alive[edge] && state->edge_first_node[edge] != state->edge_second_node[edge]) live++;
     if (live < 2) return 0;
 
     int *bucket_offset = (int *)calloc((size_t)n + 1, sizeof(int));
@@ -204,15 +204,15 @@ int sp_collect_parallels(SPState *state, int n, const uint8_t *protected_mask,
         return -1;
     }
     for (int edge = 0; edge < state->edge_slots; edge++) {
-        if (!state->edge_alive[edge] || state->edge_u[edge] == state->edge_v[edge]) continue;
-        int smaller = state->edge_u[edge] < state->edge_v[edge] ? state->edge_u[edge] : state->edge_v[edge];
+        if (!state->edge_alive[edge] || state->edge_first_node[edge] == state->edge_second_node[edge]) continue;
+        int smaller = state->edge_first_node[edge] < state->edge_second_node[edge] ? state->edge_first_node[edge] : state->edge_second_node[edge];
         bucket_offset[smaller + 1]++;
     }
     for (int node = 1; node <= n; node++) bucket_offset[node] += bucket_offset[node - 1];
     memcpy(fill, bucket_offset, (size_t)n * sizeof(int));
     for (int edge = 0; edge < state->edge_slots; edge++) {
-        if (!state->edge_alive[edge] || state->edge_u[edge] == state->edge_v[edge]) continue;
-        int from_node = state->edge_u[edge], to_node = state->edge_v[edge];
+        if (!state->edge_alive[edge] || state->edge_first_node[edge] == state->edge_second_node[edge]) continue;
+        int from_node = state->edge_first_node[edge], to_node = state->edge_second_node[edge];
         int smaller = from_node < to_node ? from_node : to_node;
         entries[fill[smaller]].other = from_node < to_node ? to_node : from_node;
         entries[fill[smaller]].slot = edge;
@@ -294,8 +294,8 @@ int sp_describe_move(SPState *state, int node, const uint8_t *protected_mask,
 
 /* Delete a degree-1 node, recording the neighbour that absorbs its payload. */
 int sp_apply_pendant(SPState *state, int node, int edge) {
-    int subtree = state->edge_op[edge];
-    int neighbour = state->edge_u[edge] == node ? state->edge_v[edge] : state->edge_u[edge];
+    int subtree = state->edge_operation[edge];
+    int neighbour = state->edge_first_node[edge] == node ? state->edge_second_node[edge] : state->edge_first_node[edge];
     sp_unlink(state, edge);
     if (sp_emit(state, SP_OP_PENDANT, subtree, -1, -1, -1, node, -1, neighbour) < 0) return -1;
     sp_eliminate(state, node);
@@ -305,7 +305,7 @@ int sp_apply_pendant(SPState *state, int node, int edge) {
 /* Replace a degree-2 node by one edge between its two neighbours, returning that edge. */
 int sp_apply_series(SPState *state, int node, int first, int second,
                     int first_neighbour, int second_neighbour) {
-    int op = sp_emit(state, SP_OP_SERIES, state->edge_op[first], state->edge_op[second],
+    int op = sp_emit(state, SP_OP_SERIES, state->edge_operation[first], state->edge_operation[second],
                      first_neighbour, second_neighbour, node, -1, -1);
     if (op < 0) return -1;
     sp_unlink(state, first);
@@ -369,18 +369,18 @@ int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const uint8_
 }
 
 /* One leaf operation and one edge slot per included input edge, in edge index order. */
-int sp_load_edges(SPState *state, GraphCtx *graph, const uint8_t *edge_mask, const uint8_t *node_mask) {
-    Py_ssize_t m = graph->nid.el.m;
+int sp_load_edges(SPState *state, GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask) {
+    Py_ssize_t m = graph->node_ids.edges.edge_count;
     for (Py_ssize_t index = 0; index < m; index++) {
         if (edge_mask && edge_mask[index]) continue;
-        int from_node = EDGE_SRC(&graph->nid.el, index), to_node = EDGE_DST(&graph->nid.el, index);
+        int from_node = EDGE_FIRST_ENDPOINT(&graph->node_ids.edges, index), to_node = EDGE_SECOND_ENDPOINT(&graph->node_ids.edges, index);
         if (node_mask && (node_mask[from_node] || node_mask[to_node])) continue;
         int op = sp_emit(state, SP_OP_LEAF, -1, -1, -1, -1, -1, (int)index, -1);
         if (op < 0) return -1;
         int edge = state->edge_slots++;
-        state->edge_u[edge] = from_node;
-        state->edge_v[edge] = to_node;
-        state->edge_op[edge] = op;
+        state->edge_first_node[edge] = from_node;
+        state->edge_second_node[edge] = to_node;
+        state->edge_operation[edge] = op;
         state->edge_alive[edge] = 1;
         state->loop_next[edge] = -1;
         if (from_node == to_node) {
@@ -395,12 +395,12 @@ int sp_load_edges(SPState *state, GraphCtx *graph, const uint8_t *edge_mask, con
 
 /* A component without a terminal carries no question and goes whole, before
  * any move, on the connectivity of the input graph. */
-int sp_drop_terminal_free(SPState *state, GraphCtx *graph, int n, const uint8_t *edge_mask,
+int sp_drop_terminal_free(SPState *state, GraphContext *graph, int n, const uint8_t *edge_mask,
                           const uint8_t *node_mask, const uint8_t *terminal_mask) {
     if (n == 0) return 0;
     ComponentResult components;
-    if (compute_components_masked(n, &graph->nid.el, edge_mask, node_mask, &components) < 0) return -1;
-    uint8_t *has_terminal = (uint8_t *)calloc((size_t)components.num_comp, 1);
+    if (compute_components_masked(n, &graph->node_ids.edges, edge_mask, node_mask, &components) < 0) return -1;
+    uint8_t *has_terminal = (uint8_t *)calloc((size_t)components.component_count, 1);
     if (!has_terminal) {
         free(components.labels);
         PyErr_NoMemory();
@@ -419,7 +419,7 @@ int sp_drop_terminal_free(SPState *state, GraphCtx *graph, int n, const uint8_t 
 }
 
 /* Every surviving non-terminal into the candidate queue, ascending, which is already a valid min-heap. */
-void sp_seed_candidates(SPState *state, int n, const uint8_t *terminal_mask) {
+void sp_enqueue_all_candidates(SPState *state, int n, const uint8_t *terminal_mask) {
     for (int node = 0; node < n; node++) {
         if (!state->node_alive[node] || terminal_mask[node]) continue;
         state->heap[state->heap_size++] = node;
@@ -435,8 +435,8 @@ PyObject *sp_build_log(SPState *state, int n) {
 
     PyObject *result = PyTuple_New(12);
     if (!result) return NULL;
-    const SPOp *ops = state->ops;
-    Py_ssize_t op_count = state->op_count;
+    const SPOperation *ops = state->operations;
+    Py_ssize_t op_count = state->operation_count;
 
 #define SP_OP_FIELD(position, field)                                                      \
     do {                                                                                  \
@@ -473,9 +473,9 @@ PyObject *sp_build_log(SPState *state, int n) {
     Py_ssize_t written = 0;
     for (int edge = 0; edge < state->edge_slots; edge++) {
         if (!state->edge_alive[edge]) continue;
-        op_values[written] = (int32_t)state->edge_op[edge];
-        from_values[written] = (int32_t)state->edge_u[edge];
-        to_values[written] = (int32_t)state->edge_v[edge];
+        op_values[written] = (int32_t)state->edge_operation[edge];
+        from_values[written] = (int32_t)state->edge_first_node[edge];
+        to_values[written] = (int32_t)state->edge_second_node[edge];
         written++;
     }
     int32_t *node_values = (int32_t *)PyBytes_AS_STRING(surviving);
@@ -492,9 +492,9 @@ PyObject *sp_build_log(SPState *state, int n) {
 
 void sp_release_masks(SPMasks *masks) {
     free(masks->no_members);
-    release_mask(&masks->node_buf); release_mask(&masks->edge_buf);
-    release_mask(&masks->blocked_buf); release_mask(&masks->keep_buf);
-    release_mask(&masks->protect_buf); release_mask(&masks->terminal_buf);
+    release_mask(&masks->node_mask_buffer); release_mask(&masks->edge_mask_buffer);
+    release_mask(&masks->blocked_buffer); release_mask(&masks->keep_buffer);
+    release_mask(&masks->protect_buffer); release_mask(&masks->terminal_buffer);
 }
 
 /* An absent protected, edge or node mask becomes a shared all-zero block.
@@ -512,24 +512,24 @@ int sp_parse_masks(PyObject *terminal_obj, PyObject *protected_obj, PyObject *em
                         "component is terminal-free and the whole graph is deleted");
         return -1;
     }
-    if (parse_mask(terminal_obj, n, &masks->terminal, &masks->terminal_buf) < 0) return -1;
-    if (parse_mask(protected_obj, n, &masks->protect, &masks->protect_buf) < 0) {
-        release_mask(&masks->terminal_buf); return -1;
+    if (parse_mask(terminal_obj, n, &masks->terminal, &masks->terminal_buffer) < 0) return -1;
+    if (parse_mask(protected_obj, n, &masks->protect, &masks->protect_buffer) < 0) {
+        release_mask(&masks->terminal_buffer); return -1;
     }
-    if (parse_mask(emask_obj, m, &masks->edge, &masks->edge_buf) < 0) {
-        release_mask(&masks->protect_buf); release_mask(&masks->terminal_buf); return -1;
+    if (parse_mask(emask_obj, m, &masks->edge_mask, &masks->edge_mask_buffer) < 0) {
+        release_mask(&masks->protect_buffer); release_mask(&masks->terminal_buffer); return -1;
     }
-    if (parse_mask(nmask_obj, n, &masks->node, &masks->node_buf) < 0) {
-        release_mask(&masks->edge_buf); release_mask(&masks->protect_buf);
-        release_mask(&masks->terminal_buf); return -1;
+    if (parse_mask(nmask_obj, n, &masks->node_mask, &masks->node_mask_buffer) < 0) {
+        release_mask(&masks->edge_mask_buffer); release_mask(&masks->protect_buffer);
+        release_mask(&masks->terminal_buffer); return -1;
     }
-    if (parse_mask(keep_obj, n, &masks->keep, &masks->keep_buf) < 0) {
-        release_mask(&masks->node_buf); release_mask(&masks->edge_buf);
-        release_mask(&masks->protect_buf); release_mask(&masks->terminal_buf); return -1;
+    if (parse_mask(keep_obj, n, &masks->keep, &masks->keep_buffer) < 0) {
+        release_mask(&masks->node_mask_buffer); release_mask(&masks->edge_mask_buffer);
+        release_mask(&masks->protect_buffer); release_mask(&masks->terminal_buffer); return -1;
     }
-    if (parse_mask(blocked_obj, n, &masks->blocked, &masks->blocked_buf) < 0) {
-        release_mask(&masks->keep_buf); release_mask(&masks->node_buf); release_mask(&masks->edge_buf);
-        release_mask(&masks->protect_buf); release_mask(&masks->terminal_buf); return -1;
+    if (parse_mask(blocked_obj, n, &masks->blocked, &masks->blocked_buffer) < 0) {
+        release_mask(&masks->keep_buffer); release_mask(&masks->node_mask_buffer); release_mask(&masks->edge_mask_buffer);
+        release_mask(&masks->protect_buffer); release_mask(&masks->terminal_buffer); return -1;
     }
     if (masks->terminal && masks->protect && masks->keep && masks->blocked) return 0;
     masks->no_members = (uint8_t *)calloc((size_t)(n > 0 ? n : 1), 1);
@@ -565,7 +565,7 @@ void sp_handle_destructor(PyObject *capsule) {
     free(handle);
 }
 
-SPHandle *get_sphandle(PyObject *capsule) {
+SPHandle *get_sp_handle(PyObject *capsule) {
     SPHandle *handle = (SPHandle *)PyCapsule_GetPointer(capsule, "pygraphc.SPHandle");
     if (!handle) {
         PyErr_SetString(PyExc_TypeError, "expected a reduction state capsule");
@@ -592,8 +592,8 @@ int sp_check_edge(SPHandle *handle, int edge, int node, int neighbour) {
     if (node != neighbour
         && node >= 0 && node < n && neighbour >= 0 && neighbour < n && edge >= 0 && edge < state->edge_slots
         && state->edge_alive[edge] && state->node_alive[node]
-        && ((state->edge_u[edge] == node && state->edge_v[edge] == neighbour)
-            || (state->edge_v[edge] == node && state->edge_u[edge] == neighbour)))
+        && ((state->edge_first_node[edge] == node && state->edge_second_node[edge] == neighbour)
+            || (state->edge_second_node[edge] == node && state->edge_first_node[edge] == neighbour)))
         return 0;
     PyErr_SetString(PyExc_ValueError, "the move must name a live edge between two live nodes of the state");
     return -1;

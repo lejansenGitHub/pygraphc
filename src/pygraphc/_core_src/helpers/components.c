@@ -10,19 +10,19 @@
 int compute_components_masked(int n, EdgeList *el, const uint8_t *mask,
                               const uint8_t *node_mask,
                               ComponentResult *cr) {
-    UF uf;
-    if (uf_init(&uf, n) < 0) { PyErr_NoMemory(); return -1; }
-    for (Py_ssize_t i = 0; i < el->m; i++) {
+    UnionFind uf;
+    if (union_find_init(&uf, n) < 0) { PyErr_NoMemory(); return -1; }
+    for (Py_ssize_t i = 0; i < el->edge_count; i++) {
         if (mask && mask[i]) continue;
-        int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
+        int u = EDGE_FIRST_ENDPOINT(el, i), v = EDGE_SECOND_ENDPOINT(el, i);
         if (node_mask && (node_mask[u] || node_mask[v])) continue;
-        uf_union(&uf, u, v);
+        union_find_union(&uf, u, v);
     }
 
     /* labels + root_to_id in one allocation */
     int *buf = (int *)malloc(2 * (size_t)n * sizeof(int));
     if (!buf) {
-        uf_free(&uf);
+        union_find_free(&uf);
         PyErr_NoMemory();
         return -1;
     }
@@ -32,14 +32,14 @@ int compute_components_masked(int n, EdgeList *el, const uint8_t *mask,
 
     int num_comp = 0;
     for (int i = 0; i < n; i++) {
-        int r = uf_find(&uf, i);
+        int r = union_find_find(&uf, i);
         if (root_to_id[r] == -1)
             root_to_id[r] = num_comp++;
         cr->labels[i] = root_to_id[r];
     }
-    cr->num_comp = num_comp;
+    cr->component_count = num_comp;
 
-    uf_free(&uf);
+    union_find_free(&uf);
     return 0;
 }
 
@@ -52,7 +52,7 @@ int compute_components_masked(int n, EdgeList *el, const uint8_t *mask,
  * Writes component labels into cr (same shape as compute_components_masked).
  * Returns 0 on success, -1 on error.
  */
-int compute_scc_masked(int n, AdjList *al, const uint8_t *mask,
+int compute_strongly_connected_components_masked(int n, AdjacencyList *al, const uint8_t *mask,
                        const uint8_t *node_mask, ComponentResult *cr) {
     /* 6n ints: disc, low, on_stack, tarjan_stk, dfs_stk, dfs_sidx */
     int *buf = (int *)malloc(6 * (size_t)n * sizeof(int));
@@ -87,9 +87,9 @@ int compute_scc_masked(int n, AdjList *al, const uint8_t *mask,
             int u = dfs_stk[sp];
             if (dfs_sidx[sp] < al->offset[u + 1]) {
                 int i = dfs_sidx[sp]++;
-                int eid = al->eid[i];
+                int eid = al->edge_indices[i];
                 if (mask && mask[eid]) continue;
-                int v = al->adj[i];
+                int v = al->neighbors[i];
                 if (node_mask && node_mask[v]) continue;
                 if (disc[v] == -1) {
                     disc[v] = low[v] = timer++;
@@ -127,7 +127,7 @@ int compute_scc_masked(int n, AdjList *al, const uint8_t *mask,
             cr->labels[i] = num_comp++;
     }
 
-    cr->num_comp = num_comp;
+    cr->component_count = num_comp;
     free(buf);
     return 0;
 }

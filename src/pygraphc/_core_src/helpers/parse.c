@@ -21,10 +21,10 @@ int parse_edges(PyObject *edges_obj, EdgeList *el) {
         if (is_int32 && buf.ndim == 2 && buf.shape[1] == 2) {
             Py_ssize_t m = buf.shape[0];
             int *data = (int *)buf.buf;
-            el->m = m;
+            el->edge_count = m;
             /* Point directly into the numpy buffer — zero copy for edges */
-            el->src = NULL;
-            el->dst = NULL;
+            el->first_endpoints = NULL;
+            el->second_endpoints = NULL;
             el->owns_memory = 0;
 
             /* We need separate src/dst arrays for the union-find loop,
@@ -33,8 +33,8 @@ int parse_edges(PyObject *edges_obj, EdgeList *el) {
 
             /* Actually, just store the raw pointer and read inline.
                We'll use a special code path. Store raw ptr in src. */
-            el->src = data;  /* raw (m,2) int32 buffer */
-            el->dst = NULL;  /* sentinel: means "interleaved" */
+            el->first_endpoints = data;  /* raw (m,2) int32 buffer */
+            el->second_endpoints = NULL;  /* sentinel: means "interleaved" */
 
             PyBuffer_Release(&buf);
             return 0;
@@ -50,19 +50,19 @@ int parse_edges(PyObject *edges_obj, EdgeList *el) {
     if (!fast) return -1;
 
     Py_ssize_t m = PySequence_Fast_GET_SIZE(fast);
-    el->m = m;
+    el->edge_count = m;
     el->owns_memory = 1;
     if (m == 0) {
-        el->src = NULL;
-        el->dst = NULL;
+        el->first_endpoints = NULL;
+        el->second_endpoints = NULL;
         Py_DECREF(fast);
         return 0;
     }
 
-    el->src = (int *)malloc(m * sizeof(int));
-    el->dst = (int *)malloc(m * sizeof(int));
-    if (!el->src || !el->dst) {
-        free(el->src); free(el->dst);
+    el->first_endpoints = (int *)malloc(m * sizeof(int));
+    el->second_endpoints = (int *)malloc(m * sizeof(int));
+    if (!el->first_endpoints || !el->second_endpoints) {
+        free(el->first_endpoints); free(el->second_endpoints);
         Py_DECREF(fast);
         PyErr_NoMemory();
         return -1;
@@ -74,17 +74,17 @@ int parse_edges(PyObject *edges_obj, EdgeList *el) {
         PyObject *edge_fast = PySequence_Fast(edge, "each edge must be a 2-tuple");
         if (!edge_fast || PySequence_Fast_GET_SIZE(edge_fast) != 2) {
             Py_XDECREF(edge_fast);
-            free(el->src); free(el->dst);
+            free(el->first_endpoints); free(el->second_endpoints);
             Py_DECREF(fast);
             PyErr_SetString(PyExc_ValueError, "each edge must be a 2-tuple");
             return -1;
         }
         PyObject **ep = PySequence_Fast_ITEMS(edge_fast);
-        el->src[i] = (int)PyLong_AsLong(ep[0]);
-        el->dst[i] = (int)PyLong_AsLong(ep[1]);
+        el->first_endpoints[i] = (int)PyLong_AsLong(ep[0]);
+        el->second_endpoints[i] = (int)PyLong_AsLong(ep[1]);
         Py_DECREF(edge_fast);
         if (PyErr_Occurred()) {
-            free(el->src); free(el->dst);
+            free(el->first_endpoints); free(el->second_endpoints);
             Py_DECREF(fast);
             return -1;
         }
@@ -99,22 +99,22 @@ static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
     /* Fast path: buffer protocol (numpy int32/int64 array with shape (m,2)) */
     Py_buffer buf;
     if (PyObject_GetBuffer(edges_obj, &buf, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
-        int is_i32 = is_int32_fmt(buf.format, buf.itemsize);
-        int is_i64 = is_int64_fmt(buf.format, buf.itemsize);
+        int is_i32 = is_int32_format(buf.format, buf.itemsize);
+        int is_i64 = is_int64_format(buf.format, buf.itemsize);
 
         if ((is_i32 || is_i64) && buf.ndim == 2 && buf.shape[1] == 2) {
             Py_ssize_t m = buf.shape[0];
-            el->m = m;
+            el->edge_count = m;
             el->owns_memory = 1;
             if (m == 0) {
-                el->src = NULL; el->dst = NULL;
+                el->first_endpoints = NULL; el->second_endpoints = NULL;
                 PyBuffer_Release(&buf);
                 return 0;
             }
-            el->src = (int *)malloc((size_t)m * sizeof(int));
-            el->dst = (int *)malloc((size_t)m * sizeof(int));
-            if (!el->src || !el->dst) {
-                free(el->src); free(el->dst);
+            el->first_endpoints = (int *)malloc((size_t)m * sizeof(int));
+            el->second_endpoints = (int *)malloc((size_t)m * sizeof(int));
+            if (!el->first_endpoints || !el->second_endpoints) {
+                free(el->first_endpoints); free(el->second_endpoints);
                 PyBuffer_Release(&buf);
                 PyErr_NoMemory();
                 return -1;
@@ -125,13 +125,13 @@ static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
                     int u_idx = intmap_get(im, (long)data[i * 2]);
                     int v_idx = intmap_get(im, (long)data[i * 2 + 1]);
                     if (u_idx < 0 || v_idx < 0) {
-                        free(el->src); free(el->dst);
+                        free(el->first_endpoints); free(el->second_endpoints);
                         PyBuffer_Release(&buf);
                         PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
                         return -1;
                     }
-                    el->src[i] = u_idx;
-                    el->dst[i] = v_idx;
+                    el->first_endpoints[i] = u_idx;
+                    el->second_endpoints[i] = v_idx;
                 }
             } else {  /* int64 */
                 long long *data = (long long *)buf.buf;
@@ -139,13 +139,13 @@ static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
                     int u_idx = intmap_get(im, (long)data[i * 2]);
                     int v_idx = intmap_get(im, (long)data[i * 2 + 1]);
                     if (u_idx < 0 || v_idx < 0) {
-                        free(el->src); free(el->dst);
+                        free(el->first_endpoints); free(el->second_endpoints);
                         PyBuffer_Release(&buf);
                         PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
                         return -1;
                     }
-                    el->src[i] = u_idx;
-                    el->dst[i] = v_idx;
+                    el->first_endpoints[i] = u_idx;
+                    el->second_endpoints[i] = v_idx;
                 }
             }
             PyBuffer_Release(&buf);
@@ -162,18 +162,18 @@ static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
     if (!fast) return -1;
 
     Py_ssize_t m = PySequence_Fast_GET_SIZE(fast);
-    el->m = m;
+    el->edge_count = m;
     el->owns_memory = 1;
     if (m == 0) {
-        el->src = NULL; el->dst = NULL;
+        el->first_endpoints = NULL; el->second_endpoints = NULL;
         Py_DECREF(fast);
         return 0;
     }
 
-    el->src = (int *)malloc((size_t)m * sizeof(int));
-    el->dst = (int *)malloc((size_t)m * sizeof(int));
-    if (!el->src || !el->dst) {
-        free(el->src); free(el->dst);
+    el->first_endpoints = (int *)malloc((size_t)m * sizeof(int));
+    el->second_endpoints = (int *)malloc((size_t)m * sizeof(int));
+    if (!el->first_endpoints || !el->second_endpoints) {
+        free(el->first_endpoints); free(el->second_endpoints);
         Py_DECREF(fast);
         PyErr_NoMemory();
         return -1;
@@ -185,7 +185,7 @@ static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
         PyObject *edge_fast = PySequence_Fast(edge, "each edge must be a 2-tuple");
         if (!edge_fast || PySequence_Fast_GET_SIZE(edge_fast) != 2) {
             Py_XDECREF(edge_fast);
-            free(el->src); free(el->dst);
+            free(el->first_endpoints); free(el->second_endpoints);
             Py_DECREF(fast);
             PyErr_SetString(PyExc_ValueError, "each edge must be a 2-tuple");
             return -1;
@@ -195,20 +195,20 @@ static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
         long v_nid = PyLong_AsLong(ep[1]);
         Py_DECREF(edge_fast);
         if (PyErr_Occurred()) {
-            free(el->src); free(el->dst);
+            free(el->first_endpoints); free(el->second_endpoints);
             Py_DECREF(fast);
             return -1;
         }
         int u_idx = intmap_get(im, u_nid);
         int v_idx = intmap_get(im, v_nid);
         if (u_idx < 0 || v_idx < 0) {
-            free(el->src); free(el->dst);
+            free(el->first_endpoints); free(el->second_endpoints);
             Py_DECREF(fast);
             PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
             return -1;
         }
-        el->src[i] = u_idx;
-        el->dst[i] = v_idx;
+        el->first_endpoints[i] = u_idx;
+        el->second_endpoints[i] = v_idx;
     }
     Py_DECREF(fast);
     return 0;
@@ -216,13 +216,13 @@ static int parse_edges_mapped(IntMap *im, PyObject *edges_obj, EdgeList *el) {
 
 /* ── Edge parsing from two separate src/dst sequences or 1D arrays ── */
 
-static int _parse_one_array(IntMap *im, PyObject *obj, int *out, Py_ssize_t m,
+static int parse_endpoint_array(IntMap *im, PyObject *obj, int *out, Py_ssize_t m,
                             const char *label) {
     /* Try buffer protocol: 1D int32 or int64 array */
     Py_buffer buf;
     if (PyObject_GetBuffer(obj, &buf, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
-        int is_i32 = is_int32_fmt(buf.format, buf.itemsize);
-        int is_i64 = is_int64_fmt(buf.format, buf.itemsize);
+        int is_i32 = is_int32_format(buf.format, buf.itemsize);
+        int is_i64 = is_int64_format(buf.format, buf.itemsize);
         if ((is_i32 || is_i64) && buf.ndim == 1 && buf.shape[0] == m) {
             if (is_i32) {
                 int *data = (int *)buf.buf;
@@ -299,108 +299,108 @@ static int parse_edges_mapped_split(IntMap *im, PyObject *src_obj, PyObject *dst
         Py_DECREF(fast);
     }
 
-    el->m = m;
+    el->edge_count = m;
     el->owns_memory = 1;
     if (m == 0) {
-        el->src = NULL; el->dst = NULL;
+        el->first_endpoints = NULL; el->second_endpoints = NULL;
         return 0;
     }
 
-    el->src = (int *)malloc((size_t)m * sizeof(int));
-    el->dst = (int *)malloc((size_t)m * sizeof(int));
-    if (!el->src || !el->dst) {
-        free(el->src); free(el->dst);
+    el->first_endpoints = (int *)malloc((size_t)m * sizeof(int));
+    el->second_endpoints = (int *)malloc((size_t)m * sizeof(int));
+    if (!el->first_endpoints || !el->second_endpoints) {
+        free(el->first_endpoints); free(el->second_endpoints);
         PyErr_NoMemory();
         return -1;
     }
 
-    if (_parse_one_array(im, src_obj, el->src, m, "src must be a sequence") < 0) {
-        free(el->src); free(el->dst);
+    if (parse_endpoint_array(im, src_obj, el->first_endpoints, m, "src must be a sequence") < 0) {
+        free(el->first_endpoints); free(el->second_endpoints);
         return -1;
     }
-    if (_parse_one_array(im, dst_obj, el->dst, m, "dst must be a sequence") < 0) {
-        free(el->src); free(el->dst);
-        return -1;
-    }
-    return 0;
-}
-
-int nid_parse(PyObject *node_ids_obj, PyObject *edges_obj, NidContext *ctx) {
-    ctx->nid_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
-    if (!ctx->nid_fast) return -1;
-    ctx->n = (int)PySequence_Fast_GET_SIZE(ctx->nid_fast);
-    ctx->nid_items = PySequence_Fast_ITEMS(ctx->nid_fast);
-    ctx->im.keys = NULL;
-    ctx->im.vals = NULL;
-    ctx->el.src = NULL; ctx->el.dst = NULL;
-    ctx->el.m = 0; ctx->el.owns_memory = 0;
-
-    if (ctx->n == 0) return 0;
-
-    if (intmap_init(&ctx->im, ctx->n) < 0) {
-        Py_DECREF(ctx->nid_fast);
-        return -1;
-    }
-    for (int i = 0; i < ctx->n; i++) {
-        long nid = PyLong_AsLong(ctx->nid_items[i]);
-        if (nid == -1 && PyErr_Occurred()) {
-            intmap_free(&ctx->im);
-            Py_DECREF(ctx->nid_fast);
-            return -1;
-        }
-        if (intmap_get(&ctx->im, nid) != -1) {
-            PyErr_Format(PyExc_ValueError, "duplicate node id %ld", nid);
-            intmap_free(&ctx->im);
-            Py_DECREF(ctx->nid_fast);
-            return -1;
-        }
-        intmap_put(&ctx->im, nid, i);
-    }
-
-    if (parse_edges_mapped(&ctx->im, edges_obj, &ctx->el) < 0) {
-        intmap_free(&ctx->im);
-        Py_DECREF(ctx->nid_fast);
+    if (parse_endpoint_array(im, dst_obj, el->second_endpoints, m, "dst must be a sequence") < 0) {
+        free(el->first_endpoints); free(el->second_endpoints);
         return -1;
     }
     return 0;
 }
 
-int nid_parse_split(PyObject *node_ids_obj, PyObject *src_obj, PyObject *dst_obj,
-                    NidContext *ctx) {
-    ctx->nid_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
-    if (!ctx->nid_fast) return -1;
-    ctx->n = (int)PySequence_Fast_GET_SIZE(ctx->nid_fast);
-    ctx->nid_items = PySequence_Fast_ITEMS(ctx->nid_fast);
-    ctx->im.keys = NULL;
-    ctx->im.vals = NULL;
-    ctx->el.src = NULL; ctx->el.dst = NULL;
-    ctx->el.m = 0; ctx->el.owns_memory = 0;
+int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *ctx) {
+    ctx->node_ids_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
+    if (!ctx->node_ids_fast) return -1;
+    ctx->node_count = (int)PySequence_Fast_GET_SIZE(ctx->node_ids_fast);
+    ctx->node_id_items = PySequence_Fast_ITEMS(ctx->node_ids_fast);
+    ctx->node_index_by_node_id.keys = NULL;
+    ctx->node_index_by_node_id.values = NULL;
+    ctx->edges.first_endpoints = NULL; ctx->edges.second_endpoints = NULL;
+    ctx->edges.edge_count = 0; ctx->edges.owns_memory = 0;
 
-    if (ctx->n == 0) return 0;
+    if (ctx->node_count == 0) return 0;
 
-    if (intmap_init(&ctx->im, ctx->n) < 0) {
-        Py_DECREF(ctx->nid_fast);
+    if (intmap_init(&ctx->node_index_by_node_id, ctx->node_count) < 0) {
+        Py_DECREF(ctx->node_ids_fast);
         return -1;
     }
-    for (int i = 0; i < ctx->n; i++) {
-        long nid = PyLong_AsLong(ctx->nid_items[i]);
+    for (int i = 0; i < ctx->node_count; i++) {
+        long nid = PyLong_AsLong(ctx->node_id_items[i]);
         if (nid == -1 && PyErr_Occurred()) {
-            intmap_free(&ctx->im);
-            Py_DECREF(ctx->nid_fast);
+            intmap_free(&ctx->node_index_by_node_id);
+            Py_DECREF(ctx->node_ids_fast);
             return -1;
         }
-        if (intmap_get(&ctx->im, nid) != -1) {
+        if (intmap_get(&ctx->node_index_by_node_id, nid) != -1) {
             PyErr_Format(PyExc_ValueError, "duplicate node id %ld", nid);
-            intmap_free(&ctx->im);
-            Py_DECREF(ctx->nid_fast);
+            intmap_free(&ctx->node_index_by_node_id);
+            Py_DECREF(ctx->node_ids_fast);
             return -1;
         }
-        intmap_put(&ctx->im, nid, i);
+        intmap_put(&ctx->node_index_by_node_id, nid, i);
     }
 
-    if (parse_edges_mapped_split(&ctx->im, src_obj, dst_obj, &ctx->el) < 0) {
-        intmap_free(&ctx->im);
-        Py_DECREF(ctx->nid_fast);
+    if (parse_edges_mapped(&ctx->node_index_by_node_id, edges_obj, &ctx->edges) < 0) {
+        intmap_free(&ctx->node_index_by_node_id);
+        Py_DECREF(ctx->node_ids_fast);
+        return -1;
+    }
+    return 0;
+}
+
+int node_id_parse_split(PyObject *node_ids_obj, PyObject *src_obj, PyObject *dst_obj,
+                    NodeIdContext *ctx) {
+    ctx->node_ids_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
+    if (!ctx->node_ids_fast) return -1;
+    ctx->node_count = (int)PySequence_Fast_GET_SIZE(ctx->node_ids_fast);
+    ctx->node_id_items = PySequence_Fast_ITEMS(ctx->node_ids_fast);
+    ctx->node_index_by_node_id.keys = NULL;
+    ctx->node_index_by_node_id.values = NULL;
+    ctx->edges.first_endpoints = NULL; ctx->edges.second_endpoints = NULL;
+    ctx->edges.edge_count = 0; ctx->edges.owns_memory = 0;
+
+    if (ctx->node_count == 0) return 0;
+
+    if (intmap_init(&ctx->node_index_by_node_id, ctx->node_count) < 0) {
+        Py_DECREF(ctx->node_ids_fast);
+        return -1;
+    }
+    for (int i = 0; i < ctx->node_count; i++) {
+        long nid = PyLong_AsLong(ctx->node_id_items[i]);
+        if (nid == -1 && PyErr_Occurred()) {
+            intmap_free(&ctx->node_index_by_node_id);
+            Py_DECREF(ctx->node_ids_fast);
+            return -1;
+        }
+        if (intmap_get(&ctx->node_index_by_node_id, nid) != -1) {
+            PyErr_Format(PyExc_ValueError, "duplicate node id %ld", nid);
+            intmap_free(&ctx->node_index_by_node_id);
+            Py_DECREF(ctx->node_ids_fast);
+            return -1;
+        }
+        intmap_put(&ctx->node_index_by_node_id, nid, i);
+    }
+
+    if (parse_edges_mapped_split(&ctx->node_index_by_node_id, src_obj, dst_obj, &ctx->edges) < 0) {
+        intmap_free(&ctx->node_index_by_node_id);
+        Py_DECREF(ctx->node_ids_fast);
         return -1;
     }
     return 0;
@@ -427,12 +427,12 @@ int parse_mask(PyObject *mask_obj, Py_ssize_t expected_len,
 }
 
 static int check_weight_count(WeightList *wl, Py_ssize_t expected_m) {
-    if (wl->n == expected_m) return 0;
+    if (wl->count == expected_m) return 0;
     PyErr_Format(PyExc_ValueError,
                  "weights length %zd does not match edge count %zd",
-                 wl->n, expected_m);
-    if (wl->owns_memory) free(wl->w);
-    wl->w = NULL;
+                 wl->count, expected_m);
+    if (wl->owns_memory) free(wl->values);
+    wl->values = NULL;
     return -1;
 }
 
@@ -441,8 +441,8 @@ int parse_weights(PyObject *obj, WeightList *wl, Py_ssize_t expected_m) {
     if (PyObject_GetBuffer(obj, &buf, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
         if (buf.format && strcmp(buf.format, "d") == 0 &&
             buf.ndim == 1 && buf.itemsize == 8) {
-            wl->w = (double *)buf.buf;
-            wl->n = buf.shape[0];
+            wl->values = (double *)buf.buf;
+            wl->count = buf.shape[0];
             wl->owns_memory = 0;
             PyBuffer_Release(&buf);
             return check_weight_count(wl, expected_m);
@@ -454,15 +454,15 @@ int parse_weights(PyObject *obj, WeightList *wl, Py_ssize_t expected_m) {
     PyObject *fast = PySequence_Fast(obj, "weights must be a sequence");
     if (!fast) return -1;
     Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
-    wl->n = n;
+    wl->count = n;
     wl->owns_memory = 1;
-    if (n == 0) { wl->w = NULL; Py_DECREF(fast); return check_weight_count(wl, expected_m); }
-    wl->w = (double *)malloc((size_t)n * sizeof(double));
-    if (!wl->w) { Py_DECREF(fast); PyErr_NoMemory(); return -1; }
+    if (n == 0) { wl->values = NULL; Py_DECREF(fast); return check_weight_count(wl, expected_m); }
+    wl->values = (double *)malloc((size_t)n * sizeof(double));
+    if (!wl->values) { Py_DECREF(fast); PyErr_NoMemory(); return -1; }
     PyObject **items = PySequence_Fast_ITEMS(fast);
     for (Py_ssize_t i = 0; i < n; i++) {
-        wl->w[i] = PyFloat_AsDouble(items[i]);
-        if (PyErr_Occurred()) { free(wl->w); Py_DECREF(fast); return -1; }
+        wl->values[i] = PyFloat_AsDouble(items[i]);
+        if (PyErr_Occurred()) { free(wl->values); Py_DECREF(fast); return -1; }
     }
     Py_DECREF(fast);
     return check_weight_count(wl, expected_m);
@@ -477,7 +477,7 @@ int parse_labels(PyObject *labels_obj, int n, const int32_t **labels_out, Py_buf
     if (PyObject_GetBuffer(labels_obj, labels_buf, PyBUF_CONTIG_RO | PyBUF_FORMAT) < 0)
         return -1;
     int byte_format = labels_buf->itemsize == 1;
-    if (!byte_format && !is_int32_fmt(labels_buf->format, labels_buf->itemsize)) {
+    if (!byte_format && !is_int32_format(labels_buf->format, labels_buf->itemsize)) {
         PyBuffer_Release(labels_buf);
         PyErr_SetString(PyExc_TypeError, "labels must be an int32 buffer");
         return -1;

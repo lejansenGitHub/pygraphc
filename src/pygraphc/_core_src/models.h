@@ -19,15 +19,15 @@
 /* ── Edge parsing: supports both list-of-tuples and numpy int32 array ── */
 
 typedef struct {
-    int *src;
-    int *dst;
-    Py_ssize_t m;
-    int owns_memory;  /* 1 = we malloc'd src/dst, 0 = points into numpy buffer */
+    int *first_endpoints;   /* interleaved (edge_count, 2) pairs when second_endpoints is NULL */
+    int *second_endpoints;
+    Py_ssize_t edge_count;
+    int owns_memory;  /* 1 = we malloc'd the endpoint arrays, 0 = points into numpy buffer */
 } EdgeList;
 
 /* Inline edge access macros — handles both interleaved and split layouts */
-#define EDGE_SRC(el, i) ((el)->dst == NULL ? (el)->src[(i)*2]   : (el)->src[i])
-#define EDGE_DST(el, i) ((el)->dst == NULL ? (el)->src[(i)*2+1] : (el)->dst[i])
+#define EDGE_FIRST_ENDPOINT(edges, edge_index) ((edges)->second_endpoints == NULL ? (edges)->first_endpoints[(edge_index)*2]   : (edges)->first_endpoints[edge_index])
+#define EDGE_SECOND_ENDPOINT(edges, edge_index) ((edges)->second_endpoints == NULL ? (edges)->first_endpoints[(edge_index)*2+1] : (edges)->second_endpoints[edge_index])
 
 PYGRAPHC_INTERNAL void free_edges(EdgeList *el);
 
@@ -35,79 +35,79 @@ PYGRAPHC_INTERNAL void free_edges(EdgeList *el);
 
 typedef struct {
     long *keys;
-    int *vals;
-    int cap;      /* always power of 2 */
-    int mask;     /* cap - 1 */
+    int *values;
+    int capacity;       /* always power of 2 */
+    int capacity_mask;  /* capacity - 1, a hash bit mask */
 } IntMap;
 
 PYGRAPHC_INTERNAL int intmap_init(IntMap *m, int n);
 PYGRAPHC_INTERNAL void intmap_free(IntMap *m);
 
 static inline void intmap_put(IntMap *m, long key, int val) {
-    int i = (int)((unsigned long)key & (unsigned long)m->mask);
+    int i = (int)((unsigned long)key & (unsigned long)m->capacity_mask);
     while (m->keys[i] != -1) {
-        if (m->keys[i] == key) { m->vals[i] = val; return; }
-        i = (i + 1) & m->mask;
+        if (m->keys[i] == key) { m->values[i] = val; return; }
+        i = (i + 1) & m->capacity_mask;
     }
     m->keys[i] = key;
-    m->vals[i] = val;
+    m->values[i] = val;
 }
 
 static inline int intmap_get(IntMap *m, long key) {
-    int i = (int)((unsigned long)key & (unsigned long)m->mask);
+    int i = (int)((unsigned long)key & (unsigned long)m->capacity_mask);
     while (m->keys[i] != -1) {
-        if (m->keys[i] == key) return m->vals[i];
-        i = (i + 1) & m->mask;
+        if (m->keys[i] == key) return m->values[i];
+        i = (i + 1) & m->capacity_mask;
     }
     return -1;  /* not found */
 }
 
-/* ── NidContext: shared setup for node-ID-based API ── */
+/* ── NodeIdContext: shared setup for node-ID-based API ── */
 
 typedef struct {
-    PyObject *nid_fast;
-    PyObject **nid_items;
-    int n;
-    IntMap im;
-    EdgeList el;
-} NidContext;
+    PyObject *node_ids_fast;
+    PyObject **node_id_items;
+    int node_count;
+    IntMap node_index_by_node_id;
+    EdgeList edges;
+} NodeIdContext;
 
-PYGRAPHC_INTERNAL void nid_free(NidContext *ctx);
+PYGRAPHC_INTERNAL void node_id_context_free(NodeIdContext *ctx);
 
 /* ── Helper: run union-find, return component_id array + num_components ── */
 
 typedef struct {
-    int *labels;    /* labels[node] = component_id (sequential 0..num_comp-1) */
-    int num_comp;
+    int *labels;    /* labels[node] = component_id (sequential 0..component_count-1) */
+    int component_count;
 } ComponentResult;
 
 /* ── Adjacency list (CSR format) for graph traversal ── */
 
 typedef struct {
-    int *offset;      /* size n+1, CSR row pointers */
-    int *adj;         /* size 2*m (undirected) or m (directed), neighbor indices */
-    int *eid;         /* same size, original edge index */
-    int *rev_offset;  /* directed only: size n+1, reverse CSR (NULL if undirected) */
-    int *rev_adj;     /* directed only: size m, predecessor indices */
-    int *rev_eid;     /* directed only: size m, original edge indices */
-} AdjList;
+    int *offset;                /* size node_count+1, CSR row pointers */
+    int *neighbors;             /* size 2*edge_count (undirected) or edge_count (directed), neighbor indices */
+    int *edge_indices;          /* same size, original edge index */
+    int *reverse_offset;        /* directed only: size node_count+1, reverse CSR (NULL if undirected) */
+    int *reverse_neighbors;     /* directed only: size edge_count, predecessor indices */
+    int *reverse_edge_indices;  /* directed only: size edge_count, original edge indices */
+} AdjacencyList;
 
-PYGRAPHC_INTERNAL int build_adj(int n, EdgeList *el, AdjList *al, int directed);
-PYGRAPHC_INTERNAL void free_adj(AdjList *al);
+PYGRAPHC_INTERNAL int build_adjacency(int n, EdgeList *el, AdjacencyList *al, int directed);
+PYGRAPHC_INTERNAL void free_adjacency(AdjacencyList *al);
 
-/* ── GraphCtx: cached parsed graph for reuse across algorithms ── */
+/* ── GraphContext: cached parsed graph for reuse across algorithms ── */
 
 typedef struct {
-    NidContext nid;
-    AdjList    al;
-    int        has_adj;
-    int        directed;  /* 0 = undirected, 1 = directed */
-} GraphCtx;
+    NodeIdContext node_ids;
+    AdjacencyList adjacency;
+    int           has_adjacency;
+    int           directed;  /* 0 = undirected, 1 = directed */
+} GraphContext;
 
-PYGRAPHC_INTERNAL void graphctx_destructor(PyObject *capsule);
+PYGRAPHC_INTERNAL void graph_context_destructor(PyObject *capsule);
 
-static inline GraphCtx *get_graphctx(PyObject *capsule) {
-    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
+static inline GraphContext *get_graph_context(PyObject *capsule) {
+    GraphContext *g = (GraphContext *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
     if (!g) PyErr_SetString(PyExc_TypeError, "expected a parsed Graph capsule");
     return g;
 }
@@ -115,8 +115,8 @@ static inline GraphCtx *get_graphctx(PyObject *capsule) {
 /* ── Weight parsing: list of floats or numpy float64 array ── */
 
 typedef struct {
-    double *w;
-    Py_ssize_t n;
+    double *values;
+    Py_ssize_t count;
     int owns_memory;
 } WeightList;
 

@@ -25,28 +25,28 @@
 /* Flat dataset: data[sample * n_vars + var] = value */
 typedef struct {
     int *values;        /* n_samples * n_vars */
-    int n_samples;
-    int n_vars;
+    int sample_count;
+    int variable_count;
     int *cardinalities; /* cardinality per variable */
 } Dataset;
 
 /* DAG adjacency: parent lists per node */
 typedef struct {
     int *parents;       /* parents[node * max_parents .. + n_parents[node]) */
-    int *n_parents;     /* number of parents per node */
+    int *parent_counts;     /* number of parents per node */
     int max_parents;    /* max_indegree */
-    int n;              /* number of nodes */
+    int node_count;              /* number of nodes */
 } DAG;
 
 /* Tabu list (circular buffer of operations) */
 typedef struct {
-    int *ops;           /* op_type, u, v per entry */
+    int *operations;           /* op_type, u, v per entry */
     int capacity;
     int head;
     int count;
 } TabuList;
 
-enum { OP_ADD = 0, OP_REMOVE = 1, OP_FLIP = 2 };
+enum { OPERATION_ADD = 0, OPERATION_REMOVE = 1, OPERATION_FLIP = 2 };
 
 /* ── State counts (the hot path) ── */
 
@@ -90,8 +90,8 @@ static int *compute_state_counts(
     }
 
     /* Single pass over data */
-    for (int s = 0; s < ds->n_samples; s++) {
-        const int *row = ds->values + s * ds->n_vars;
+    for (int s = 0; s < ds->sample_count; s++) {
+        const int *row = ds->values + s * ds->variable_count;
         int parent_config = 0;
         for (int i = 0; i < n_parents; i++) {
             parent_config += row[parent_indices[i]] * multipliers[i];
@@ -147,37 +147,37 @@ static double k2_local_score(
 /* ── DAG operations ── */
 
 static void dag_init(DAG *dag, int n, int max_parents) {
-    dag->n = n;
+    dag->node_count = n;
     dag->max_parents = max_parents;
     dag->parents = (int *)calloc(n * max_parents, sizeof(int));
-    dag->n_parents = (int *)calloc(n, sizeof(int));
+    dag->parent_counts = (int *)calloc(n, sizeof(int));
 }
 
 static void dag_free(DAG *dag) {
     free(dag->parents);
-    free(dag->n_parents);
+    free(dag->parent_counts);
 }
 
 static int dag_has_edge(const DAG *dag, int u, int v) {
-    for (int i = 0; i < dag->n_parents[v]; i++) {
+    for (int i = 0; i < dag->parent_counts[v]; i++) {
         if (dag->parents[v * dag->max_parents + i] == u) return 1;
     }
     return 0;
 }
 
 static void dag_add_edge(DAG *dag, int u, int v) {
-    int idx = dag->n_parents[v];
+    int idx = dag->parent_counts[v];
     dag->parents[v * dag->max_parents + idx] = u;
-    dag->n_parents[v]++;
+    dag->parent_counts[v]++;
 }
 
 static void dag_remove_edge(DAG *dag, int u, int v) {
     int *plist = dag->parents + v * dag->max_parents;
-    int np = dag->n_parents[v];
+    int np = dag->parent_counts[v];
     for (int i = 0; i < np; i++) {
         if (plist[i] == u) {
             plist[i] = plist[np - 1];
-            dag->n_parents[v]--;
+            dag->parent_counts[v]--;
             return;
         }
     }
@@ -189,7 +189,7 @@ static void dag_remove_edge(DAG *dag, int u, int v) {
  */
 static int dag_has_path(const DAG *dag, int src, int dst) {
     if (src == dst) return 1;
-    int n = dag->n;
+    int n = dag->node_count;
     uint8_t *visited = (uint8_t *)calloc(n, sizeof(uint8_t));
     int *queue = (int *)malloc(n * sizeof(int));
     if (!visited || !queue) { free(visited); free(queue); return 0; }
@@ -203,7 +203,7 @@ static int dag_has_path(const DAG *dag, int src, int dst) {
         /* Iterate over children of u: nodes v where u is a parent */
         for (int v = 0; v < n; v++) {
             if (visited[v]) continue;
-            for (int i = 0; i < dag->n_parents[v]; i++) {
+            for (int i = 0; i < dag->parent_counts[v]; i++) {
                 if (dag->parents[v * dag->max_parents + i] == u) {
                     if (v == dst) { free(visited); free(queue); return 1; }
                     visited[v] = 1;
@@ -221,11 +221,11 @@ static int dag_has_path(const DAG *dag, int src, int dst) {
 
 /* Build children adjacency for faster path checks */
 static void dag_build_children(const DAG *dag, int **out_child_offset, int **out_children) {
-    int n = dag->n;
+    int n = dag->node_count;
     int *degree = (int *)calloc(n, sizeof(int));
     int total_edges = 0;
     for (int v = 0; v < n; v++) {
-        for (int i = 0; i < dag->n_parents[v]; i++) {
+        for (int i = 0; i < dag->parent_counts[v]; i++) {
             int u = dag->parents[v * dag->max_parents + i];
             degree[u]++;
             total_edges++;
@@ -237,7 +237,7 @@ static void dag_build_children(const DAG *dag, int **out_child_offset, int **out
     int *children = (int *)malloc((total_edges > 0 ? total_edges : 1) * sizeof(int));
     int *pos = (int *)calloc(n, sizeof(int));
     for (int v = 0; v < n; v++) {
-        for (int i = 0; i < dag->n_parents[v]; i++) {
+        for (int i = 0; i < dag->parent_counts[v]; i++) {
             int u = dag->parents[v * dag->max_parents + i];
             children[offset[u] + pos[u]] = v;
             pos[u]++;
@@ -282,20 +282,20 @@ static int dag_has_path_fast(int n, const int *child_offset, const int *children
 
 static void tabu_init(TabuList *tl, int capacity) {
     tl->capacity = capacity;
-    tl->ops = (int *)malloc(capacity * 3 * sizeof(int));
+    tl->operations = (int *)malloc(capacity * 3 * sizeof(int));
     tl->head = 0;
     tl->count = 0;
 }
 
 static void tabu_free(TabuList *tl) {
-    free(tl->ops);
+    free(tl->operations);
 }
 
 static void tabu_push(TabuList *tl, int op, int u, int v) {
     int idx = (tl->head + tl->count) % tl->capacity;
-    tl->ops[idx * 3 + 0] = op;
-    tl->ops[idx * 3 + 1] = u;
-    tl->ops[idx * 3 + 2] = v;
+    tl->operations[idx * 3 + 0] = op;
+    tl->operations[idx * 3 + 1] = u;
+    tl->operations[idx * 3 + 2] = v;
     if (tl->count < tl->capacity) {
         tl->count++;
     } else {
@@ -306,9 +306,9 @@ static void tabu_push(TabuList *tl, int op, int u, int v) {
 static int tabu_contains(const TabuList *tl, int op, int u, int v) {
     for (int i = 0; i < tl->count; i++) {
         int idx = (tl->head + i) % tl->capacity;
-        if (tl->ops[idx * 3 + 0] == op &&
-            tl->ops[idx * 3 + 1] == u &&
-            tl->ops[idx * 3 + 2] == v) {
+        if (tl->operations[idx * 3 + 0] == op &&
+            tl->operations[idx * 3 + 1] == u &&
+            tl->operations[idx * 3 + 2] == v) {
             return 1;
         }
     }
@@ -333,7 +333,7 @@ typedef struct {
     long *keys;
     double *values;
     int capacity;
-    int mask;
+    int capacity_mask;
 } ScoreCache;
 
 static void score_cache_init(ScoreCache *sc, int capacity) {
@@ -341,7 +341,7 @@ static void score_cache_init(ScoreCache *sc, int capacity) {
     int cap = 1;
     while (cap < capacity) cap <<= 1;
     sc->capacity = cap;
-    sc->mask = cap - 1;
+    sc->capacity_mask = cap - 1;
     sc->keys = (long *)malloc(cap * sizeof(long));
     sc->values = (double *)malloc(cap * sizeof(double));
     memset(sc->keys, -1, cap * sizeof(long)); /* -1 = empty */
@@ -353,9 +353,9 @@ static void score_cache_free(ScoreCache *sc) {
 }
 
 static int score_cache_get(const ScoreCache *sc, long key, double *out) {
-    int idx = (int)(key & sc->mask);
+    int idx = (int)(key & sc->capacity_mask);
     for (int i = 0; i < sc->capacity; i++) {
-        int pos = (idx + i) & sc->mask;
+        int pos = (idx + i) & sc->capacity_mask;
         if (sc->keys[pos] == key) { *out = sc->values[pos]; return 1; }
         if (sc->keys[pos] == -1) return 0;
     }
@@ -363,9 +363,9 @@ static int score_cache_get(const ScoreCache *sc, long key, double *out) {
 }
 
 static void score_cache_put(ScoreCache *sc, long key, double value) {
-    int idx = (int)(key & sc->mask);
+    int idx = (int)(key & sc->capacity_mask);
     for (int i = 0; i < sc->capacity; i++) {
-        int pos = (idx + i) & sc->mask;
+        int pos = (idx + i) & sc->capacity_mask;
         if (sc->keys[pos] == -1 || sc->keys[pos] == key) {
             sc->keys[pos] = key;
             sc->values[pos] = value;
@@ -406,7 +406,7 @@ static double cached_k2_score(
     const int *parents,
     int n_parents)
 {
-    long key = encode_cache_key(child, parents, n_parents, ds->n_vars);
+    long key = encode_cache_key(child, parents, n_parents, ds->variable_count);
     double score;
     if (score_cache_get(cache, key, &score)) return score;
     score = k2_local_score(ds, child, parents, n_parents);
@@ -456,8 +456,8 @@ static PyObject *py_hill_climb_k2(PyObject *self, PyObject *args) {
 
     /* Build Dataset */
     Dataset ds;
-    ds.n_samples = (int)n_samples;
-    ds.n_vars = (int)n_vars;
+    ds.sample_count = (int)n_samples;
+    ds.variable_count = (int)n_vars;
     ds.cardinalities = (int *)malloc(n_vars * sizeof(int));
     ds.values = (int *)malloc(n_samples * n_vars * sizeof(int));
 
@@ -515,15 +515,15 @@ static PyObject *py_hill_climb_k2(PyObject *self, PyObject *args) {
                 if (u == v) continue;
                 if (dag_has_edge(&dag, u, v)) continue;
                 if (dag_has_edge(&dag, v, u)) continue;
-                if (dag.n_parents[v] >= max_indegree) continue;
-                if (tabu_contains(&tabu, OP_ADD, u, v)) continue;
+                if (dag.parent_counts[v] >= max_indegree) continue;
+                if (tabu_contains(&tabu, OPERATION_ADD, u, v)) continue;
 
                 /* Check acyclicity: adding u→v creates cycle iff path v→u exists */
                 if (dag_has_path_fast(n, child_offset, children_arr, v, u)) continue;
 
                 /* Score delta for adding u as parent of v */
                 int new_parents[16]; /* max_indegree should be small */
-                int np = dag.n_parents[v];
+                int np = dag.parent_counts[v];
                 memcpy(new_parents, dag.parents + v * dag.max_parents, np * sizeof(int));
                 new_parents[np] = u;
 
@@ -535,7 +535,7 @@ static PyObject *py_hill_climb_k2(PyObject *self, PyObject *args) {
 
                 if (delta > best_delta) {
                     best_delta = delta;
-                    best_op = OP_ADD;
+                    best_op = OPERATION_ADD;
                     best_u = u;
                     best_v = v;
                 }
@@ -544,27 +544,27 @@ static PyObject *py_hill_climb_k2(PyObject *self, PyObject *args) {
 
         /* Evaluate all possible REMOVE operations */
         for (int v = 0; v < n; v++) {
-            for (int i = 0; i < dag.n_parents[v]; i++) {
+            for (int i = 0; i < dag.parent_counts[v]; i++) {
                 int u = dag.parents[v * dag.max_parents + i];
-                if (tabu_contains(&tabu, OP_REMOVE, u, v)) continue;
+                if (tabu_contains(&tabu, OPERATION_REMOVE, u, v)) continue;
 
                 /* Score delta for removing u as parent of v */
                 int new_parents[16];
                 int np = 0;
-                for (int k = 0; k < dag.n_parents[v]; k++) {
+                for (int k = 0; k < dag.parent_counts[v]; k++) {
                     int p = dag.parents[v * dag.max_parents + k];
                     if (p != u) new_parents[np++] = p;
                 }
 
                 double old_score = cached_k2_score(
-                    &ds, &cache, v, dag.parents + v * dag.max_parents, dag.n_parents[v]);
+                    &ds, &cache, v, dag.parents + v * dag.max_parents, dag.parent_counts[v]);
                 double new_score = cached_k2_score(
                     &ds, &cache, v, new_parents, np);
                 double delta = new_score - old_score;
 
                 if (delta > best_delta) {
                     best_delta = delta;
-                    best_op = OP_REMOVE;
+                    best_op = OPERATION_REMOVE;
                     best_u = u;
                     best_v = v;
                 }
@@ -573,11 +573,11 @@ static PyObject *py_hill_climb_k2(PyObject *self, PyObject *args) {
 
         /* Evaluate all possible FLIP operations */
         for (int v = 0; v < n; v++) {
-            for (int i = 0; i < dag.n_parents[v]; i++) {
+            for (int i = 0; i < dag.parent_counts[v]; i++) {
                 int u = dag.parents[v * dag.max_parents + i];
-                if (tabu_contains(&tabu, OP_FLIP, u, v)) continue;
-                if (tabu_contains(&tabu, OP_FLIP, v, u)) continue;
-                if (dag.n_parents[u] >= max_indegree) continue;
+                if (tabu_contains(&tabu, OPERATION_FLIP, u, v)) continue;
+                if (tabu_contains(&tabu, OPERATION_FLIP, v, u)) continue;
+                if (dag.parent_counts[u] >= max_indegree) continue;
 
                 /*
                  * Flip u→v to v→u.
@@ -600,23 +600,23 @@ static PyObject *py_hill_climb_k2(PyObject *self, PyObject *args) {
                 /* Remove u from v's parents */
                 int v_new_parents[16];
                 int v_np = 0;
-                for (int k = 0; k < dag.n_parents[v]; k++) {
+                for (int k = 0; k < dag.parent_counts[v]; k++) {
                     int p = dag.parents[v * dag.max_parents + k];
                     if (p != u) v_new_parents[v_np++] = p;
                 }
 
                 /* Add v to u's parents */
                 int u_new_parents[16];
-                int u_np = dag.n_parents[u];
+                int u_np = dag.parent_counts[u];
                 memcpy(u_new_parents, dag.parents + u * dag.max_parents, u_np * sizeof(int));
                 u_new_parents[u_np] = v;
 
                 double old_v_score = cached_k2_score(
-                    &ds, &cache, v, dag.parents + v * dag.max_parents, dag.n_parents[v]);
+                    &ds, &cache, v, dag.parents + v * dag.max_parents, dag.parent_counts[v]);
                 double new_v_score = cached_k2_score(
                     &ds, &cache, v, v_new_parents, v_np);
                 double old_u_score = cached_k2_score(
-                    &ds, &cache, u, dag.parents + u * dag.max_parents, dag.n_parents[u]);
+                    &ds, &cache, u, dag.parents + u * dag.max_parents, dag.parent_counts[u]);
                 double new_u_score = cached_k2_score(
                     &ds, &cache, u, u_new_parents, u_np + 1);
 
@@ -624,7 +624,7 @@ static PyObject *py_hill_climb_k2(PyObject *self, PyObject *args) {
 
                 if (delta > best_delta) {
                     best_delta = delta;
-                    best_op = OP_FLIP;
+                    best_op = OPERATION_FLIP;
                     best_u = u;
                     best_v = v;
                 }
@@ -637,23 +637,23 @@ static PyObject *py_hill_climb_k2(PyObject *self, PyObject *args) {
         /* Apply best operation or stop */
         if (best_op < 0 || best_delta < epsilon) break;
 
-        if (best_op == OP_ADD) {
+        if (best_op == OPERATION_ADD) {
             dag_add_edge(&dag, best_u, best_v);
-            tabu_push(&tabu, OP_REMOVE, best_u, best_v);
-        } else if (best_op == OP_REMOVE) {
+            tabu_push(&tabu, OPERATION_REMOVE, best_u, best_v);
+        } else if (best_op == OPERATION_REMOVE) {
             dag_remove_edge(&dag, best_u, best_v);
-            tabu_push(&tabu, OP_ADD, best_u, best_v);
-        } else if (best_op == OP_FLIP) {
+            tabu_push(&tabu, OPERATION_ADD, best_u, best_v);
+        } else if (best_op == OPERATION_FLIP) {
             dag_remove_edge(&dag, best_u, best_v);
             dag_add_edge(&dag, best_v, best_u);
-            tabu_push(&tabu, OP_FLIP, best_u, best_v);
+            tabu_push(&tabu, OPERATION_FLIP, best_u, best_v);
         }
     }
 
     /* Build result: list of (parent, child) tuples */
     PyObject *result = PyList_New(0);
     for (int v = 0; v < (int)n_vars; v++) {
-        for (int i = 0; i < dag.n_parents[v]; i++) {
+        for (int i = 0; i < dag.parent_counts[v]; i++) {
             int u = dag.parents[v * dag.max_parents + i];
             PyObject *tup = Py_BuildValue("(ii)", u, v);
             PyList_Append(result, tup);
@@ -684,8 +684,8 @@ static PyObject *py_k2_local_score(PyObject *self, PyObject *args) {
     Py_ssize_t n_vars = PySequence_Size(card_obj);
 
     Dataset ds;
-    ds.n_samples = (int)n_samples;
-    ds.n_vars = (int)n_vars;
+    ds.sample_count = (int)n_samples;
+    ds.variable_count = (int)n_vars;
     ds.cardinalities = (int *)malloc(n_vars * sizeof(int));
     ds.values = (int *)malloc(n_samples * n_vars * sizeof(int));
 
@@ -769,8 +769,8 @@ static PyObject *py_estimate_cpds(PyObject *self, PyObject *args) {
 
     Dataset ds;
     ds.values = values;
-    ds.n_samples = (int)n_samples;
-    ds.n_vars = (int)n_vars;
+    ds.sample_count = (int)n_samples;
+    ds.variable_count = (int)n_vars;
     ds.cardinalities = cardinalities;
 
     /* Parse edges into parent lists */

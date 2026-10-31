@@ -6,22 +6,22 @@
 
 /* ── Buffer-format helpers ── */
 
-static inline int is_int32_fmt(const char *fmt, Py_ssize_t itemsize) {
+static inline int is_int32_format(const char *fmt, Py_ssize_t itemsize) {
     if (itemsize != 4 || !fmt) return 0;
     while (*fmt == '<' || *fmt == '>' || *fmt == '=' || *fmt == '!') fmt++;
     return *fmt == 'i';
 }
 
-static inline int is_int64_fmt(const char *fmt, Py_ssize_t itemsize) {
+static inline int is_int64_format(const char *fmt, Py_ssize_t itemsize) {
     if (itemsize != 8 || !fmt) return 0;
     while (*fmt == '<' || *fmt == '>' || *fmt == '=' || *fmt == '!') fmt++;
     return *fmt == 'l' || *fmt == 'q';
 }
 
 PYGRAPHC_INTERNAL int parse_edges(PyObject *edges_obj, EdgeList *el);
-PYGRAPHC_INTERNAL int nid_parse(PyObject *node_ids_obj, PyObject *edges_obj, NidContext *ctx);
-PYGRAPHC_INTERNAL int nid_parse_split(PyObject *node_ids_obj, PyObject *src_obj, PyObject *dst_obj,
-                                      NidContext *ctx);
+PYGRAPHC_INTERNAL int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *ctx);
+PYGRAPHC_INTERNAL int node_id_parse_split(PyObject *node_ids_obj, PyObject *src_obj, PyObject *dst_obj,
+                                      NodeIdContext *ctx);
 PYGRAPHC_INTERNAL int parse_mask(PyObject *mask_obj, Py_ssize_t expected_len,
                                  const uint8_t **mask_out, Py_buffer *mask_buf);
 PYGRAPHC_INTERNAL int parse_weights(PyObject *obj, WeightList *wl, Py_ssize_t expected_m);
