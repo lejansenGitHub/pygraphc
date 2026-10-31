@@ -2,12 +2,12 @@
 
 Fast, general-purpose graph algorithm library implemented in C, callable from Python. Zero runtime dependencies.
 
-**Multiport edges are first-class.** An edge may join any number of nodes
-through its ports, and every algorithm works on that edge as one edge: no hidden
-hub nodes and no star expansion. Ports can be masked one by one, and weighted
-paths can take a weight per port. A graph of ordinary two-port edges runs as
+**Multi-terminal edges are first-class.** An edge may join any number of nodes
+through its terminals, and every algorithm works on that edge as one edge: no hidden
+hub nodes and no star expansion. Terminals can be masked one by one, and weighted
+paths can take a weight per terminal. A graph of ordinary two-terminal edges runs as
 fast as before. See [Concepts](#concepts) and
-[Edges with ports](#edges-with-ports-multiport-edges).
+[Edges with terminals](#edges-with-terminals-multi-terminal-edges).
 
 Edges use **original node IDs** — no manual index mapping needed. A C-side hash map translates IDs to internal indices automatically.
 
@@ -18,36 +18,36 @@ each other in this order.
 
 - **Node:** a vertex of the graph, given by its id. Node ids are integers of
   your choice; the C core maps them to internal indices.
-- **Port:** one attachment of an edge to a node. A port belongs to exactly one
-  edge and sits at exactly one node. An edge's ports are numbered 0, 1, 2, …
-  in the order they are written, and a port is addressed as
-  `(edge_index, port_index)`. Two ports of one edge may sit at the same node
+- **Terminal:** one attachment of an edge to a node. A terminal belongs to exactly one
+  edge and sits at exactly one node. An edge's terminals are numbered 0, 1, 2, …
+  in the order they are written, and a terminal is addressed as
+  `(edge_index, terminal_index)`. Two terminals of one edge may sit at the same node
   and stay distinct.
-- **Edge:** an element of the graph that joins its ports, written as the tuple
-  of its ports' nodes. The edge index is the position in the edge list.
-  - A **two-port edge** `(u, v)` is the ordinary edge between `u` and `v`.
-  - A **multiport edge** has three or more ports, e.g. `(u, v, w)`.
-  - An undirected edge may also have a single port; it then joins nothing.
-- **Directed edge:** each port is an **in-port** or an **out-port**. `(u, v)`
-  has its in-port at `u` and its out-port at `v`. A multiport edge is written
-  `(in_nodes, out_nodes)`. Every directed edge has at least one in-port and one
-  out-port.
+- **Edge:** an element of the graph that joins its terminals, written as the tuple
+  of its terminals' nodes. The edge index is the position in the edge list.
+  - A **two-terminal edge** `(u, v)` is the ordinary edge between `u` and `v`.
+  - A **multi-terminal edge** has three or more terminals, e.g. `(u, v, w)`.
+  - An undirected edge may also have a single terminal; it then joins nothing.
+- **Directed edge:** each terminal is an **in-terminal** or an **out-terminal**. `(u, v)`
+  has its in-terminal at `u` and its out-terminal at `v`. A multi-terminal edge is written
+  `(in_nodes, out_nodes)`. Every directed edge has at least one in-terminal and one
+  out-terminal.
 - **Mask:** a view that excludes nodes (`without_nodes`), edges
-  (`without_edges`) or single ports (`without_ports`) without rebuilding the
+  (`without_edges`) or single terminals (`without_terminals`) without rebuilding the
   graph. Masks combine as a union.
-- **Active port:** a port whose edge, whose node and which itself are all
+- **Active terminal:** a terminal whose edge, whose node and which itself are all
   unmasked. Activity is the only thing an algorithm asks about masks, so each
-  of the following terms is defined through active ports alone.
-- **Connection:** an edge connects all of its active ports to each other.
-  On a directed edge, every active in-port leads to every active out-port.
-  An edge with fewer than two active ports connects nothing.
+  of the following terms is defined through active terminals alone.
+- **Connection:** an edge connects all of its active terminals to each other.
+  On a directed edge, every active in-terminal leads to every active out-terminal.
+  An edge with fewer than two active terminals connects nothing.
 - **Connected component:** a maximal set of unmasked nodes that are linked
   through connections.
-- **Membership:** an edge belongs to the component of its active ports. Since
+- **Membership:** an edge belongs to the component of its active terminals. Since
   these are connected, there is exactly one such component. An edge without
-  an active port belongs to no component.
+  an active terminal belongs to no component.
 - **Critical edge / critical node:** an edge or node whose removal splits the
-  nodes of its component (a bridge, an articulation point). Only active ports
+  nodes of its component (a bridge, an articulation point). Only active terminals
   count.
 
 ## Benchmarks
@@ -470,51 +470,51 @@ view = g.without_edges([0])
 list(view.connected_components())  # [{1, 2, 3}] — still connected via edge 1
 ```
 
-### Edges with ports (multiport edges)
+### Edges with terminals (multi-terminal edges)
 
-> **Specification for the multiport core, implemented in this pull request.**
+> **Specification for the multi-terminal core, implemented in this pull request.**
 > Everything below is the contract the implementation and its tests follow; it
 > is written down first so that the semantics can be reviewed, and changed on
 > request, before the code exists.
 
-An edge joins its **ports**, and every port sits at a node. An edge is written
-as a tuple of node ids: a pair is a two-port edge, exactly as before, and a longer tuple
-is an edge with that many ports. The position in the tuple is the port index,
-so ports are addressed as `(edge_index, port_index)`, never by node, and two
-ports of one edge at the same node stay distinguishable. pygraphc knows nothing
-about what a port is; which port is a transformer's primary is the caller's
+An edge joins its **terminals**, and every terminal sits at a node. An edge is written
+as a tuple of node ids: a pair is a two-terminal edge, exactly as before, and a longer tuple
+is an edge with that many terminals. The position in the tuple is the terminal index,
+so terminals are addressed as `(edge_index, terminal_index)`, never by node, and two
+terminals of one edge at the same node stay distinguishable. pygraphc knows nothing
+about what a terminal is; which terminal is a transformer's primary is the caller's
 mapping.
 
 ```python
 graph = Graph(
     [1, 2, 3, 4, 5],
-    [(1, 2), (2, 3, 4), (4, 5)],   # a two-port edge, a three-port edge, a two-port edge
+    [(1, 2), (2, 3, 4), (4, 5)],   # a two-terminal edge, a three-terminal edge, a two-terminal edge
 )
 ```
 
 **Directed graphs** keep the pair form unchanged: `(u, v)` is an edge from `u`
-to `v`, with no extra direction input. An edge with more ports is written as
-two tuples, its in-nodes and its out-nodes; its port indices run through the
-in-nodes first, then the out-nodes. Every edge needs at least one in-port and
-one out-port. Reaching the node of any active in-port reaches the nodes of all
-active out-ports (OR semantics: each input feeds every output on its own).
+to `v`, with no extra direction input. An edge with more terminals is written as
+two tuples, its in-nodes and its out-nodes; its terminal indices run through the
+in-nodes first, then the out-nodes. Every edge needs at least one in-terminal and
+one out-terminal. Reaching the node of any active in-terminal reaches the nodes of all
+active out-terminals (OR semantics: each input feeds every output on its own).
 
 ```python
 Graph(node_ids, [(1, 2), ((1,), (2, 3)), ((4, 5), (6,))], directed=True)
 #                 1 -> 2   1 feeds 2 and 3   4 and 5 both feed 6
 ```
 
-**Graphs of two-port edges behave as before.** Every existing call, input
-format and result keeps its meaning; edges with more ports only add to the
+**Graphs of two-terminal edges behave as before.** Every existing call, input
+format and result keeps its meaning; edges with more terminals only add to the
 interface. The one change is membership under node masks: an edge whose two
-endpoints are both masked has no active port and so belongs to no component,
+endpoints are both masked has no active terminal and so belongs to no component,
 where it used to form a component of its own with no nodes. There is one
 `Graph` class and one `GraphView` for every kind of edge.
 
-#### One rule decides everything: active ports
+#### One rule decides everything: active terminals
 
 Connection, membership and critical elements are defined through **active
-ports** only (see [Concepts](#concepts)). Every algorithm asks only this rule,
+terminals** only (see [Concepts](#concepts)). Every algorithm asks only this rule,
 so a change in masking semantics is a change in one place.
 
 #### Masking cases
@@ -525,51 +525,51 @@ named test.
 | # | Case | Connection | Membership |
 |---|------|------------|------------|
 | 1 | Edge masked | joins nothing; its nodes keep their other edges | none |
-| 2 | Some ports masked, two or more active | the active ports stay joined; a masked port only detaches its node from this edge | the component of the active ports |
-| 3 | Exactly one active port | joins nothing, never critical | the component of that port |
-| 4 | No active port | as case 1 | none |
-| 5 | Two-port edge with one port masked | case 3: joins nothing, as if the edge were masked | the component of the active end |
-| 6 | Node masked | the node leaves every result; its ports are inactive, the other ports of those edges stay joined | as cases 2 to 4 for the remaining ports |
-| 7 | Two ports of one edge at the same node, one masked | the node stays attached through the other port | unchanged |
-| 8 | All ports at one node | joins nothing, with or without masks | that node's component |
-| 9 | Directed edge left without an active in-port or out-port | transmits nothing | as for undirected edges |
-| 10 | Weighted path through an edge | enters through an active in-port (or any active port when undirected) and leaves through another active port; the cost is the entry port's weight plus the exit port's weight | — |
-| 11 | Critical edges, critical nodes, biconnected blocks | computed on active ports only; a masked port is never critical | — |
-| 12 | Tree-shaped edge with k ports in biconnected blocks | one block holding its k port nodes, as a bridge is its own two-node block | — |
+| 2 | Some terminals masked, two or more active | the active terminals stay joined; a masked terminal only detaches its node from this edge | the component of the active terminals |
+| 3 | Exactly one active terminal | joins nothing, never critical | the component of that terminal |
+| 4 | No active terminal | as case 1 | none |
+| 5 | Two-terminal edge with one terminal masked | case 3: joins nothing, as if the edge were masked | the component of the active end |
+| 6 | Node masked | the node leaves every result; its terminals are inactive, the other terminals of those edges stay joined | as cases 2 to 4 for the remaining terminals |
+| 7 | Two terminals of one edge at the same node, one masked | the node stays attached through the other terminal | unchanged |
+| 8 | All terminals at one node | joins nothing, with or without masks | that node's component |
+| 9 | Directed edge left without an active in-terminal or out-terminal | transmits nothing | as for undirected edges |
+| 10 | Weighted path through an edge | enters through an active in-terminal (or any active terminal when undirected) and leaves through another active terminal; the cost is the entry terminal's weight plus the exit terminal's weight | — |
+| 11 | Critical edges, critical nodes, biconnected blocks | computed on active terminals only; a masked terminal is never critical | — |
+| 12 | Tree-shaped edge with k terminals in biconnected blocks | one block holding its k terminal nodes, as a bridge is its own two-node block | — |
 
-#### Masking ports, edges and nodes
+#### Masking terminals, edges and nodes
 
 Masks are views, as before, and they chain:
 
 ```python
 graph = Graph([1, 2, 3, 4], [(1, 2), (2, 3, 4)])
 
-graph.without_edges([1])          # the three-port edge joins nothing (case 1)
-graph.without_ports([(1, 0)])     # its port at node 2 is detached; 3 and 4 stay joined (case 2)
-graph.without_nodes([3])          # node 3 leaves; ports at 2 and 4 stay joined (case 6)
-graph.without_ports([(1, 0)]).without_nodes([4])   # one active port left: joins nothing (case 3)
+graph.without_edges([1])          # the three-terminal edge joins nothing (case 1)
+graph.without_terminals([(1, 0)])     # its terminal at node 2 is detached; 3 and 4 stay joined (case 2)
+graph.without_nodes([3])          # node 3 leaves; terminals at 2 and 4 stay joined (case 6)
+graph.without_terminals([(1, 0)]).without_nodes([4])   # one active terminal left: joins nothing (case 3)
 ```
 
-`without_ports` takes `(edge_index, port_index)` pairs on any graph. A two-port
-edge's port 0 is its first node and port 1 its second, so masking one of its
-ports detaches it like masking the edge (case 5), while it still belongs to the
+`without_terminals` takes `(edge_index, terminal_index)` pairs on any graph. A two-terminal
+edge's terminal 0 is its first node and terminal 1 its second, so masking one of its
+terminals detaches it like masking the edge (case 5), while it still belongs to the
 component of its active end.
 
-#### Weights per port
+#### Weights per terminal
 
-Weighted algorithms take one weight per port, in edge order and, within an
-edge, in port order. A **pass** through an edge goes from one port to another
-port (directed: from an in-port to an out-port) and costs the entry port's
-weight plus the exit port's weight, which is how the star equivalent of a
-three-winding transformer is written down. Two-port edges keep their single
+Weighted algorithms take one weight per terminal, in edge order and, within an
+edge, in terminal order. A **pass** through an edge goes from one terminal to another
+terminal (directed: from an in-terminal to an out-terminal) and costs the entry terminal's
+weight plus the exit terminal's weight, which is how the star equivalent of a
+three-winding transformer is written down. Two-terminal edges keep their single
 weight per edge: weights with one entry per edge are read as before, and the
-per-port form is only needed when a graph has an edge with more than two ports.
+per-terminal form is only needed when a graph has an edge with more than two terminals.
 
-A port weight may be negative, as one arm of a star equivalent can be, as long
-as every pass costs at least 0: every two ports of an edge (directed: every
-in-port and out-port) must sum to at least 0, otherwise the call raises
-`ValueError`. A path never leaves an edge through the port it entered by, and
-after leaving an edge through its negative port it does not pass that edge
+A terminal weight may be negative, as one arm of a star equivalent can be, as long
+as every pass costs at least 0: every two terminals of an edge (directed: every
+in-terminal and out-terminal) must sum to at least 0, otherwise the call raises
+`ValueError`. A path never leaves an edge through the terminal it entered by, and
+after leaving an edge through its negative terminal it does not pass that edge
 again right there, since either would count the negative weight twice:
 
 ```python
@@ -577,22 +577,22 @@ star = Graph([1, 2, 3], [(1, 2, 3)])
 star.shortest_path_lengths([3, -1, 2], 1)   # {1: 0.0, 2: 2.0, 3: 5.0}: 1 -> 3 costs 3 + 2, not (3 - 1) + (-1 + 2)
 ```
 
-#### Edges with a single port
+#### Edges with a single terminal
 
-An undirected edge may have one port: it joins nothing and belongs to the
+An undirected edge may have one terminal: it joins nothing and belongs to the
 component of its node (case 8), which is how a load or a feed-in modelled as
-an edge behaves. A directed edge needs at least one in-port and one out-port,
-so it has at least two ports.
+an edge behaves. A directed edge needs at least one in-terminal and one out-terminal,
+so it has at least two terminals.
 
 #### Methods that name edges by node pair
 
 `bridges()` returns node pairs and `edge_indices(u, v)` takes one. A pair cannot
-name an edge with more than two ports, so on a graph that has one, these
+name an edge with more than two terminals, so on a graph that has one, these
 methods raise an error naming their replacement instead of answering
 incompletely: `critical_edges()` returns the edge indices of every edge whose
-removal disconnects its component, two-port and multiport edges alike, and
-`edge_indices_at(node_ids)` returns the edges whose ports sit at exactly
-these nodes. On a graph of two-port edges they behave as before, and the
+removal disconnects its component, two-terminal and multi-terminal edges alike, and
+`edge_indices_at(node_ids)` returns the edges whose terminals sit at exactly
+these nodes. On a graph of two-terminal edges they behave as before, and the
 `*_with_branch_ids` methods stay as they are. `critical_edges()` works on every
 graph and view, `edge_indices_at` on every graph.
 
@@ -604,42 +604,42 @@ graph.critical_edges()             # [1, 0]: both edges are critical
 
 #### Critical edges, critical nodes and blocks
 
-Computed on the active ports only (case 11), by one depth-first search that
-treats an edge with three or more ports as a single step between its port
+Computed on the active terminals only (case 11), by one depth-first search that
+treats an edge with three or more terminals as a single step between its terminal
 nodes:
 
-- an edge is **critical** when removing it disconnects nodes of its ports: a
-  bridge for a two-port edge;
+- an edge is **critical** when removing it disconnects nodes of its terminals: a
+  bridge for a two-terminal edge;
 - a node is **critical** (`articulation_points`) when removing it disconnects
-  other nodes; an edge with one active port never makes its node critical;
-- **blocks** (`biconnected_components`) never split at a multiport edge, so a
-  tree-shaped edge with k ports is one block of its k nodes (case 12), and an
+  other nodes; an edge with one active terminal never makes its node critical;
+- **blocks** (`biconnected_components`) never split at a multi-terminal edge, so a
+  tree-shaped edge with k terminals is one block of its k nodes (case 12), and an
   edge on a cycle merges with the cycle's block;
 - `two_edge_connected_components` are the nodes that no single edge removal
-  separates; a critical multiport edge can lie on a cycle, so it is not
+  separates; a critical multi-terminal edge can lie on a cycle, so it is not
   simply removed.
 
 `nodes_on_simple_paths` uses its own blocks: a simple path visits each node
-and each multiport edge at most once, and enters and leaves an edge through one
-port each. A multiport edge can therefore separate these blocks the way a
+and each multi-terminal edge at most once, and enters and leaves an edge through one
+terminal each. A multi-terminal edge can therefore separate these blocks the way a
 node does. In the tree-shaped edge `(1, 2, 3)`, the paths from 1 to 2 do not
 visit 3.
 
-#### Methods not yet available on ports
+#### Methods not yet available on terminals
 
-Methods whose kernel does not read ports yet raise `NotImplementedError` on a
-graph with a multiport edge and on a view with a port mask, instead of
-answering on part of the graph; `docs/multiport-decisions.md` lists the stage
-that brings each. On graphs of two-port edges without a port mask they run as
+Methods whose kernel does not read terminals yet raise `NotImplementedError` on a
+graph with a multi-terminal edge and on a view with a terminal mask, instead of
+answering on part of the graph; `docs/multi_terminal-decisions.md` lists the stage
+that brings each. On graphs of two-terminal edges without a terminal mask they run as
 before, with no added cost per call.
 
 #### Open points
 
-- **A "touching" relation** (an edge with a port, active or not, at a node of
+- **A "touching" relation** (an edge with a terminal, active or not, at a node of
   a component it is not a member of, such as an open switch at the boundary)
   is not part of this pull request.
 - Every answer that could reasonably go another way is listed in
-  [Multiport edge case behavior](#multiport-edge-case-behavior-up-for-discussion)
+  [Multi-terminal edge case behavior](#multi-terminal-edge-case-behavior-up-for-discussion)
   at the end of this README.
 
 ### Node-masked views (exclude nodes without rebuilding)
@@ -1518,48 +1518,48 @@ change noise. The counts come from the container's compiler, so they can
 differ from CI's by layout effects of up to a few percent: CI decides whether
 a count moved, this shows why.
 
-## Multiport edge case behavior (up for discussion)
+## Multi-terminal edge case behavior (up for discussion)
 
 These are the answers the library gives today in situations where a
 different answer would also be reasonable. They are decided so that the
 library works now, and they may change once the people who use it have said
 what they need. Each entry is pinned by a test in
-`tests/unit_tests/test_multiport_edge_cases.py` (`test_edge_case_<n>_…`).
+`tests/unit_tests/test_multi_terminal_edge_cases.py` (`test_edge_case_<n>_…`).
 Every test that depends on one of these answers carries the marker
-`multiport_edge_case`:
+`multi_terminal_edge_case`:
 
 ```bash
-pytest -m multiport_edge_case
+pytest -m multi_terminal_edge_case
 ```
 
 To change an answer, change its test first, then the code. "Decided by"
 says whether the user decided the answer or Claude chose it while
-implementing; the D and O numbers refer to `docs/multiport-decisions.md`.
+implementing; the D and O numbers refer to `docs/multi_terminal-decisions.md`.
 
 | # | Situation | Current behavior | Alternatives | Decided by |
 |---|-----------|------------------|--------------|------------|
-| 1 | Two-port edge with both nodes masked | Has no active port and belongs to no component (D18). | A component without nodes that holds only the edge, as before this pull request. | user |
-| 2 | Edge with exactly one active port | Connects nothing but belongs to the component of that port's node. It is never critical and never makes its node critical (masking case 3). | The edge belongs to no component. | user (membership), Claude (critical elements) |
-| 3 | Two-port edge with one port masked | Connects nothing, like a masked edge, but still belongs to the component of its active end (masking case 5). | Treated exactly like a masked edge, so it belongs to no component. | user |
-| 4 | Edge with a single port | Allowed on undirected graphs: it connects nothing and belongs to its node's component. A directed edge needs an in-port and an out-port (D12). | Reject single-port edges altogether. | user |
-| 5 | Edge with all ports at one node | Connects nothing and belongs to that node's component. It forms no block and is never critical (masking case 8). | Count it as a loop that puts the node into a block. | Claude |
-| 6 | Two ports of one edge at the same node | The ports stay distinct: masking one keeps the node attached through the other (masking case 7). The edge `(1, 1, 2)` is critical. | Merge ports at the same node into one. | user (ports by index), Claude (critical) |
-| 7 | Port at a node that is not in the graph | Rejected when the graph is built, as for two-port edges; "not connected" is a port mask (O1). | Accept the port and leave it inactive. | Claude (recommended, not confirmed) |
-| 8 | Directed edge with several in-ports | OR: one reached active in-port reaches every active out-port (D5). | AND: the out-ports are reached only once all in-ports are reached. | user |
-| 9 | Directed edge without an active out-port (or in-port) | Transmits nothing, yet for weakly connected components its active ports still connect to each other. | Connects nothing at all, even for weak components. | Claude |
-| 10 | Weights on a graph with a multiport edge | One weight per port for every edge, including the two-port edges of that graph. Crossing a two-port edge costs its two port weights. A graph of only two-port edges takes one weight per edge (D11). | One weight per edge everywhere, or per-port weights also on graphs of two-port edges. | user (per port), Claude (two-port edges in such graphs) |
-| 11 | Path through a multiport edge | Costs the entry port's weight plus the exit port's weight (masking case 10). | A weight per pair of ports, or per edge. | user |
-| 12 | Critical multiport edge | Critical when removing the whole edge splits the nodes of its ports. This holds even inside a block with a cycle: in `(1, 2), (2, 3), (1, 2, 3, 4)` the multiport edge is critical, because node 4 hangs on it alone. | Critical only when it lies on no cycle, as a bridge would be. | Claude |
-| 13 | Biconnected blocks at a multiport edge | Blocks never split at a multiport edge: a tree-shaped edge with k ports is one block of k nodes (D14), and a port node hanging on an edge of a cycle joins the cycle's block. | Split blocks at the edge, as `nodes_on_simple_paths` does. | user (tree-shaped), Claude (cycle) |
-| 14 | Two-edge-connected components | The nodes that no single edge removal separates (as for graphs). A critical multiport edge can lie on a cycle, so it is not removed whole: in `(1, 2, 4), (2, 3, 5), (1, 3)` both multiport edges are critical, yet 1, 2 and 3 stay together. Corrected after the web research: removing every critical edge whole had split them. | Remove every critical edge whole (wrong when a critical edge lies on a cycle). | Claude, corrected |
-| 15 | Simple paths through a multiport edge (`nodes_on_simple_paths`) | A path uses each multiport edge at most once and enters and leaves through one port each, so in the tree-shaped edge `(1, 2, 3)` the paths from 1 to 2 do not visit 3. | Allow a path to pass the same edge twice through different ports. | Claude |
-| 16 | `edge_indices_at(node_ids)` | Returns the edges whose set of port nodes equals the given set. Order, repeats and direction do not matter, and an unknown node matches nothing. | Match with repeats counted (multiset), match edges with a port at all given nodes (superset), or respect direction. | Claude |
-| 17 | Pair methods on a graph with a multiport edge | `bridges()`, `bridges_with_branch_ids()` and `edge_indices(u, v)` raise for the whole graph, even when asked about a two-port edge, and name `critical_edges()` or `edge_indices_at()` instead (D13). | Answer for the two-port edges and leave out the multiport ones. | user |
-| 18 | Methods not yet defined on ports | They raise `NotImplementedError` on a graph with a multiport edge and on any view with a port mask, rather than answering for part of the graph (O3, D19). | Answer on the two-port edges only. | user |
-| 19 | Negative port weights | Allowed when every pass costs at least 0: every two ports of an edge (directed: every in-port and out-port) sum to at least 0, so an undirected edge has at most one negative port; otherwise `ValueError`. | Reject every negative port weight. | user |
-| 20 | Leaving through the entry port | Never: a pass goes from one port to another. Without negative weights it could not shorten a path anyway. | — | user |
-| 21 | Passing an edge again right after leaving it through its negative port | Not allowed: in `(1, 2, 3)` with weights `[3, -1, 2]` the path from 1 to 3 costs 5, not `(3 − 1) + (−1 + 2) = 3`. | Allow it: each pass is legal on its own. | user |
-| 22 | Coming back to the negative port's node another way | Allowed: only the immediate second pass is banned, so a shortest path may visit a node twice (`[1, 2, 4, 2, 3]` in the test). | Ban every second pass through the same edge, which makes shortest paths a constrained, much harder problem. | Claude |
+| 1 | Two-terminal edge with both nodes masked | Has no active terminal and belongs to no component (D18). | A component without nodes that holds only the edge, as before this pull request. | user |
+| 2 | Edge with exactly one active terminal | Connects nothing but belongs to the component of that terminal's node. It is never critical and never makes its node critical (masking case 3). | The edge belongs to no component. | user (membership), Claude (critical elements) |
+| 3 | Two-terminal edge with one terminal masked | Connects nothing, like a masked edge, but still belongs to the component of its active end (masking case 5). | Treated exactly like a masked edge, so it belongs to no component. | user |
+| 4 | Edge with a single terminal | Allowed on undirected graphs: it connects nothing and belongs to its node's component. A directed edge needs an in-terminal and an out-terminal (D12). | Reject single-terminal edges altogether. | user |
+| 5 | Edge with all terminals at one node | Connects nothing and belongs to that node's component. It forms no block and is never critical (masking case 8). | Count it as a loop that puts the node into a block. | Claude |
+| 6 | Two terminals of one edge at the same node | The terminals stay distinct: masking one keeps the node attached through the other (masking case 7). The edge `(1, 1, 2)` is critical. | Merge terminals at the same node into one. | user (terminals by index), Claude (critical) |
+| 7 | Terminal at a node that is not in the graph | Rejected when the graph is built, as for two-terminal edges; "not connected" is a terminal mask (O1). | Accept the terminal and leave it inactive. | Claude (recommended, not confirmed) |
+| 8 | Directed edge with several in-terminals | OR: one reached active in-terminal reaches every active out-terminal (D5). | AND: the out-terminals are reached only once all in-terminals are reached. | user |
+| 9 | Directed edge without an active out-terminal (or in-terminal) | Transmits nothing, yet for weakly connected components its active terminals still connect to each other. | Connects nothing at all, even for weak components. | Claude |
+| 10 | Weights on a graph with a multi-terminal edge | One weight per terminal for every edge, including the two-terminal edges of that graph. Crossing a two-terminal edge costs its two terminal weights. A graph of only two-terminal edges takes one weight per edge (D11). | One weight per edge everywhere, or per-terminal weights also on graphs of two-terminal edges. | user (per terminal), Claude (two-terminal edges in such graphs) |
+| 11 | Path through a multi-terminal edge | Costs the entry terminal's weight plus the exit terminal's weight (masking case 10). | A weight per pair of terminals, or per edge. | user |
+| 12 | Critical multi-terminal edge | Critical when removing the whole edge splits the nodes of its terminals. This holds even inside a block with a cycle: in `(1, 2), (2, 3), (1, 2, 3, 4)` the multi-terminal edge is critical, because node 4 hangs on it alone. | Critical only when it lies on no cycle, as a bridge would be. | Claude |
+| 13 | Biconnected blocks at a multi-terminal edge | Blocks never split at a multi-terminal edge: a tree-shaped edge with k terminals is one block of k nodes (D14), and a terminal node hanging on an edge of a cycle joins the cycle's block. | Split blocks at the edge, as `nodes_on_simple_paths` does. | user (tree-shaped), Claude (cycle) |
+| 14 | Two-edge-connected components | The nodes that no single edge removal separates (as for graphs). A critical multi-terminal edge can lie on a cycle, so it is not removed whole: in `(1, 2, 4), (2, 3, 5), (1, 3)` both multi-terminal edges are critical, yet 1, 2 and 3 stay together. Corrected after the web research: removing every critical edge whole had split them. | Remove every critical edge whole (wrong when a critical edge lies on a cycle). | Claude, corrected |
+| 15 | Simple paths through a multi-terminal edge (`nodes_on_simple_paths`) | A path uses each multi-terminal edge at most once and enters and leaves through one terminal each, so in the tree-shaped edge `(1, 2, 3)` the paths from 1 to 2 do not visit 3. | Allow a path to pass the same edge twice through different terminals. | Claude |
+| 16 | `edge_indices_at(node_ids)` | Returns the edges whose set of terminal nodes equals the given set. Order, repeats and direction do not matter, and an unknown node matches nothing. | Match with repeats counted (multiset), match edges with a terminal at all given nodes (superset), or respect direction. | Claude |
+| 17 | Pair methods on a graph with a multi-terminal edge | `bridges()`, `bridges_with_branch_ids()` and `edge_indices(u, v)` raise for the whole graph, even when asked about a two-terminal edge, and name `critical_edges()` or `edge_indices_at()` instead (D13). | Answer for the two-terminal edges and leave out the multi-terminal ones. | user |
+| 18 | Methods not yet defined on terminals | They raise `NotImplementedError` on a graph with a multi-terminal edge and on any view with a terminal mask, rather than answering for part of the graph (O3, D19). | Answer on the two-terminal edges only. | user |
+| 19 | Negative terminal weights | Allowed when every pass costs at least 0: every two terminals of an edge (directed: every in-terminal and out-terminal) sum to at least 0, so an undirected edge has at most one negative terminal; otherwise `ValueError`. | Reject every negative terminal weight. | user |
+| 20 | Leaving through the entry terminal | Never: a pass goes from one terminal to another. Without negative weights it could not shorten a path anyway. | — | user |
+| 21 | Passing an edge again right after leaving it through its negative terminal | Not allowed: in `(1, 2, 3)` with weights `[3, -1, 2]` the path from 1 to 3 costs 5, not `(3 − 1) + (−1 + 2) = 3`. | Allow it: each pass is legal on its own. | user |
+| 22 | Coming back to the negative terminal's node another way | Allowed: only the immediate second pass is banned, so a shortest path may visit a node twice (`[1, 2, 4, 2, 3]` in the test). | Ban every second pass through the same edge, which makes shortest paths a constrained, much harder problem. | Claude |
 
 ### What the literature says about these cases
 
@@ -1571,13 +1571,13 @@ hypergraph libraries and power system tools. Sources:
 - Libraries and tools: HyperNetX, XGI, pandapower, PowerModels.jl, OpenDSS, and CIM (IEC 61970).
 
 **Supported**
-- **1–3:** an edge without an active port belongs to no component, and one with a single active port stays with its node.
+- **1–3:** an edge without an active terminal belongs to no component, and one with a single active terminal stays with its node.
   - [BS]: empty edges do not affect connectivity.
   - [DPP]: weak vertex deletion keeps the shrunken edge.
   - CIM `Terminal.connected` and OpenDSS `Open` open a single terminal.
 - **8:** OR semantics is the "path" connectivity of [GLNP]. AND semantics would be their B-connectivity.
-- **12:** a multiport edge can be critical while lying on a cycle. These are the weak cut edges of [BS], Def. 3.15–3.18.
-- **13:** blocks never split at a multiport edge. [BS], Thm. 3.37 and 3.41: the blocks of a hypergraph are not the blocks of its incidence graph.
+- **12:** a multi-terminal edge can be critical while lying on a cycle. These are the weak cut edges of [BS], Def. 3.15–3.18.
+- **13:** blocks never split at a multi-terminal edge. [BS], Thm. 3.37 and 3.41: the blocks of a hypergraph are not the blocks of its incidence graph.
 - **15:** using each edge at most once is a Berge path: distinct nodes and distinct edges.
 - **17–18:** raising instead of answering partially matches networkx's `not_implemented_for`.
 - **19:** negative star impedances of three-winding transformers are a known artefact; the pair sums are the measured short-circuit impedances, which are positive.
@@ -1585,12 +1585,12 @@ hypergraph libraries and power system tools. Sources:
 
 **Mixed or without a convention**
 - **4:**
-  - Single-port edges are common: HyperNetX and XGI allow them and offer helpers that remove them.
-  - [GLNP] also allows a directed edge with no out-port.
+  - Single-terminal edges are common: HyperNetX and XGI allow them and offer helpers that remove them.
+  - [GLNP] also allows a directed edge with no out-terminal.
 - **5:** networkx leaves a self-loop node out of every block. [BS] (Lemma 3.31) makes a single-node edge its own block, so that blocks cover every edge.
-- **6:** [DPP] keeps edges as multisets, which matches distinct ports at one node. [BS], XGI and HyperNetX merge repeated nodes.
+- **6:** [DPP] keeps edges as multisets, which matches distinct terminals at one node. [BS], XGI and HyperNetX merge repeated nodes.
 - **7:** networkx and XGI create unknown nodes. pygraphc rejects them because its node set is fixed.
-- **10:** per-port weights are common: HyperNetX incidence weights, CIM transformer ends. Switching the whole graph to per-port weights has no precedent.
+- **10:** per-terminal weights are common: HyperNetX incidence weights, CIM transformer ends. Switching the whole graph to per-terminal weights has no precedent.
 - **11:** pandapower uses the same entry + exit rule for three windings. A star is exact only up to three windings; CIM requires mesh impedances for more.
 - **16:** matching by node set follows HyperNetX and XGI. Ignoring direction departs from networkx's `has_edge(u, v)`.
 - **21–22:** banning only the immediate second pass computes a shortest *non-backtracking walk* in the star equivalent, not a shortest simple path. A detour that costs less than −2·w_n still counts the negative weight twice, which the test of entry 22 shows (4 instead of 5). The exact simple-path version is polynomial but needs T-join or matching algorithms (Schrijver, *Combinatorial Optimization*, ch. 29), not Dijkstra.
@@ -1598,6 +1598,8 @@ hypergraph libraries and power system tools. Sources:
 **Contradicted, and corrected**
 - **14:** removing every critical edge whole gave wrong two-edge-connected components when critical edges share a cycle. Corrected in this pull request.
 
-**Naming:**
-- In circuit theory a *port* is a pair of terminals.
-- One attachment is a *terminal* in CIM and OpenDSS, an *incidence* in hypergraph papers, and a *member* in XGI.
+**Naming (decided, D22):** pygraphc calls one attachment of an edge to a node a
+*terminal*, as CIM and OpenDSS do. Hypergraph papers say *incidence*, XGI
+*member*. The draft of this pull request said *port*, but in circuit theory a
+port is a pair of terminals, so a "two-port edge" would have been a circuit
+one-port.

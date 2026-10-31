@@ -83,16 +83,16 @@ typedef struct {
 
 /* ── Adjacency list (CSR format) for graph traversal ──
  *
- * In a graph with multiport edges, an edge e with three or more ports appears
- * as neighbors[slot] = -1 - e at the node of each of its ports (directed: of
- * each in-port in the forward lists, of each out-port in the reverse lists),
- * and edge_indices[slot] then holds the port that slot stands for.
+ * In a graph with multi-terminal edges, an edge e with three or more terminals appears
+ * as neighbors[slot] = -1 - e at the node of each of its terminals (directed: of
+ * each in-terminal in the forward lists, of each out-terminal in the reverse lists),
+ * and edge_indices[slot] then holds the terminal that slot stands for.
  */
 
 typedef struct {
     int *offset;                /* size node_count+1, CSR row pointers */
     int *neighbors;             /* size 2*edge_count (undirected) or edge_count (directed), neighbor indices */
-    int *edge_indices;          /* same size, original edge index (the port, where neighbors is negative) */
+    int *edge_indices;          /* same size, original edge index (the terminal, where neighbors is negative) */
     int *reverse_offset;        /* directed only: size node_count+1, reverse CSR (NULL if undirected) */
     int *reverse_neighbors;     /* directed only: size edge_count, predecessor indices */
     int *reverse_edge_indices;  /* directed only: size edge_count, original edge indices */
@@ -101,37 +101,37 @@ typedef struct {
 PYGRAPHC_INTERNAL int build_adjacency(int node_count, EdgeList *edges, AdjacencyList *adjacency, int directed);
 PYGRAPHC_INTERNAL void free_adjacency(AdjacencyList *adjacency);
 
-/* ── Edges with ports: an edge is its list of ports, every port sits at a node ──
+/* ── Edges with terminals: an edge is its list of terminals, every terminal sits at a node ──
  *
- * Kept for graphs with an edge of other than two ports. Ports are numbered over
- * all edges in edge order, a two-port edge included (port 0 at its first
- * endpoint, port 1 at its second), so that a port mask has one entry per port.
+ * Kept for graphs with an edge of other than two terminals. Terminals are numbered over
+ * all edges in edge order, a two-terminal edge included (terminal 0 at its first
+ * endpoint, terminal 1 at its second), so that a terminal mask has one entry per terminal.
  */
 
 typedef struct {
-    int port_count;
-    int *port_offsets;      /* edge_count + 1: the ports of edge e are port_offsets[e] .. port_offsets[e + 1] - 1 */
-    int *port_nodes;        /* port_count: the node index each port sits at */
-    int *out_port_offsets;  /* edge_count, directed only (NULL otherwise): out-ports of e start here, in-ports before */
-} PortList;
+    int terminal_count;
+    int *terminal_offsets;      /* edge_count + 1: the terminals of edge e are terminal_offsets[e] .. terminal_offsets[e + 1] - 1 */
+    int *terminal_nodes;        /* terminal_count: the node index each terminal sits at */
+    int *out_terminal_offsets;  /* edge_count, directed only (NULL otherwise): out-terminals of e start here, in-terminals before */
+} TerminalList;
 
-PYGRAPHC_INTERNAL void free_port_list(PortList *ports);
+PYGRAPHC_INTERNAL void free_terminal_list(TerminalList *terminals);
 
-/* Whether edge e has three or more ports and so appears as -1 - e in the adjacency list. */
-static inline int is_multiport_edge(const PortList *ports, int edge) {
-    return ports->port_offsets[edge + 1] - ports->port_offsets[edge] > 2;
+/* Whether edge e has three or more terminals and so appears as -1 - e in the adjacency list. */
+static inline int is_multi_terminal_edge(const TerminalList *terminals, int edge) {
+    return terminals->terminal_offsets[edge + 1] - terminals->terminal_offsets[edge] > 2;
 }
 
 /*
- * The one rule every algorithm on edges with ports asks: a port is active iff
- * its edge, the port itself and its node are all unmasked. A NULL mask masks
+ * The one rule every algorithm on edges with terminals asks: a terminal is active iff
+ * its edge, the terminal itself and its node are all unmasked. A NULL mask masks
  * nothing.
  */
-static inline int port_is_active(const PortList *ports, int edge, int port, const uint8_t *edge_mask,
-                                 const uint8_t *port_mask, const uint8_t *node_mask) {
+static inline int terminal_is_active(const TerminalList *terminals, int edge, int terminal, const uint8_t *edge_mask,
+                                 const uint8_t *terminal_mask, const uint8_t *node_mask) {
     if (edge_mask && edge_mask[edge]) return 0;
-    if (port_mask && port_mask[port]) return 0;
-    if (node_mask && node_mask[ports->port_nodes[port]]) return 0;
+    if (terminal_mask && terminal_mask[terminal]) return 0;
+    if (node_mask && node_mask[terminals->terminal_nodes[terminal]]) return 0;
     return 1;
 }
 
@@ -142,7 +142,7 @@ typedef struct {
     AdjacencyList adjacency;
     int           has_adjacency;
     int           directed;  /* 0 = undirected, 1 = directed */
-    PortList     *ports;     /* NULL for a graph of two-port edges; set when an edge has other than two ports */
+    TerminalList     *terminals;     /* NULL for a graph of two-terminal edges; set when an edge has other than two terminals */
 } GraphContext;
 
 PYGRAPHC_INTERNAL void graph_context_destructor(PyObject *capsule);
@@ -153,11 +153,11 @@ static inline GraphContext *get_graph_context(PyObject *capsule) {
     return graph;
 }
 
-/* The parsed graph of a kernel that reads only two-port edges; a graph with multiport edges raises. */
-static inline GraphContext *get_two_port_graph_context(PyObject *capsule) {
+/* The parsed graph of a kernel that reads only two-terminal edges; a graph with multi-terminal edges raises. */
+static inline GraphContext *get_two_terminal_graph_context(PyObject *capsule) {
     GraphContext *graph = get_graph_context(capsule);
-    if (graph && graph->ports) {
-        PyErr_SetString(PyExc_NotImplementedError, "not available on graphs with multiport edges");
+    if (graph && graph->terminals) {
+        PyErr_SetString(PyExc_NotImplementedError, "not available on graphs with multi-terminal edges");
         return NULL;
     }
     return graph;

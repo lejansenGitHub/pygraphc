@@ -763,9 +763,9 @@ def test_view_cc_with_branch_ids_exclude_one_node():
     assert branches == {100}
 
 
-@pytest.mark.multiport_edge_case
+@pytest.mark.multi_terminal_edge_case
 def test_view_cc_with_branch_ids_exclude_both_nodes():
-    """Excluding both endpoints leaves the edge without an active port, so it belongs to no component (D8).
+    """Excluding both endpoints leaves the edge without an active terminal, so it belongs to no component (D8).
 
     Graph: A(1)--B(2) with branch_id 100.
     """

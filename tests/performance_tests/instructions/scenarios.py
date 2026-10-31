@@ -458,84 +458,84 @@ def _workflow_components_with_branch_ids() -> Measured:
     return gather_parse_and_label
 
 
-# ── Edges with ports ──
+# ── Edges with terminals ──
 
 
-def _require_multiport_edges() -> None:
-    """Raise AttributeError on a build without multiport edges, so ``measure`` leaves the scenario out."""
-    if not hasattr(Graph, "without_ports"):
-        raise AttributeError("this build of pygraphc has no multiport edges")
+def _require_multi_terminal_edges() -> None:
+    """Raise AttributeError on a build without multi-terminal edges, so ``measure`` leaves the scenario out."""
+    if not hasattr(Graph, "without_terminals"):
+        raise AttributeError("this build of pygraphc has no multi-terminal edges")
 
 
-def _port_graph(size: int = SIZE) -> Graph[int, int]:
-    _require_multiport_edges()
-    node_ids, edges = shapes.random_ports(size)
+def _terminal_graph(size: int = SIZE) -> Graph[int, int]:
+    _require_multi_terminal_edges()
+    node_ids, edges = shapes.random_terminals(size)
     return Graph(node_ids, edges, branch_ids=list(range(len(edges))))
 
 
-@register("parse_ports/random_ports_20k")
-def _parse_ports() -> Measured:
-    _require_multiport_edges()
-    node_ids, edges = shapes.random_ports(SIZE)
+@register("parse_terminals/random_terminals_20k")
+def _parse_terminals() -> Measured:
+    _require_multi_terminal_edges()
+    node_ids, edges = shapes.random_terminals(SIZE)
     return lambda: Graph(node_ids, edges)
 
 
-@register("port_connected_components/random_ports_20k")
-def _port_connected_components() -> Measured:
-    graph = _port_graph()
+@register("terminal_connected_components/random_terminals_20k")
+def _terminal_connected_components() -> Measured:
+    graph = _terminal_graph()
     return lambda: list(graph.connected_components())
 
 
-@register("port_connected_components_with_branch_ids/random_ports_20k")
-def _port_connected_components_with_branch_ids() -> Measured:
-    graph = _port_graph()
+@register("terminal_connected_components_with_branch_ids/random_terminals_20k")
+def _terminal_connected_components_with_branch_ids() -> Measured:
+    graph = _terminal_graph()
     return lambda: list(graph.connected_components_with_branch_ids())
 
 
-@register("port_component_labels/random_ports_20k")
-def _port_component_labels() -> Measured:
-    graph = _port_graph()
+@register("terminal_component_labels/random_terminals_20k")
+def _terminal_component_labels() -> Measured:
+    graph = _terminal_graph()
     return graph.component_labels
 
 
-@register("port_connected_components_masked_ports/random_ports_20k")
-def _port_connected_components_masked_ports() -> Measured:
-    graph = _port_graph()
+@register("terminal_connected_components_masked_terminals/random_terminals_20k")
+def _terminal_connected_components_masked_terminals() -> Measured:
+    graph = _terminal_graph()
     masked = [(edge_index, 0) for edge_index in range(SIZE - 1, graph.edge_count, 5)]
-    return lambda: list(graph.without_ports(masked).connected_components())
+    return lambda: list(graph.without_terminals(masked).connected_components())
 
 
-@register("port_bfs/random_ports_20k")
-def _port_bfs() -> Measured:
-    graph = _port_graph()
+@register("terminal_bfs/random_terminals_20k")
+def _terminal_bfs() -> Measured:
+    graph = _terminal_graph()
     return lambda: graph.bfs(0)
 
 
-@register("port_shortest_path_lengths/random_ports_20k")
-def _port_shortest_path_lengths() -> Measured:
-    graph = _port_graph()
+@register("terminal_shortest_path_lengths/random_terminals_20k")
+def _terminal_shortest_path_lengths() -> Measured:
+    graph = _terminal_graph()
     rng = random.Random(0)
-    weights = [rng.uniform(0.1, 10.0) for _ in range(graph.port_count)]
+    weights = [rng.uniform(0.1, 10.0) for _ in range(graph.terminal_count)]
     return lambda: graph.shortest_path_lengths(weights, 0)
 
 
-@register("port_shortest_path/random_ports_20k")
-def _port_shortest_path() -> Measured:
-    graph = _port_graph()
+@register("terminal_shortest_path/random_terminals_20k")
+def _terminal_shortest_path() -> Measured:
+    graph = _terminal_graph()
     rng = random.Random(0)
-    weights = [rng.uniform(0.1, 10.0) for _ in range(graph.port_count)]
+    weights = [rng.uniform(0.1, 10.0) for _ in range(graph.terminal_count)]
     return lambda: graph.shortest_path(weights, 0, SIZE - 1)
 
 
-@register("port_critical_edges/random_ports_20k")
-def _port_critical_edges() -> Measured:
-    graph = _port_graph()
+@register("terminal_critical_edges/random_terminals_20k")
+def _terminal_critical_edges() -> Measured:
+    graph = _terminal_graph()
     return graph.critical_edges
 
 
-@register("port_biconnected_components/random_ports_20k")
-def _port_biconnected_components() -> Measured:
-    graph = _port_graph()
+@register("terminal_biconnected_components/random_terminals_20k")
+def _terminal_biconnected_components() -> Measured:
+    graph = _terminal_graph()
     return lambda: list(graph.biconnected_components())
 
 

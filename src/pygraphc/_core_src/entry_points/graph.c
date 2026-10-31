@@ -1,7 +1,7 @@
 /* Graph construction: the parsed graph capsule, its counters, and edge translation. */
 #include "entry_points.h"
 #include "../helpers/parse.h"
-#include "../helpers/ports.h"
+#include "../helpers/terminals.h"
 
 PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_or_src, *dst_obj = Py_None;
@@ -13,7 +13,7 @@ PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     if (!graph) { PyErr_NoMemory(); return NULL; }
     graph->has_adjacency = 0;
     graph->directed = directed;
-    graph->ports = NULL;
+    graph->terminals = NULL;
 
     int status;
     if (dst_obj != Py_None)
@@ -34,13 +34,13 @@ PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     return PyCapsule_New(graph, "pygraphc.GraphCtx", graph_context_destructor);
 }
 
-static void free_port_graph(GraphContext *graph) {
-    if (graph->ports) { free_port_list(graph->ports); free(graph->ports); }
+static void free_terminal_graph(GraphContext *graph) {
+    if (graph->terminals) { free_terminal_list(graph->terminals); free(graph->terminals); }
     node_id_context_free(&graph->node_ids);
     free(graph);
 }
 
-PyObject *py_parse_port_graph(PyObject *self, PyObject *args) {
+PyObject *py_parse_terminal_graph(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj;
     int directed = 0;
     if (!PyArg_ParseTuple(args, "OO|p", &node_ids_obj, &edges_obj, &directed)) return NULL;
@@ -48,17 +48,17 @@ PyObject *py_parse_port_graph(PyObject *self, PyObject *args) {
     GraphContext *graph = (GraphContext *)calloc(1, sizeof(GraphContext));
     if (!graph) { PyErr_NoMemory(); return NULL; }
     graph->directed = directed;
-    PyObject *no_two_port_edges = PyTuple_New(0);
-    if (!no_two_port_edges) { free(graph); return NULL; }
-    int status = node_id_parse(node_ids_obj, no_two_port_edges, &graph->node_ids);
-    Py_DECREF(no_two_port_edges);
+    PyObject *no_two_terminal_edges = PyTuple_New(0);
+    if (!no_two_terminal_edges) { free(graph); return NULL; }
+    int status = node_id_parse(node_ids_obj, no_two_terminal_edges, &graph->node_ids);
+    Py_DECREF(no_two_terminal_edges);
     if (status < 0) { free(graph); return NULL; }
 
-    if (parse_port_edges(graph, edges_obj) < 0) { free_port_graph(graph); return NULL; }
+    if (parse_terminal_edges(graph, edges_obj) < 0) { free_terminal_graph(graph); return NULL; }
     if (graph->node_ids.node_count > 0 && graph->node_ids.edges.edge_count > 0) {
-        if (build_port_adjacency(graph->node_ids.node_count, &graph->node_ids.edges, graph->ports, directed,
+        if (build_terminal_adjacency(graph->node_ids.node_count, &graph->node_ids.edges, graph->terminals, directed,
                                  &graph->adjacency) < 0) {
-            free_port_graph(graph);
+            free_terminal_graph(graph);
             return NULL;
         }
         graph->has_adjacency = 1;
@@ -66,49 +66,49 @@ PyObject *py_parse_port_graph(PyObject *self, PyObject *args) {
     return PyCapsule_New(graph, "pygraphc.GraphCtx", graph_context_destructor);
 }
 
-/* The parsed graph of a call that needs port numbering. */
-static GraphContext *port_graph_of(PyObject *capsule) {
+/* The parsed graph of a call that needs terminal numbering. */
+static GraphContext *terminal_graph_of(PyObject *capsule) {
     GraphContext *graph = get_graph_context(capsule);
-    if (graph && !graph->ports) {
-        PyErr_SetString(PyExc_TypeError, "expected a parsed graph with multiport edges");
+    if (graph && !graph->terminals) {
+        PyErr_SetString(PyExc_TypeError, "expected a parsed graph with multi-terminal edges");
         return NULL;
     }
     return graph;
 }
 
-PyObject *py_port_graph_shape(PyObject *self, PyObject *args) {
+PyObject *py_terminal_graph_shape(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphContext *graph = port_graph_of(capsule);
+    GraphContext *graph = terminal_graph_of(capsule);
     if (!graph) return NULL;
     return Py_BuildValue("(inn)", graph->node_ids.node_count, graph->node_ids.edges.edge_count,
-                         (Py_ssize_t)graph->ports->port_count);
+                         (Py_ssize_t)graph->terminals->terminal_count);
 }
 
-PyObject *py_port_offsets(PyObject *self, PyObject *args) {
+PyObject *py_terminal_offsets(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphContext *graph = port_graph_of(capsule);
+    GraphContext *graph = terminal_graph_of(capsule);
     if (!graph) return NULL;
-    return PyBytes_FromStringAndSize((const char *)graph->ports->port_offsets,
+    return PyBytes_FromStringAndSize((const char *)graph->terminals->terminal_offsets,
                                      (graph->node_ids.edges.edge_count + 1) * (Py_ssize_t)sizeof(int));
 }
 
-PyObject *py_port_nodes(PyObject *self, PyObject *args) {
+PyObject *py_terminal_nodes(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
     GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
-    if (graph->ports)
-        return PyBytes_FromStringAndSize((const char *)graph->ports->port_nodes,
-                                         (Py_ssize_t)graph->ports->port_count * (Py_ssize_t)sizeof(int));
+    if (graph->terminals)
+        return PyBytes_FromStringAndSize((const char *)graph->terminals->terminal_nodes,
+                                         (Py_ssize_t)graph->terminals->terminal_count * (Py_ssize_t)sizeof(int));
     const EdgeList *edges = &graph->node_ids.edges;
     PyObject *result = PyBytes_FromStringAndSize(NULL, 2 * (Py_ssize_t)edges->edge_count * (Py_ssize_t)sizeof(int));
     if (!result) return NULL;
-    int *port_nodes = (int *)PyBytes_AS_STRING(result);
+    int *terminal_nodes = (int *)PyBytes_AS_STRING(result);
     for (Py_ssize_t edge_index = 0; edge_index < edges->edge_count; edge_index++) {
-        port_nodes[2 * edge_index] = EDGE_FIRST_ENDPOINT(edges, edge_index);
-        port_nodes[2 * edge_index + 1] = EDGE_SECOND_ENDPOINT(edges, edge_index);
+        terminal_nodes[2 * edge_index] = EDGE_FIRST_ENDPOINT(edges, edge_index);
+        terminal_nodes[2 * edge_index + 1] = EDGE_SECOND_ENDPOINT(edges, edge_index);
     }
     return result;
 }

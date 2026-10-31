@@ -3,7 +3,7 @@
 #define PYGRAPHC_CORE_COMPONENTS_H
 
 #include "../models.h"
-#include "ports.h"
+#include "terminals.h"
 
 PYGRAPHC_INTERNAL int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *edge_mask,
                                                 const uint8_t *node_mask,
@@ -13,12 +13,12 @@ PYGRAPHC_INTERNAL int compute_strongly_connected_components_masked(int node_coun
                                                                    ComponentResult *components);
 
 /*
- * Components of a parsed graph under its edge, port and node masks: every edge
- * joins its active ports. Graphs without multiport edges run the two-port
+ * Components of a parsed graph under its edge, terminal and node masks: every edge
+ * joins its active terminals. Graphs without multi-terminal edges run the two-terminal
  * instantiation of the same kernel. Returns 0 on success, -1 with an exception set.
  */
 PYGRAPHC_INTERNAL int compute_graph_components(GraphContext *graph, const uint8_t *edge_mask,
-                                               const PortMask *port_mask, const uint8_t *node_mask,
+                                               const TerminalMask *terminal_mask, const uint8_t *node_mask,
                                                ComponentResult *components);
 
 static inline int compute_components(int node_count, EdgeList *edges, ComponentResult *components) {

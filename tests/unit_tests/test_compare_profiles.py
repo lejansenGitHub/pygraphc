@@ -29,7 +29,7 @@ ob=(9) /venv/_core.so
 fl=(2) /build/src/biconnectivity.c
 fn=(10) tarjan_entry
 12 100
-fi=(3) /build/src/ports.h
+fi=(3) /build/src/terminals.h
 40 30
 fe=(2)
 +1 10
@@ -53,7 +53,7 @@ def test_self_costs_follow_inlined_files() -> None:
     """fi= and fe= move the cost of inlined lines to their own file; fn= returns to the function's file."""
     _by_function, by_file = compare_profiles.self_costs(_DUMP)
 
-    assert by_file == {"biconnectivity.c": 130, "ports.h": 30}
+    assert by_file == {"biconnectivity.c": 130, "terminals.h": 30}
 
 
 def test_totals_table_marks_changes_beyond_the_threshold_in_either_direction() -> None:

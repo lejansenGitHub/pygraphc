@@ -125,17 +125,17 @@ void graph_context_destructor(PyObject *capsule) {
     GraphContext *graph = (GraphContext *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
     if (!graph) { PyErr_Clear(); return; }
     if (graph->has_adjacency) free_adjacency(&graph->adjacency);
-    if (graph->ports) { free_port_list(graph->ports); free(graph->ports); }
+    if (graph->terminals) { free_terminal_list(graph->terminals); free(graph->terminals); }
     free_edges(&graph->node_ids.edges);
     if (graph->node_ids.node_index_by_node_id.keys) intmap_free(&graph->node_ids.node_index_by_node_id);
     Py_DECREF(graph->node_ids.node_ids_fast);
     free(graph);
 }
 
-void free_port_list(PortList *ports) {
-    free(ports->port_offsets);
-    free(ports->port_nodes);
-    free(ports->out_port_offsets);
+void free_terminal_list(TerminalList *terminals) {
+    free(terminals->terminal_offsets);
+    free(terminals->terminal_nodes);
+    free(terminals->out_terminal_offsets);
 }
 
 void free_weights(WeightList *weights) {

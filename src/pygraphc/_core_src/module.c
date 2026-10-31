@@ -74,16 +74,16 @@ static PyMethodDef methods[] = {
     {"parse_graph", py_parse_graph, METH_VARARGS,
      "parse_graph(node_ids, edges[, dst]) -> capsule\n\n"
      "Parse graph once, return opaque capsule for reuse across algorithms."},
-    {"parse_port_graph", py_parse_port_graph, METH_VARARGS,
-     "parse_port_graph(node_ids, edges[, directed]) -> capsule\n\n"
-     "Parse a graph whose edges are tuples of ports; directed edges are (u, v) or (in_nodes, out_nodes)."},
-    {"port_graph_shape", py_port_graph_shape, METH_VARARGS,
-     "port_graph_shape(capsule) -> (node_count, edge_count, port_count) as stored in C."},
-    {"port_offsets", py_port_offsets, METH_VARARGS,
-     "port_offsets(capsule) -> bytes\n\nint32 offsets: the ports of edge e are offsets[e] .. offsets[e + 1] - 1."},
-    {"port_nodes", py_port_nodes, METH_VARARGS,
-     "port_nodes(capsule) -> bytes\n\nint32 node index of every port, in port order; edge e of a graph of "
-     "two-port edges has ports 2e and 2e + 1."},
+    {"parse_terminal_graph", py_parse_terminal_graph, METH_VARARGS,
+     "parse_terminal_graph(node_ids, edges[, directed]) -> capsule\n\n"
+     "Parse a graph whose edges are tuples of terminals; directed edges are (u, v) or (in_nodes, out_nodes)."},
+    {"terminal_graph_shape", py_terminal_graph_shape, METH_VARARGS,
+     "terminal_graph_shape(capsule) -> (node_count, edge_count, terminal_count) as stored in C."},
+    {"terminal_offsets", py_terminal_offsets, METH_VARARGS,
+     "terminal_offsets(capsule) -> bytes\n\nint32 offsets: the terminals of edge e are offsets[e] .. offsets[e + 1] - 1."},
+    {"terminal_nodes", py_terminal_nodes, METH_VARARGS,
+     "terminal_nodes(capsule) -> bytes\n\nint32 node index of every terminal, in terminal order; edge e of a graph of "
+     "two-terminal edges has terminals 2e and 2e + 1."},
     {"graph_edge_count", py_graph_edge_count, METH_VARARGS,
      "graph_edge_count(capsule) -> int\n\nReturn edge count from parsed graph."},
     {"graph_node_count", py_graph_node_count, METH_VARARGS,
@@ -142,11 +142,11 @@ static PyMethodDef methods[] = {
      "edge_indices_ctx(capsule, u, v[, edge_mask]) -> list[int]\n\n"
      "Edge indices between u and v via CSR."},
     {"critical_edges_ctx", py_critical_edges_ctx, METH_VARARGS,
-     "critical_edges_ctx(capsule[, edge_mask, node_mask, port_mask]) -> list[int]\n\n"
+     "critical_edges_ctx(capsule[, edge_mask, node_mask, terminal_mask]) -> list[int]\n\n"
      "Indices of the edges whose removal disconnects their component."},
     {"simple_path_blocks_ctx", py_simple_path_blocks_ctx, METH_VARARGS,
-     "simple_path_blocks_ctx(capsule[, edge_mask, node_mask, port_mask]) -> (list[set], dict[int, set[int]])\n\n"
-     "Blocks of nodes and multiport edges, as a simple path visits each at most once."},
+     "simple_path_blocks_ctx(capsule[, edge_mask, node_mask, terminal_mask]) -> (list[set], dict[int, set[int]])\n\n"
+     "Blocks of nodes and multi-terminal edges, as a simple path visits each at most once."},
     {"cycle_basis_ctx", py_cycle_basis_ctx, METH_VARARGS,
      "cycle_basis_ctx(capsule[, edge_mask, node_mask]) -> list[list[NodeId]]\n\n"
      "Fundamental cycle basis of an undirected graph."},

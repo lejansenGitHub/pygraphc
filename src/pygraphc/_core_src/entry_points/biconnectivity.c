@@ -1,7 +1,7 @@
 /* Bridges, articulation points and biconnected components (iterative Tarjan). */
 #include "entry_points.h"
 #include "../helpers/parse.h"
-#include "../helpers/ports.h"
+#include "../helpers/terminals.h"
 
 /* ── Bridges (iterative Tarjan's) ── */
 
@@ -479,28 +479,28 @@ PyObject *py_biconnected_components_by_node_id(PyObject *self, PyObject *args) {
  * ── One Tarjan search for the parsed graph ──
  *
  * Depth-first search over the search states of a graph: its nodes and, with
- * has_multiport_edges, one state per edge with three or more ports
- * (node_count + e), linked to the node of each of its active ports. A link is
- * a two-port edge (its edge index) or one port (edge_count + port), so a
- * search never walks back over the link it came in by, while a second port of
+ * has_multi_terminal_edges, one state per edge with three or more terminals
+ * (node_count + e), linked to the node of each of its active terminals. A link is
+ * a two-terminal edge (its edge index) or one terminal (edge_count + terminal), so a
+ * search never walks back over the link it came in by, while a second terminal of
  * one edge at the same node is a back link (case 7). The mode decides what is
- * reported; every mode and both values of has_multiport_edges are separate
- * instantiations, so graphs of two-port edges run the search as before.
+ * reported; every mode and both values of has_multi_terminal_edges are separate
+ * instantiations, so graphs of two-terminal edges run the search as before.
  *
- * - critical two-port edge: a tree link between two nodes with
+ * - critical two-terminal edge: a tree link between two nodes with
  *   low[child] > discovery[parent] (a bridge);
- * - critical multiport edge: an edge state with a child node c and
- *   low[c] >= discovery[edge state], i.e. removing the edge separates its ports;
+ * - critical multi-terminal edge: an edge state with a child node c and
+ *   low[c] >= discovery[edge state], i.e. removing the edge separates its terminals;
  * - critical node: as in Tarjan, counting only children whose subtree holds a
- *   node, so an edge with one active port never makes its node critical;
+ *   node, so an edge with one active terminal never makes its node critical;
  * - blocks: closed only below a node, never below an edge state, so the blocks
- *   meeting at a multiport edge merge into one (D14); a block with fewer than
+ *   meeting at a multi-terminal edge merge into one (D14); a block with fewer than
  *   two nodes joins nothing and is not reported;
  * - simple path blocks: the blocks of the search states themselves, closed
  *   below every state, reported as (list of node sets, block index -> its
- *   multiport edges), so a multiport edge can separate them as a node does;
- *   without multiport edges they are the blocks, collected the same way. A simple path visits
- *   each node and each multiport edge at most once, so the block-cut tree of
+ *   multi-terminal edges), so a multi-terminal edge can separate them as a node does;
+ *   without multi-terminal edges they are the blocks, collected the same way. A simple path visits
+ *   each node and each multi-terminal edge at most once, so the block-cut tree of
  *   these blocks gives the nodes on simple paths.
  */
 
@@ -527,7 +527,7 @@ static inline __attribute__((always_inline)) int report_edge_index(int edge_inde
 
 /*
  * Pop the links of the block below (parent, state), append its node ids as a
- * set to the list result[0] and, when it holds multiport edges, map its index
+ * set to the list result[0] and, when it holds multi-terminal edges, map its index
  * to their edge indices in the dict result[1]. Returns 0, or -1 with an
  * exception set.
  */
@@ -568,21 +568,21 @@ failed:
 }
 
 static inline __attribute__((always_inline)) int tarjan_search(
-    const GraphContext *graph, const uint8_t *two_port_edge_mask, const uint8_t *edge_mask, const uint8_t *port_mask,
-    const uint8_t *node_mask, PyObject *result, const int mode, const int has_multiport_edges) {
+    const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask, const uint8_t *terminal_mask,
+    const uint8_t *node_mask, PyObject *result, const int mode, const int has_multi_terminal_edges) {
     const int *slot_offsets = graph->adjacency.offset, *slot_neighbors = graph->adjacency.neighbors;
     const int *slot_edge_indices = graph->adjacency.edge_indices;
-    const PortList *ports = graph->ports;
+    const TerminalList *terminals = graph->terminals;
     int node_count = graph->node_ids.node_count;
     int edge_count = (int)graph->node_ids.edges.edge_count;
-    size_t state_count = (size_t)node_count + (has_multiport_edges ? (size_t)edge_count : 0);
-    size_t link_capacity = (size_t)edge_count + (has_multiport_edges ? (size_t)ports->port_count : 0);
+    size_t state_count = (size_t)node_count + (has_multi_terminal_edges ? (size_t)edge_count : 0);
+    size_t link_capacity = (size_t)edge_count + (has_multi_terminal_edges ? (size_t)terminals->terminal_count : 0);
 
     int *scratch = (int *)malloc(6 * state_count * sizeof(int));
     const int collects_links = mode == REPORT_BLOCKS || mode == REPORT_SIMPLE_PATH_BLOCKS;
     int *link_stack = collects_links ? (int *)malloc(2 * (link_capacity > 0 ? link_capacity : 1) * sizeof(int)) : NULL;
-    uint8_t *critical_edges = (has_multiport_edges && mode == REPORT_CRITICAL_EDGES) ? (uint8_t *)calloc((size_t)edge_count + 1, 1) : NULL;
-    if (!scratch || (collects_links && !link_stack) || (has_multiport_edges && mode == REPORT_CRITICAL_EDGES && !critical_edges)) {
+    uint8_t *critical_edges = (has_multi_terminal_edges && mode == REPORT_CRITICAL_EDGES) ? (uint8_t *)calloc((size_t)edge_count + 1, 1) : NULL;
+    if (!scratch || (collects_links && !link_stack) || (has_multi_terminal_edges && mode == REPORT_CRITICAL_EDGES && !critical_edges)) {
         free(scratch); free(link_stack); free(critical_edges);
         PyErr_NoMemory();
         return -1;
@@ -592,7 +592,7 @@ static inline __attribute__((always_inline)) int tarjan_search(
     int *child_count = scratch + 5 * state_count;
     int *link_from = link_stack, *link_to = link_stack ? link_stack + link_capacity : NULL;
     memset(discovery_time, -1, state_count * sizeof(int));
-    const int counts_children = mode == REPORT_CRITICAL_NODES || has_multiport_edges;
+    const int counts_children = mode == REPORT_CRITICAL_NODES || has_multi_terminal_edges;
     int timer = 0, link_top = 0;
 
     for (int start = 0; start < node_count; start++) {
@@ -604,26 +604,26 @@ static inline __attribute__((always_inline)) int tarjan_search(
         if (counts_children) child_count[start] = 0;
         while (stack_top >= 0) {
             int state = stack[stack_top];
-            int is_edge_state = has_multiport_edges && state >= node_count;
-            int end_slot = is_edge_state ? ports->port_offsets[state - node_count + 1] : slot_offsets[state + 1];
+            int is_edge_state = has_multi_terminal_edges && state >= node_count;
+            int end_slot = is_edge_state ? terminals->terminal_offsets[state - node_count + 1] : slot_offsets[state + 1];
             if (stack_next_slot[stack_top] < end_slot) {
                 int slot = stack_next_slot[stack_top]++;
                 int neighbor, link;
                 if (is_edge_state) {
                     int edge = state - node_count;
-                    if (!port_is_active(ports, edge, slot, edge_mask, port_mask, node_mask)) continue;
-                    neighbor = ports->port_nodes[slot];
+                    if (!terminal_is_active(terminals, edge, slot, edge_mask, terminal_mask, node_mask)) continue;
+                    neighbor = terminals->terminal_nodes[slot];
                     link = edge_count + slot;
                 } else {
                     neighbor = slot_neighbors[slot];
                     int edge_index = slot_edge_indices[slot];
-                    if (has_multiport_edges && neighbor < 0) {
+                    if (has_multi_terminal_edges && neighbor < 0) {
                         int edge = -1 - neighbor;
-                        if (!port_is_active(ports, edge, edge_index, edge_mask, port_mask, node_mask)) continue;
+                        if (!terminal_is_active(terminals, edge, edge_index, edge_mask, terminal_mask, node_mask)) continue;
                         neighbor = node_count + edge;
                         link = edge_count + edge_index;
                     } else {
-                        if (two_port_edge_mask && two_port_edge_mask[edge_index]) continue;
+                        if (two_terminal_edge_mask && two_terminal_edge_mask[edge_index]) continue;
                         if (node_mask && node_mask[neighbor]) continue;
                         link = edge_index;
                     }
@@ -632,10 +632,10 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 if (discovery_time[neighbor] == -1) {
                     if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
                     discovery_time[neighbor] = low_link[neighbor] = timer++; parent_link[neighbor] = link;
-                    if (counts_children) { child_count[neighbor] = 0; if (!has_multiport_edges) child_count[state]++; }
+                    if (counts_children) { child_count[neighbor] = 0; if (!has_multi_terminal_edges) child_count[state]++; }
                     stack[++stack_top] = neighbor;
-                    stack_next_slot[stack_top] = (has_multiport_edges && neighbor >= node_count)
-                        ? ports->port_offsets[neighbor - node_count] : slot_offsets[neighbor];
+                    stack_next_slot[stack_top] = (has_multi_terminal_edges && neighbor >= node_count)
+                        ? terminals->terminal_offsets[neighbor - node_count] : slot_offsets[neighbor];
                 } else if (!collects_links || discovery_time[neighbor] < discovery_time[state]) {
                     if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
                     if (low_link[state] > discovery_time[neighbor]) low_link[state] = discovery_time[neighbor];
@@ -650,15 +650,15 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 continue;
             }
             int parent = stack[stack_top - 1];
-            int parent_is_edge_state = has_multiport_edges && parent >= node_count;
+            int parent_is_edge_state = has_multi_terminal_edges && parent >= node_count;
             int subtree_holds_node = !is_edge_state || child_count[state] > 0;
             if (low_link[parent] > low_link[state]) low_link[parent] = low_link[state];
-            if (has_multiport_edges && subtree_holds_node) child_count[parent]++;
+            if (has_multi_terminal_edges && subtree_holds_node) child_count[parent]++;
             if (mode == REPORT_BRIDGE_PAIRS || mode == REPORT_CRITICAL_EDGES) {
                 if (!is_edge_state && !parent_is_edge_state && low_link[state] > discovery_time[parent] &&
                     (mode == REPORT_BRIDGE_PAIRS ? report_bridge_pair(graph, parent_link[state], result)
                                                  : report_edge_index(parent_link[state], result)) < 0) goto failed;
-                if (has_multiport_edges && mode == REPORT_CRITICAL_EDGES) {
+                if (has_multi_terminal_edges && mode == REPORT_CRITICAL_EDGES) {
                     if (parent_is_edge_state && low_link[state] >= discovery_time[parent]) critical_edges[parent - node_count] = 1;
                     if (is_edge_state && critical_edges[state - node_count] &&
                         report_edge_index(state - node_count, result) < 0) goto failed;
@@ -667,7 +667,7 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 if (!parent_is_edge_state && parent_link[parent] != -1 && subtree_holds_node &&
                     low_link[state] >= discovery_time[parent] &&
                     PySet_Add(result, graph->node_ids.node_id_items[parent]) < 0) goto failed;
-            } else if (mode == REPORT_SIMPLE_PATH_BLOCKS && has_multiport_edges) {
+            } else if (mode == REPORT_SIMPLE_PATH_BLOCKS && has_multi_terminal_edges) {
                 if (low_link[state] >= discovery_time[parent] &&
                     report_simple_path_block(graph, link_from, link_to, &link_top, parent, state, result) < 0) goto failed;
             } else if (!parent_is_edge_state && low_link[state] >= discovery_time[parent]) {
@@ -677,12 +677,12 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 while (link_top > 0) {
                     link_top--;
                     int from = link_from[link_top], to = link_to[link_top];
-                    if (!has_multiport_edges || from < node_count) PySet_Add(block, node_id_items[from]);
-                    if (!has_multiport_edges || to < node_count) PySet_Add(block, node_id_items[to]);
+                    if (!has_multi_terminal_edges || from < node_count) PySet_Add(block, node_id_items[from]);
+                    if (!has_multi_terminal_edges || to < node_count) PySet_Add(block, node_id_items[to]);
                     if (from == parent && to == state) break;
                 }
                 PyObject *blocks = mode == REPORT_SIMPLE_PATH_BLOCKS ? PyTuple_GET_ITEM(result, 0) : result;
-                int append_status = (!has_multiport_edges || PySet_GET_SIZE(block) >= 2) ? PyList_Append(blocks, block) : 0;
+                int append_status = (!has_multi_terminal_edges || PySet_GET_SIZE(block) >= 2) ? PyList_Append(blocks, block) : 0;
                 Py_DECREF(block);
                 if (append_status < 0) goto failed;
             }
@@ -697,17 +697,17 @@ failed:
 }
 
 /*
- * Parse (capsule[, edge_mask, node_mask, port_mask]) and run tarjan_search in
+ * Parse (capsule[, edge_mask, node_mask, terminal_mask]) and run tarjan_search in
  * the given mode, instantiated for the graph's kind of edges.
  */
 static PyObject *tarjan_entry(PyObject *args, const int mode) {
-    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *port_mask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &edge_mask_obj, &node_mask_obj, &port_mask_obj)) return NULL;
+    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *terminal_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &edge_mask_obj, &node_mask_obj, &terminal_mask_obj)) return NULL;
     GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
-    if (mode == REPORT_BRIDGE_PAIRS && graph->ports) {
+    if (mode == REPORT_BRIDGE_PAIRS && graph->terminals) {
         PyErr_SetString(PyExc_NotImplementedError,
-                        "bridges names edges by node pair, which cannot name an edge with more than two ports; "
+                        "bridges names edges by node pair, which cannot name an edge with more than two terminals; "
                         "use critical_edges()");
         return NULL;
     }
@@ -724,9 +724,9 @@ static PyObject *tarjan_entry(PyObject *args, const int mode) {
     if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) { Py_DECREF(result); return NULL; }
     const uint8_t *node_mask; Py_buffer node_mask_buffer;
     if (parse_mask(node_mask_obj, graph->node_ids.node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL; }
-    PortMask port_mask;
-    if (parse_port_mask(graph, port_mask_obj, edge_mask, &port_mask) < 0) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL; }
-    const uint8_t *traversal_edge_mask = two_port_edge_mask(&port_mask, edge_mask);
+    TerminalMask terminal_mask;
+    if (parse_terminal_mask(graph, terminal_mask_obj, edge_mask, &terminal_mask) < 0) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL; }
+    const uint8_t *traversal_edge_mask = two_terminal_edge_mask(&terminal_mask, edge_mask);
 
     int status;
     switch (mode) {
@@ -734,26 +734,26 @@ static PyObject *tarjan_entry(PyObject *args, const int mode) {
         status = tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_BRIDGE_PAIRS, 0);
         break;
     case REPORT_CRITICAL_EDGES:
-        status = graph->ports
-            ? tarjan_search(graph, traversal_edge_mask, edge_mask, port_mask.ports, node_mask, result, REPORT_CRITICAL_EDGES, 1)
+        status = graph->terminals
+            ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_CRITICAL_EDGES, 1)
             : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_CRITICAL_EDGES, 0);
         break;
     case REPORT_CRITICAL_NODES:
-        status = graph->ports
-            ? tarjan_search(graph, traversal_edge_mask, edge_mask, port_mask.ports, node_mask, result, REPORT_CRITICAL_NODES, 1)
+        status = graph->terminals
+            ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_CRITICAL_NODES, 1)
             : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_CRITICAL_NODES, 0);
         break;
     case REPORT_SIMPLE_PATH_BLOCKS:
-        status = graph->ports
-            ? tarjan_search(graph, traversal_edge_mask, edge_mask, port_mask.ports, node_mask, result, REPORT_SIMPLE_PATH_BLOCKS, 1)
+        status = graph->terminals
+            ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_SIMPLE_PATH_BLOCKS, 1)
             : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_SIMPLE_PATH_BLOCKS, 0);
         break;
     default:
-        status = graph->ports
-            ? tarjan_search(graph, traversal_edge_mask, edge_mask, port_mask.ports, node_mask, result, REPORT_BLOCKS, 1)
+        status = graph->terminals
+            ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_BLOCKS, 1)
             : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_BLOCKS, 0);
     }
-    release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+    release_terminal_mask(&terminal_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
     if (status < 0) { Py_DECREF(result); return NULL; }
     return result;
 }

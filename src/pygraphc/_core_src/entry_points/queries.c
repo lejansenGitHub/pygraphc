@@ -19,7 +19,7 @@ static int resolve_node(GraphContext *graph, PyObject *node_id_obj, int *found) 
 PyObject *py_neighbors_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *node_id_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &node_id_obj, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_two_port_graph_context(capsule);
+    GraphContext *graph = get_two_terminal_graph_context(capsule);
     if (!graph) return NULL;
 
     int found;
@@ -53,7 +53,7 @@ PyObject *py_neighbors_ctx(PyObject *self, PyObject *args) {
 PyObject *py_predecessors_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *node_id_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &node_id_obj, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_two_port_graph_context(capsule);
+    GraphContext *graph = get_two_terminal_graph_context(capsule);
     if (!graph) return NULL;
     if (!graph->directed) {
         PyErr_SetString(PyExc_TypeError, "predecessors requires a directed graph");
@@ -91,7 +91,7 @@ PyObject *py_predecessors_ctx(PyObject *self, PyObject *args) {
 PyObject *py_degree_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *node_id_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &node_id_obj, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_two_port_graph_context(capsule);
+    GraphContext *graph = get_two_terminal_graph_context(capsule);
     if (!graph) return NULL;
 
     int found;
@@ -130,7 +130,7 @@ PyObject *py_degree_ctx(PyObject *self, PyObject *args) {
 PyObject *py_in_degree_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *node_id_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &node_id_obj, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_two_port_graph_context(capsule);
+    GraphContext *graph = get_two_terminal_graph_context(capsule);
     if (!graph) return NULL;
     if (!graph->directed) {
         PyErr_SetString(PyExc_TypeError, "in_degree requires a directed graph");
@@ -164,7 +164,7 @@ PyObject *py_in_degree_ctx(PyObject *self, PyObject *args) {
 PyObject *py_incident_edges_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *node_id_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &node_id_obj, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_two_port_graph_context(capsule);
+    GraphContext *graph = get_two_terminal_graph_context(capsule);
     if (!graph) return NULL;
 
     int found;
@@ -202,7 +202,7 @@ PyObject *py_incident_edges_ctx(PyObject *self, PyObject *args) {
 PyObject *py_incoming_edges_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *node_id_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &node_id_obj, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_two_port_graph_context(capsule);
+    GraphContext *graph = get_two_terminal_graph_context(capsule);
     if (!graph) return NULL;
     if (!graph->directed) {
         PyErr_SetString(PyExc_TypeError, "incoming_edge_indices requires a directed graph");
@@ -243,9 +243,9 @@ PyObject *py_edge_indices_ctx(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "OOO|O", &capsule, &first_node_obj, &second_node_obj, &edge_mask_obj)) return NULL;
     GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
-    if (graph->ports) {
+    if (graph->terminals) {
         PyErr_SetString(PyExc_NotImplementedError,
-                        "edge_indices names edges by node pair, which cannot name an edge with more than two ports; "
+                        "edge_indices names edges by node pair, which cannot name an edge with more than two terminals; "
                         "use edge_indices_at()");
         return NULL;
     }

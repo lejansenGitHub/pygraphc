@@ -15,7 +15,7 @@ a change by labelling the pull request; the table goes to stdout and, in CI,
 to the job summary. Both builds run at the same time: an instruction count does
 not depend on the load next to it.
 
-    python -m performance_tests.instructions.compare --base-python BASE --head-python HEAD [--only bfs,port_]
+    python -m performance_tests.instructions.compare --base-python BASE --head-python HEAD [--only bfs,terminal_]
 
 ``--only`` takes comma-separated substrings and measures just the scenario and
 workflow names containing one of them, for a quick check of the scenarios a
