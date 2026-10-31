@@ -4,225 +4,225 @@
 #include "../helpers/toposort.h"
 
 PyObject *py_toposort_nid(PyObject *self, PyObject *args) {
-    PyObject *nids, *edges;
-    if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
+    PyObject *node_ids_obj, *edges_obj;
+    if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
-    NodeIdContext ctx;
-    if (node_id_parse(nids, edges, &ctx) < 0) return NULL;
-    int n = ctx.node_count;
+    NodeIdContext context;
+    if (node_id_parse(node_ids_obj, edges_obj, &context) < 0) return NULL;
+    int node_count = context.node_count;
 
-    if (n == 0) {
-        node_id_context_free(&ctx);
+    if (node_count == 0) {
+        node_id_context_free(&context);
         return PyList_New(0);
     }
 
     int *order;
-    int count = topological_order(n, &ctx.edges, &order);
-    if (count < 0) { node_id_context_free(&ctx); return NULL; }
+    int count = topological_order(node_count, &context.edges, &order);
+    if (count < 0) { node_id_context_free(&context); return NULL; }
 
-    if (count < n) {
-        free(order); node_id_context_free(&ctx);
+    if (count < node_count) {
+        free(order); node_id_context_free(&context);
         PyErr_Format(PyExc_ValueError,
             "Graph contains a cycle - topological sort is undefined "
-            "(%d of %d nodes processed)", count, n);
+            "(%d of %d nodes processed)", count, node_count);
         return NULL;
     }
 
-    PyObject *result = PyList_New(n);
+    PyObject *result = PyList_New(node_count);
     if (result) {
-        for (int i = 0; i < n; i++) {
-            Py_INCREF(ctx.node_id_items[order[i]]);
-            PyList_SET_ITEM(result, i, ctx.node_id_items[order[i]]);
+        for (int position = 0; position < node_count; position++) {
+            Py_INCREF(context.node_id_items[order[position]]);
+            PyList_SET_ITEM(result, position, context.node_id_items[order[position]]);
         }
     }
 
-    free(order); node_id_context_free(&ctx);
+    free(order); node_id_context_free(&context);
     return result;
 }
 
 PyObject *py_toposort_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphContext *g = get_graph_context(capsule);
-    if (!g) return NULL;
-    int n = g->node_ids.node_count;
+    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    int node_count = graph->node_ids.node_count;
 
-    if (!g->directed) {
+    if (!graph->directed) {
         PyErr_SetString(PyExc_TypeError,
             "topological_sort requires a directed graph");
         return NULL;
     }
-    if (n == 0) return PyList_New(0);
+    if (node_count == 0) return PyList_New(0);
 
-    const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) return NULL;
-    const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
+    const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
+    if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
+    const uint8_t *node_mask; Py_buffer node_mask_buffer;
+    if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); return NULL; }
 
     /* Count active nodes */
-    int active_n = n;
-    if (nmask) { active_n = 0; for (int i = 0; i < n; i++) if (!nmask[i]) active_n++; }
+    int active_node_count = node_count;
+    if (node_mask) { active_node_count = 0; for (int node = 0; node < node_count; node++) if (!node_mask[node]) active_node_count++; }
 
     int *order;
-    int count = topological_order_masked(n, &g->node_ids.edges, mask, nmask, &order);
-    release_mask(&nmbuf); release_mask(&mbuf);
+    int count = topological_order_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &order);
+    release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
     if (count < 0) return NULL;
 
-    if (count < active_n) {
+    if (count < active_node_count) {
         free(order);
         PyErr_Format(PyExc_ValueError,
             "Graph contains a cycle - topological sort is undefined "
-            "(%d of %d nodes processed)", count, active_n);
+            "(%d of %d nodes processed)", count, active_node_count);
         return NULL;
     }
 
     PyObject *result = PyList_New(count);
     if (result) {
-        for (int i = 0; i < count; i++) {
-            Py_INCREF(g->node_ids.node_id_items[order[i]]);
-            PyList_SET_ITEM(result, i, g->node_ids.node_id_items[order[i]]);
+        for (int position = 0; position < count; position++) {
+            Py_INCREF(graph->node_ids.node_id_items[order[position]]);
+            PyList_SET_ITEM(result, position, graph->node_ids.node_id_items[order[position]]);
         }
     }
     free(order);
     return result;
 }
 
-/* ── Cycle basis (fundamental cycles via DFS spanning tree) ── */
+/* ── Cycle basis (fundamental cycles via BFS spanning tree) ── */
 
 /*
  * Find a fundamental cycle basis of an undirected graph.
- * For each back edge in the DFS tree, traces the cycle through the tree.
+ * For each non-tree edge of the BFS tree, traces the cycle through the tree.
  * Returns a Python list of lists of original node IDs.
  * Supports edge mask and node mask.
  */
 PyObject *py_cycle_basis_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphContext *g = get_graph_context(capsule);
-    if (!g) return NULL;
-    int n = g->node_ids.node_count;
+    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    int node_count = graph->node_ids.node_count;
 
     PyObject *result = PyList_New(0);
     if (!result) return NULL;
-    if (n == 0 || !g->has_adjacency) return result;
+    if (node_count == 0 || !graph->has_adjacency) return result;
 
-    if (g->directed) {
+    if (graph->directed) {
         Py_DECREF(result);
         PyErr_SetString(PyExc_TypeError,
             "cycle_basis is not defined for directed graphs");
         return NULL;
     }
 
-    const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) { Py_DECREF(result); return NULL; }
-    const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); Py_DECREF(result); return NULL; }
+    const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
+    if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) { Py_DECREF(result); return NULL; }
+    const uint8_t *node_mask; Py_buffer node_mask_buffer;
+    if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL; }
 
-    AdjacencyList *al = &g->adjacency;
-    EdgeList *el = &g->node_ids.edges;
+    AdjacencyList *adjacency = &graph->adjacency;
+    EdgeList *edges = &graph->node_ids.edges;
 
     /* Self-loops are trivial cycles */
-    for (Py_ssize_t i = 0; i < el->edge_count; i++) {
-        if (mask && mask[i]) continue;
-        int u = EDGE_FIRST_ENDPOINT(el, i);
-        if (nmask && nmask[u]) continue;
-        if (u == EDGE_SECOND_ENDPOINT(el, i)) {
+    for (Py_ssize_t edge_index = 0; edge_index < edges->edge_count; edge_index++) {
+        if (edge_mask && edge_mask[edge_index]) continue;
+        int first_node = EDGE_FIRST_ENDPOINT(edges, edge_index);
+        if (node_mask && node_mask[first_node]) continue;
+        if (first_node == EDGE_SECOND_ENDPOINT(edges, edge_index)) {
             PyObject *cycle = PyList_New(1);
-            if (!cycle) { release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result); return NULL; }
-            Py_INCREF(g->node_ids.node_id_items[u]);
-            PyList_SET_ITEM(cycle, 0, g->node_ids.node_id_items[u]);
+            if (!cycle) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL; }
+            Py_INCREF(graph->node_ids.node_id_items[first_node]);
+            PyList_SET_ITEM(cycle, 0, graph->node_ids.node_id_items[first_node]);
             PyList_Append(result, cycle);
             Py_DECREF(cycle);
         }
     }
 
     /* Track which non-tree edges have been processed (one bit per edge) */
-    Py_ssize_t m = el->edge_count;
-    uint8_t *edge_seen = (uint8_t *)calloc(m > 0 ? (size_t)m : 1, 1);
+    Py_ssize_t edge_count = edges->edge_count;
+    uint8_t *edge_seen = (uint8_t *)calloc(edge_count > 0 ? (size_t)edge_count : 1, 1);
     if (!edge_seen) {
-        release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result);
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
 
-    /* Allocate: parent[n], depth[n], queue[n], peid[n], path_a[n], path_b[n] */
-    int *buf6 = (int *)malloc(6 * (size_t)n * sizeof(int));
-    if (!buf6) {
+    /* Allocate: parent, depth, queue, parent_edge, path_a, path_b; node_count entries each */
+    int *scratch = (int *)malloc(6 * (size_t)node_count * sizeof(int));
+    if (!scratch) {
         free(edge_seen);
-        release_mask(&nmbuf); release_mask(&mbuf); Py_DECREF(result);
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
     }
-    int *parent = buf6;
-    int *depth  = buf6 + n;
-    int *queue  = buf6 + 2 * n;
-    int *peid   = buf6 + 3 * n;  /* parent edge ID (to skip reverse tree edge) */
-    int *path_a = buf6 + 4 * n;
-    int *path_b = buf6 + 5 * n;
-    memset(depth, -1, (size_t)n * sizeof(int));
+    int *parent      = scratch;
+    int *depth       = scratch + node_count;
+    int *queue       = scratch + 2 * node_count;
+    int *parent_edge = scratch + 3 * node_count;  /* to skip the reverse tree edge */
+    int *path_a      = scratch + 4 * node_count;
+    int *path_b      = scratch + 5 * node_count;
+    memset(depth, -1, (size_t)node_count * sizeof(int));
 
     /* BFS spanning tree + non-tree edge cycle extraction.
      * BFS trees are shallow (O(log n) for random graphs), making the
-     * LCA-based cycle trace O(log n) per back edge instead of O(n). */
-    for (int start = 0; start < n; start++) {
+     * lowest-common-ancestor cycle trace O(log n) per non-tree edge instead of O(n). */
+    for (int start = 0; start < node_count; start++) {
         if (depth[start] != -1) continue;
-        if (nmask && nmask[start]) continue;
+        if (node_mask && node_mask[start]) continue;
 
         /* BFS to build spanning tree */
         int head = 0, tail = 0;
         queue[tail++] = start;
         depth[start] = 0;
         parent[start] = -1;
-        peid[start] = -1;
+        parent_edge[start] = -1;
 
         while (head < tail) {
-            int u = queue[head++];
-            for (int i = al->offset[u]; i < al->offset[u + 1]; i++) {
-                int eid = al->edge_indices[i];
-                if (mask && mask[eid]) continue;
-                int v = al->neighbors[i];
-                if (nmask && nmask[v]) continue;
-                if (v == u) continue;  /* skip self-loops (handled above) */
-                if (depth[v] == -1) {
+            int node = queue[head++];
+            for (int slot = adjacency->offset[node]; slot < adjacency->offset[node + 1]; slot++) {
+                int edge_index = adjacency->edge_indices[slot];
+                if (edge_mask && edge_mask[edge_index]) continue;
+                int neighbor = adjacency->neighbors[slot];
+                if (node_mask && node_mask[neighbor]) continue;
+                if (neighbor == node) continue;  /* skip self-loops (handled above) */
+                if (depth[neighbor] == -1) {
                     /* Tree edge */
-                    depth[v] = depth[u] + 1;
-                    parent[v] = u;
-                    peid[v] = eid;
-                    queue[tail++] = v;
-                } else if (eid != peid[u] && !edge_seen[eid]) {
-                    /* Non-tree edge: extract cycle via LCA.
+                    depth[neighbor] = depth[node] + 1;
+                    parent[neighbor] = node;
+                    parent_edge[neighbor] = edge_index;
+                    queue[tail++] = neighbor;
+                } else if (edge_index != parent_edge[node] && !edge_seen[edge_index]) {
+                    /* Non-tree edge: extract cycle via the lowest common ancestor.
                      * edge_seen prevents processing each undirected
-                     * edge twice (CSR has both u->v and v->u). */
-                    edge_seen[eid] = 1;
-                    int a = u, b = v;
-                    int la = 0, lb = 0;
+                     * edge twice (CSR has both node->neighbor and neighbor->node). */
+                    edge_seen[edge_index] = 1;
+                    int walker_a = node, walker_b = neighbor;
+                    int path_a_length = 0, path_b_length = 0;
 
-                    /* Walk a and b up to the same depth */
-                    while (depth[a] > depth[b]) { path_a[la++] = a; a = parent[a]; }
-                    while (depth[b] > depth[a]) { path_b[lb++] = b; b = parent[b]; }
-                    /* Walk both up to LCA */
-                    while (a != b) {
-                        path_a[la++] = a; a = parent[a];
-                        path_b[lb++] = b; b = parent[b];
+                    /* Walk walker_a and walker_b up to the same depth */
+                    while (depth[walker_a] > depth[walker_b]) { path_a[path_a_length++] = walker_a; walker_a = parent[walker_a]; }
+                    while (depth[walker_b] > depth[walker_a]) { path_b[path_b_length++] = walker_b; walker_b = parent[walker_b]; }
+                    /* Walk both up to the lowest common ancestor */
+                    while (walker_a != walker_b) {
+                        path_a[path_a_length++] = walker_a; walker_a = parent[walker_a];
+                        path_b[path_b_length++] = walker_b; walker_b = parent[walker_b];
                     }
-                    /* a == b == LCA */
-                    int lca = a;
-                    int plen = la + lb + 1;
+                    /* walker_a == walker_b == lowest common ancestor */
+                    int lowest_common_ancestor = walker_a;
+                    int cycle_length = path_a_length + path_b_length + 1;
 
-                    PyObject *cycle = PyList_New(plen);
+                    PyObject *cycle = PyList_New(cycle_length);
                     if (!cycle) {
-                        free(buf6); free(edge_seen);
-                        release_mask(&nmbuf); release_mask(&mbuf);
+                        free(scratch); free(edge_seen);
+                        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
                         Py_DECREF(result); return NULL;
                     }
                     int idx = 0;
-                    for (int j = 0; j < la; j++) {
-                        Py_INCREF(g->node_ids.node_id_items[path_a[j]]);
-                        PyList_SET_ITEM(cycle, idx++, g->node_ids.node_id_items[path_a[j]]);
+                    for (int position = 0; position < path_a_length; position++) {
+                        Py_INCREF(graph->node_ids.node_id_items[path_a[position]]);
+                        PyList_SET_ITEM(cycle, idx++, graph->node_ids.node_id_items[path_a[position]]);
                     }
-                    Py_INCREF(g->node_ids.node_id_items[lca]);
-                    PyList_SET_ITEM(cycle, idx++, g->node_ids.node_id_items[lca]);
-                    for (int j = lb - 1; j >= 0; j--) {
-                        Py_INCREF(g->node_ids.node_id_items[path_b[j]]);
-                        PyList_SET_ITEM(cycle, idx++, g->node_ids.node_id_items[path_b[j]]);
+                    Py_INCREF(graph->node_ids.node_id_items[lowest_common_ancestor]);
+                    PyList_SET_ITEM(cycle, idx++, graph->node_ids.node_id_items[lowest_common_ancestor]);
+                    for (int position = path_b_length - 1; position >= 0; position--) {
+                        Py_INCREF(graph->node_ids.node_id_items[path_b[position]]);
+                        PyList_SET_ITEM(cycle, idx++, graph->node_ids.node_id_items[path_b[position]]);
                     }
                     PyList_Append(result, cycle);
                     Py_DECREF(cycle);
@@ -231,8 +231,8 @@ PyObject *py_cycle_basis_ctx(PyObject *self, PyObject *args) {
         }
     }
 
-    free(buf6); free(edge_seen);
-    release_mask(&nmbuf); release_mask(&mbuf);
+    free(scratch); free(edge_seen);
+    release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
     return result;
 }
 
@@ -245,83 +245,83 @@ PyObject *py_cycle_basis_ctx(PyObject *self, PyObject *args) {
  * Returns Python list of original node IDs forming the longest path.
  */
 PyObject *py_dag_longest_path_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *wobj = Py_None, *mask_obj = Py_None, *nmask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &wobj, &mask_obj, &nmask_obj)) return NULL;
-    GraphContext *g = get_graph_context(capsule);
-    if (!g) return NULL;
-    int n = g->node_ids.node_count;
+    PyObject *capsule, *weights_obj = Py_None, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &weights_obj, &edge_mask_obj, &node_mask_obj)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    int node_count = graph->node_ids.node_count;
 
-    if (!g->directed) {
+    if (!graph->directed) {
         PyErr_SetString(PyExc_TypeError,
             "dag_longest_path requires a directed graph");
         return NULL;
     }
-    if (n == 0) return PyList_New(0);
+    if (node_count == 0) return PyList_New(0);
 
     /* Parse optional weights */
-    WeightList wl = {NULL, 0, 0};
-    int has_weights = (wobj != Py_None);
+    WeightList weights = {NULL, 0, 0};
+    int has_weights = (weights_obj != Py_None);
     if (has_weights) {
-        if (parse_weights(wobj, &wl, g->node_ids.edges.edge_count) < 0) return NULL;
+        if (parse_weights(weights_obj, &weights, graph->node_ids.edges.edge_count) < 0) return NULL;
     }
 
-    const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->node_ids.edges.edge_count, &mask, &mbuf) < 0) {
-        if (has_weights) free_weights(&wl); return NULL;
+    const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
+    if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) {
+        if (has_weights) free_weights(&weights); return NULL;
     }
-    const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) {
-        release_mask(&mbuf); if (has_weights) free_weights(&wl); return NULL;
+    const uint8_t *node_mask; Py_buffer node_mask_buffer;
+    if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) {
+        release_mask(&edge_mask_buffer); if (has_weights) free_weights(&weights); return NULL;
     }
 
     /* Get topological order (reuse masked toposort) */
     int *order;
-    int active_n = n;
-    if (nmask) { active_n = 0; for (int i = 0; i < n; i++) if (!nmask[i]) active_n++; }
+    int active_node_count = node_count;
+    if (node_mask) { active_node_count = 0; for (int node = 0; node < node_count; node++) if (!node_mask[node]) active_node_count++; }
 
-    int count = topological_order_masked(n, &g->node_ids.edges, mask, nmask, &order);
+    int count = topological_order_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &order);
     if (count < 0) {
-        release_mask(&nmbuf); release_mask(&mbuf);
-        if (has_weights) free_weights(&wl);
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+        if (has_weights) free_weights(&weights);
         return NULL;
     }
-    if (count < active_n) {
+    if (count < active_node_count) {
         free(order);
-        release_mask(&nmbuf); release_mask(&mbuf);
-        if (has_weights) free_weights(&wl);
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+        if (has_weights) free_weights(&weights);
         PyErr_SetString(PyExc_ValueError,
             "Graph contains a cycle - dag_longest_path is undefined");
         return NULL;
     }
 
-    /* DP: dist[v] = longest distance to reach v, prev[v] = predecessor on longest path */
-    double *dist = (double *)malloc((size_t)n * sizeof(double));
-    int *prev = (int *)malloc((size_t)n * sizeof(int));
-    if (!dist || !prev) {
-        free(dist); free(prev); free(order);
-        release_mask(&nmbuf); release_mask(&mbuf);
-        if (has_weights) free_weights(&wl);
+    /* DP: distance[node] = longest distance to reach node, predecessor[node] = predecessor on longest path */
+    double *distance = (double *)malloc((size_t)node_count * sizeof(double));
+    int *predecessor = (int *)malloc((size_t)node_count * sizeof(int));
+    if (!distance || !predecessor) {
+        free(distance); free(predecessor); free(order);
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+        if (has_weights) free_weights(&weights);
         PyErr_NoMemory(); return NULL;
     }
-    for (int i = 0; i < n; i++) { dist[i] = 0.0; prev[i] = -1; }
+    for (int node = 0; node < node_count; node++) { distance[node] = 0.0; predecessor[node] = -1; }
 
     /* Use forward CSR to iterate outgoing edges */
-    AdjacencyList *al = &g->adjacency;
-    int use_csr = g->has_adjacency;
+    AdjacencyList *adjacency = &graph->adjacency;
+    int has_adjacency = graph->has_adjacency;
 
     /* Process nodes in topological order */
-    for (int ti = 0; ti < count; ti++) {
-        int u = order[ti];
-        if (use_csr) {
-            for (int e = al->offset[u]; e < al->offset[u + 1]; e++) {
-                int eid = al->edge_indices[e];
-                if (mask && mask[eid]) continue;
-                int v = al->neighbors[e];
-                if (nmask && nmask[v]) continue;
-                double w = has_weights ? wl.values[eid] : 1.0;
-                if (dist[u] + w > dist[v]) {
-                    dist[v] = dist[u] + w;
-                    prev[v] = u;
+    for (int order_position = 0; order_position < count; order_position++) {
+        int node = order[order_position];
+        if (has_adjacency) {
+            for (int slot = adjacency->offset[node]; slot < adjacency->offset[node + 1]; slot++) {
+                int edge_index = adjacency->edge_indices[slot];
+                if (edge_mask && edge_mask[edge_index]) continue;
+                int neighbor = adjacency->neighbors[slot];
+                if (node_mask && node_mask[neighbor]) continue;
+                double weight = has_weights ? weights.values[edge_index] : 1.0;
+                if (distance[node] + weight > distance[neighbor]) {
+                    distance[neighbor] = distance[node] + weight;
+                    predecessor[neighbor] = node;
                 }
             }
         } else {
@@ -330,55 +330,55 @@ PyObject *py_dag_longest_path_ctx(PyObject *self, PyObject *args) {
     }
 
     /* Find node with maximum distance */
-    int best = -1;
-    double best_dist = -1.0;
-    for (int ti = 0; ti < count; ti++) {
-        int u = order[ti];
-        if (dist[u] > best_dist) {
-            best_dist = dist[u];
-            best = u;
+    int best_node = -1;
+    double best_distance = -1.0;
+    for (int order_position = 0; order_position < count; order_position++) {
+        int node = order[order_position];
+        if (distance[node] > best_distance) {
+            best_distance = distance[node];
+            best_node = node;
         }
     }
 
     /* Trace back the path */
-    if (best < 0 || best_dist == 0.0) {
+    if (best_node < 0 || best_distance == 0.0) {
         /* No edges or all isolated: return first active node */
-        PyObject *res;
+        PyObject *single_node_path;
         if (count > 0) {
-            res = PyList_New(1);
-            if (res) {
-                Py_INCREF(g->node_ids.node_id_items[order[0]]);
-                PyList_SET_ITEM(res, 0, g->node_ids.node_id_items[order[0]]);
+            single_node_path = PyList_New(1);
+            if (single_node_path) {
+                Py_INCREF(graph->node_ids.node_id_items[order[0]]);
+                PyList_SET_ITEM(single_node_path, 0, graph->node_ids.node_id_items[order[0]]);
             }
         } else {
-            res = PyList_New(0);
+            single_node_path = PyList_New(0);
         }
-        free(dist); free(prev); free(order);
-        release_mask(&nmbuf); release_mask(&mbuf);
-        if (has_weights) free_weights(&wl);
-        return res;
+        free(distance); free(predecessor); free(order);
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+        if (has_weights) free_weights(&weights);
+        return single_node_path;
     }
 
     /* Count path length by tracing back */
-    int path_len = 0;
-    for (int v = best; v >= 0; v = prev[v]) path_len++;
+    int path_length = 0;
+    for (int node = best_node; node >= 0; node = predecessor[node]) path_length++;
 
-    PyObject *result = PyList_New(path_len);
+    PyObject *result = PyList_New(path_length);
     if (!result) {
-        free(dist); free(prev); free(order);
-        release_mask(&nmbuf); release_mask(&mbuf);
-        if (has_weights) free_weights(&wl);
+        free(distance); free(predecessor); free(order);
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+        if (has_weights) free_weights(&weights);
         return NULL;
     }
     /* Fill in reverse */
-    int idx = path_len - 1;
-    for (int v = best; v >= 0; v = prev[v]) {
-        Py_INCREF(g->node_ids.node_id_items[v]);
-        PyList_SET_ITEM(result, idx--, g->node_ids.node_id_items[v]);
+    int idx = path_length - 1;
+    for (int node = best_node; node >= 0; node = predecessor[node]) {
+        Py_INCREF(graph->node_ids.node_id_items[node]);
+        PyList_SET_ITEM(result, idx--, graph->node_ids.node_id_items[node]);
     }
 
-    free(dist); free(prev); free(order);
-    release_mask(&nmbuf); release_mask(&mbuf);
-    if (has_weights) free_weights(&wl);
+    free(distance); free(predecessor); free(order);
+    release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+    if (has_weights) free_weights(&weights);
     return result;
 }
