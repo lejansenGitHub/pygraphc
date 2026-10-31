@@ -1490,8 +1490,16 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     def two_edge_connected_components(
         self,
     ) -> Generator[set[NodeIdT], None, None]:
-        """Yield 2-edge-connected components: the components left once every critical edge is removed."""
+        """Yield 2-edge-connected components: nodes that no single edge removal separates.
+
+        Without multiport edges these are the components left once every
+        bridge is removed. A critical multiport edge can lie on a cycle, so it
+        is not removed whole; see ``_two_edge_connected_components_with_multiport_edges``.
+        """
         self._require_undirected("two_edge_connected_components")
+        if self._has_multiport_edges:
+            yield from self._two_edge_connected_components_with_multiport_edges()
+            return
         critical_edge_indices: list[int] = _critical_edges_ctx(self._graph_capsule)
         if not critical_edge_indices:
             yield from self.connected_components()
@@ -1500,6 +1508,43 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         for edge_index in critical_edge_indices:
             excluded_edges[edge_index] = 1
         yield from _connected_components_ctx(self._graph_capsule, excluded_edges)
+
+    def _two_edge_connected_components_with_multiport_edges(self) -> Generator[set[NodeIdT], None, None]:
+        """Join the nodes of every block of nodes and multiport edges that holds a cycle, and the ends of every
+        two-port edge that is not critical.
+
+        A block with at least three members gives any two of its nodes two
+        paths through different edges; blocks are joined at shared nodes, never
+        at a shared multiport edge, whose removal separates them.
+        """
+        blocks, edge_indices_by_block_index = _simple_path_blocks_ctx(self._graph_capsule)
+        representative_by_node_id: dict[NodeIdT, NodeIdT] = {node_id: node_id for node_id in self._node_ids}
+
+        def representative_of(node_id: NodeIdT) -> NodeIdT:
+            while representative_by_node_id[node_id] != node_id:
+                representative_by_node_id[node_id] = representative_by_node_id[representative_by_node_id[node_id]]
+                node_id = representative_by_node_id[node_id]
+            return node_id
+
+        def join(first_node_id: NodeIdT, second_node_id: NodeIdT) -> None:
+            representative_by_node_id[representative_of(first_node_id)] = representative_of(second_node_id)
+
+        for block_index, block in enumerate(blocks):
+            if len(block) + len(edge_indices_by_block_index.get(block_index, ())) < 3:
+                continue
+            first_node_id, *other_node_ids = block
+            for node_id in other_node_ids:
+                join(first_node_id, node_id)
+        critical_edge_indices = set(_critical_edges_ctx(self._graph_capsule))
+        port_node_indices = memoryview(_port_nodes(self._graph_capsule)).cast("i")
+        for edge_index in range(self.edge_count):
+            ports = self._ports_of(edge_index)
+            if len(ports) == 2 and edge_index not in critical_edge_indices:
+                join(self._node_ids[port_node_indices[ports.start]], self._node_ids[port_node_indices[ports.start + 1]])
+        components: dict[NodeIdT, set[NodeIdT]] = {}
+        for node_id in self._node_ids:
+            components.setdefault(representative_of(node_id), set()).add(node_id)
+        yield from components.values()
 
     def nodes_on_simple_paths(
         self,

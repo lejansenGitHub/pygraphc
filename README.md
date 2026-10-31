@@ -615,8 +615,9 @@ nodes:
 - **blocks** (`biconnected_components`) never split at a multiport edge, so a
   tree-shaped edge with k ports is one block of its k nodes (case 12), and an
   edge on a cycle merges with the cycle's block;
-- `two_edge_connected_components` are the components left once every
-  critical edge is removed.
+- `two_edge_connected_components` are the nodes that no single edge removal
+  separates; a critical multiport edge can lie on a cycle, so it is not
+  simply removed.
 
 `nodes_on_simple_paths` uses its own blocks: a simple path visits each node
 and each multiport edge at most once, and enters and leaves an edge through one
@@ -1525,7 +1526,7 @@ implementing; the D and O numbers refer to `docs/multiport-decisions.md`.
 | 11 | Path through a multiport edge | Costs the entry port's weight plus the exit port's weight (masking case 10). | A weight per pair of ports, or per edge. | user |
 | 12 | Critical multiport edge | Critical when removing the whole edge splits the nodes of its ports. This holds even inside a block with a cycle: in `(1, 2), (2, 3), (1, 2, 3, 4)` the multiport edge is critical, because node 4 hangs on it alone. | Critical only when it lies on no cycle, as a bridge would be. | Claude |
 | 13 | Biconnected blocks at a multiport edge | Blocks never split at a multiport edge: a tree-shaped edge with k ports is one block of k nodes (D14), and a port node hanging on an edge of a cycle joins the cycle's block. | Split blocks at the edge, as `nodes_on_simple_paths` does. | user (tree-shaped), Claude (cycle) |
-| 14 | Two-edge-connected components | Every critical edge is removed whole, all ports at once: the tree-shaped edge `(1, 2, 3)` leaves three single nodes. | Remove only the ports whose removal splits the component. | Claude |
+| 14 | Two-edge-connected components | The nodes that no single edge removal separates (as for graphs). A critical multiport edge can lie on a cycle, so it is not removed whole: in `(1, 2, 4), (2, 3, 5), (1, 3)` both multiport edges are critical, yet 1, 2 and 3 stay together. Corrected after the web research: removing every critical edge whole had split them. | Remove every critical edge whole (wrong when a critical edge lies on a cycle). | Claude, corrected |
 | 15 | Simple paths through a multiport edge (`nodes_on_simple_paths`) | A path uses each multiport edge at most once and enters and leaves through one port each, so in the tree-shaped edge `(1, 2, 3)` the paths from 1 to 2 do not visit 3. | Allow a path to pass the same edge twice through different ports. | Claude |
 | 16 | `edge_indices_at(node_ids)` | Returns the edges whose set of port nodes equals the given set. Order, repeats and direction do not matter, and an unknown node matches nothing. | Match with repeats counted (multiset), match edges with a port at all given nodes (superset), or respect direction. | Claude |
 | 17 | Pair methods on a graph with a multiport edge | `bridges()`, `bridges_with_branch_ids()` and `edge_indices(u, v)` raise for the whole graph, even when asked about a two-port edge, and name `critical_edges()` or `edge_indices_at()` instead (D13). | Answer for the two-port edges and leave out the multiport ones. | user |

@@ -135,13 +135,20 @@ def test_edge_case_13_blocks_never_split_at_a_multiport_edge() -> None:
     assert [sorted(block) for block in on_a_cycle.biconnected_components()] == [[1, 2, 3, 4]]
 
 
-def test_edge_case_14_two_edge_connected_components_remove_critical_edges_whole() -> None:
-    """EC14: a critical multiport edge is removed with all of its ports."""
+def test_edge_case_14_two_edge_connected_components_are_nodes_no_single_edge_separates() -> None:
+    """EC14: a critical multiport edge on a cycle still joins the nodes its cycle passes through."""
     tree_shaped = Graph([1, 2, 3], [(1, 2, 3)])
     on_a_cycle = Graph([1, 2, 3, 4], [(1, 2), (2, 3), (1, 2, 3, 4)])
+    two_critical_edges_on_one_cycle = Graph([1, 2, 3, 4, 5], [(1, 2, 4), (2, 3, 5), (1, 3)])
+    joined_only_through_one_edge = Graph([1, 2, 3, 4], [(1, 2, 3, 4), (1, 2), (3, 4)])
 
-    assert sorted(sorted(component) for component in tree_shaped.two_edge_connected_components()) == [[1], [2], [3]]
-    assert sorted(sorted(component) for component in on_a_cycle.two_edge_connected_components()) == [[1, 2, 3], [4]]
+    def components(graph: Graph[int, int]) -> list[list[int]]:
+        return sorted(sorted(component) for component in graph.two_edge_connected_components())
+
+    assert components(tree_shaped) == [[1], [2], [3]]
+    assert components(on_a_cycle) == [[1, 2, 3], [4]]
+    assert components(two_critical_edges_on_one_cycle) == [[1, 2, 3], [4], [5]]
+    assert components(joined_only_through_one_edge) == [[1, 2], [3, 4]]
 
 
 def test_edge_case_15_simple_paths_use_each_multiport_edge_once() -> None:
