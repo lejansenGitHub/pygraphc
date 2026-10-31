@@ -144,8 +144,8 @@ def dead_end_cells(maze: MultiGraph[str]) -> frozenset[int]:
     for first_cell, second_cell in maze.endpoints.values():
         passage_count[first_cell] += 1
         passage_count[second_cell] += 1
-    terminals = {cell_id(ENTRANCE_CELL), cell_id(EXIT_CELL)}
-    return frozenset(cell for cell, count in passage_count.items() if count == 1 and cell not in terminals)
+    preserved_nodes = {cell_id(ENTRANCE_CELL), cell_id(EXIT_CELL)}
+    return frozenset(cell for cell, count in passage_count.items() if count == 1 and cell not in preserved_nodes)
 
 
 def route_tree(
@@ -154,7 +154,7 @@ def route_tree(
     to_cell: tuple[int, int] = EXIT_CELL,
 ) -> SPTree[str]:
     """Provenance tree of the single edge the braided maze reduces to between two cells."""
-    solved = reduce(maze, terminals=frozenset({cell_id(from_cell), cell_id(to_cell)}))
+    solved = reduce(maze, preserved_nodes=frozenset({cell_id(from_cell), cell_id(to_cell)}))
     (residual_passage,) = solved.graph.endpoints
     return solved.provenance[residual_passage]
 
@@ -338,7 +338,7 @@ def test_one_passage_is_enough_when_the_entrance_has_a_single_door() -> None:
     check below reduces to "the empty set does not separate". The claim that a
     ring costs two is tested by
     ``test_severing_a_route_through_a_ring_costs_two_passages`` instead, on a
-    terminal pair whose minimum cut really does have two members.
+    preserved node pair whose minimum cut really does have two members.
 
     The test establishes the answer and then checks it without using the
     reduction at all: blocking exactly that set with ``scenario`` separates S
@@ -369,10 +369,10 @@ def test_one_passage_is_enough_when_the_entrance_has_a_single_door() -> None:
 
 
 # The top-left ring, the one closed by the braid passage (1, 2)-(1, 3). Taking
-# two diagonally opposite cells of it as the terminals puts one arc of the ring
+# two diagonally opposite cells of it as the preserved nodes puts one arc of the ring
 # on either side of every route between them, which is the situation the one-door
 # entrance never produces.
-RING_TERMINAL_CELLS = ((0, 3), (1, 2))
+RING_PRESERVED_NODE_CELLS = ((0, 3), (1, 2))
 RING_ARC_VIA_TOP_LEFT = (((0, 2), (0, 3)), ((0, 2), (1, 2)))
 RING_ARC_VIA_BOTTOM_RIGHT = (((0, 3), (1, 3)), ((1, 2), (1, 3)))
 
@@ -384,7 +384,7 @@ def test_severing_a_route_through_a_ring_costs_two_passages() -> None:
     right answer whenever any single passage separates the two cells. A ring is
     the other case -- a walker who loses one side of it simply goes round the
     other -- so both sides have to be broken and the cheapest cut has two
-    members. The terminals here are (0, 3) and (1, 2), the two diagonally
+    members. The preserved nodes here are (0, 3) and (1, 2), the two diagonally
     opposite cells of the ring that the braid passage (1, 2)-(1, 3) closed in the
     top left. Every way from one to the other runs round one arc of that ring or
     the other, so no single passage anywhere in the maze separates them, and the
@@ -401,7 +401,7 @@ def test_severing_a_route_through_a_ring_costs_two_passages() -> None:
     """
     # --- Input ---
     maze = parse_maze(BRAIDED_MAZE_DRAWING)
-    from_cell, to_cell = RING_TERMINAL_CELLS
+    from_cell, to_cell = RING_PRESERVED_NODE_CELLS
     from_id, to_id = cell_id(from_cell), cell_id(to_cell)
     all_passages = frozenset(maze.endpoints)
     tree = route_tree(maze, from_cell, to_cell)
@@ -457,7 +457,7 @@ def test_dead_ends_are_pruned_and_kept_in_the_folded_material() -> None:
     maze = parse_maze(BRAIDED_MAZE_DRAWING)
     entrance = cell_id(ENTRANCE_CELL)
     exit_cell = cell_id(EXIT_CELL)
-    solved = reduce(maze, terminals=frozenset({entrance, exit_cell}))
+    solved = reduce(maze, preserved_nodes=frozenset({entrance, exit_cell}))
     dead_ends = dead_end_cells(maze)
     (residual_passage,) = solved.graph.endpoints
     folded_material = [
@@ -479,7 +479,7 @@ def test_dead_ends_are_pruned_and_kept_in_the_folded_material() -> None:
     assert dead_ends.isdisjoint(solved.graph.nodes)
     # Every dead end is still accounted for in the folded material.
     assert dead_ends <= frozenset(folded_material)
-    # And the bookkeeping loses nothing: every cell of the maze is a terminal,
+    # And the bookkeeping loses nothing: every cell of the maze is a preserved node,
     # folded material or an interior cell of a series step, exactly once.
     accounted_for = [entrance, exit_cell, *folded_material, *series_interior]
     assert sorted(accounted_for) == sorted(maze.nodes)

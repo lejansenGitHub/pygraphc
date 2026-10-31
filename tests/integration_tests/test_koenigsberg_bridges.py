@@ -12,7 +12,7 @@ modelled at district granularity, one layer below Euler's own abstraction.
 ``Partition`` recovers the land masses from the land connections, ``quotient``
 turns the district graph into Euler's four-node multigraph without losing the
 identity of any single bridge, ``lift`` carries a per-district quantity up to
-the land masses, and ``reduce`` with the two river banks as terminals shows
+the land masses, and ``reduce`` with the two river banks as preserved nodes shows
 both what series-parallel provenance preserves (a pair of twin bridges stays
 two distinguishable bridges) and where the reduction has to stop.
 """
@@ -245,7 +245,7 @@ def test_both_twin_bridges_must_go_to_cut_a_bank_off_the_kneiphof() -> None:
     euler_graph, _internal = quotient(partition, city(), crossing=frozenset(BRIDGES))
     north_bank = partition.block_of[ALTSTADT]
     south_bank = partition.block_of[VORSTADT]
-    reduced = reduce(euler_graph, terminals=frozenset({north_bank, south_bank}))
+    reduced = reduce(euler_graph, preserved_nodes=frozenset({north_bank, south_bank}))
 
     # --- Assert ---
     north_bank_twins = frozenset({"Kraemerbruecke", "Schmiedebruecke"})
@@ -288,7 +288,7 @@ def test_reduction_stops_at_four_land_masses_and_five_routes() -> None:
     shape -- four land masses, the two banks as the endpoints of interest, the
     two islands each joined to both banks and to each other -- is the smallest
     two-endpoint graph that series and parallel moves cannot reduce further (K4
-    minus the edge between the two terminals), so five routes is the floor and
+    minus the edge between the two preserved nodes), so five routes is the floor and
     not an artefact. A reader can confirm it by looking for a dead end or a
     land mass with exactly two routes in the bridge list; there is none.
     """
@@ -297,7 +297,7 @@ def test_reduction_stops_at_four_land_masses_and_five_routes() -> None:
     euler_graph, _internal = quotient(partition, city(), crossing=frozenset(BRIDGES))
     north_bank = partition.block_of[ALTSTADT]
     south_bank = partition.block_of[VORSTADT]
-    reduced = reduce(euler_graph, terminals=frozenset({north_bank, south_bank}))
+    reduced = reduce(euler_graph, preserved_nodes=frozenset({north_bank, south_bank}))
 
     # --- Assert ---
     # No land mass could be removed: the two banks are the endpoints, and both
@@ -317,6 +317,6 @@ def test_reduction_stops_at_four_land_masses_and_five_routes() -> None:
     assert counts[KNEIPHOF] == 3
     assert counts[LOMSE] == 3
     # Reducing the residual again changes nothing -- the reduction really stopped.
-    again = reduce(reduced.graph, terminals=frozenset({north_bank, south_bank}))
+    again = reduce(reduced.graph, preserved_nodes=frozenset({north_bank, south_bank}))
     assert sorted(again.graph.nodes) == sorted(reduced.graph.nodes)
     assert len(again.graph.endpoints) == len(reduced.graph.endpoints)

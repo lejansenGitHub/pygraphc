@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Breaking:** the nodes a reduction keeps are *preserved nodes*, no longer
+  *terminals*: `reduce(graph, preserved_nodes, ...)` and the other reduction
+  functions take `preserved_nodes`, and the masks are `preserved_mask`
+  (`series_parallel_reduce`, `series_parallel_state`, the C entries). The
+  reduction is the node-preserving reduction. "Terminal" stays free for the
+  attachment of an edge to a node, the word circuit and power system callers
+  use for it.
 - Performance tests are three tiers instead of walltime limits. `complexity/`
   asserts the scaling exponent over five sizes and several graph shapes;
   `instructions/` counts instructions with callgrind, compares every scenario

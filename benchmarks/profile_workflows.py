@@ -289,20 +289,20 @@ def meta_graph_of(
     with timer.phase("quotient"):
         meta, _internal = reduction.quotient(after, graph, crossing=active)
     stride = max(1, len(meta.nodes) // max(2, len(meta.nodes) // 20))
-    terminals = frozenset(meta.nodes[::stride])
+    preserved_nodes = frozenset(meta.nodes[::stride])
     with timer.phase("release input graph"):
         del nodes, endpoints, removed, graph, active, _internal
-    return meta, after, terminals
+    return meta, after, preserved_nodes
 
 
 def workflow_framework_pipeline(timer: PhaseTimer, size: int) -> str:
     """Partition, quotient, lift, reduce, then expand the provenance trees to paths."""
-    meta, after, terminals = meta_graph_of(timer, size)
+    meta, after, preserved_nodes = meta_graph_of(timer, size)
     with timer.phase("lift"):
         attribute = {node_id: float(node_id % 7) for node_id in range(size)}
         lifted = reduction.lift(after, attribute, max)
     with timer.phase("reduce to trees"):
-        reduced = reduction.reduce(meta, terminals)
+        reduced = reduction.reduce(meta, preserved_nodes)
     with timer.phase("expand trees to paths"):
         path_count = sum(len(reduction.paths(tree, cutoff=3)) for tree in reduced.provenance.values())
     outcome = (
@@ -310,32 +310,32 @@ def workflow_framework_pipeline(timer: PhaseTimer, size: int) -> str:
         f"{len(reduced.graph.nodes)} residual nodes, {path_count} paths"
     )
     with timer.phase("release inputs"):
-        del meta, after, terminals, attribute, lifted, reduced
+        del meta, after, preserved_nodes, attribute, lifted, reduced
     return outcome
 
 
 def workflow_reduction_log(timer: PhaseTimer, size: int) -> str:
     """The same reduction consumed through the raw operation log instead of the trees."""
-    meta, _after, terminals = meta_graph_of(timer, size)
+    meta, _after, preserved_nodes = meta_graph_of(timer, size)
     with timer.phase("build reduction graph"):
         node_ids = list(meta.nodes)
         edge_pairs = list(meta.endpoints.values())
         graph = pygraphc.Graph(node_ids, edge_pairs)
     with timer.phase("build masks"):
         index_of = {node_id: index for index, node_id in enumerate(node_ids)}
-        terminal_mask = bytearray(len(node_ids))
-        for node_id in terminals:
-            terminal_mask[index_of[node_id]] = 1
+        preserved_mask = bytearray(len(node_ids))
+        for node_id in preserved_nodes:
+            preserved_mask[index_of[node_id]] = 1
         protected_mask = bytes(len(node_ids))
     with timer.phase("c loop"):
-        log = graph.series_parallel_reduce(bytes(terminal_mask), protected_mask)
+        log = graph.series_parallel_reduce(bytes(preserved_mask), protected_mask)
     with timer.phase("scan log"):
         kinds = log.op_kind.tolist()
         move_count = sum(1 for kind in kinds if kind != 0)
         surviving = len(log.surviving_nodes.tolist())
     outcome = f"{len(kinds)} operations, {move_count} moves, {surviving} surviving nodes"
     with timer.phase("release inputs"):
-        del meta, _after, terminals, node_ids, edge_pairs, graph, index_of, terminal_mask, log, kinds
+        del meta, _after, preserved_nodes, node_ids, edge_pairs, graph, index_of, preserved_mask, log, kinds
     return outcome
 
 
@@ -451,7 +451,7 @@ def workflow_dag_structure_learning(timer: PhaseTimer, size: int) -> str:
 
 ENGINE_NAMES: tuple[str, ...] = ("c", "moves", "rounds", "python")
 ENGINE_SEED = 71
-ENGINE_TERMINAL_STRIDE = 100
+ENGINE_PRESERVED_NODE_STRIDE = 100
 ENGINE_COMPARISON_SIZES: tuple[int, ...] = (20_000, 100_000, 1_000_000)
 ENGINE_PROFILED_SIZES: tuple[int, ...] = (20_000, 100_000)
 
@@ -471,17 +471,17 @@ PYTHON_ENGINE_PHASE_NOTE = (
 
 
 def engine_input(size: int) -> tuple[list[int], dict[int, tuple[int, int]], frozenset[int]]:
-    """The one seeded graph and terminal set every engine workflow reduces, so only the engine differs."""
+    """The one seeded graph and preserved node set every engine workflow reduces, so only the engine differs."""
     nodes = list(range(size))
     endpoints = dict(enumerate(sparse_edge_pairs(size, size * 5 // 4, seed=ENGINE_SEED)))
-    terminals = frozenset(range(0, size, ENGINE_TERMINAL_STRIDE))
-    return nodes, endpoints, terminals
+    preserved_nodes = frozenset(range(0, size, ENGINE_PRESERVED_NODE_STRIDE))
+    return nodes, endpoints, preserved_nodes
 
 
 def structural_log(
     engine: str,
     kernel: reduction._KernelGraph[int],
-    terminals: frozenset[int],
+    preserved_nodes: frozenset[int],
 ) -> pygraphc.ReductionLog:
     """The structural half of one log-producing engine, with none of the payload algebra in it.
 
@@ -494,10 +494,10 @@ def structural_log(
         "series_ineligible": frozenset(),
     }
     if engine == "c":
-        return reduction._structural_log_c(kernel, terminals, frozenset(), **policies)  # type: ignore[arg-type]
+        return reduction._structural_log_c(kernel, preserved_nodes, frozenset(), **policies)  # type: ignore[arg-type]
     if engine == "moves":
-        return reduction._structural_log_moves(kernel, terminals, frozenset(), **policies)  # type: ignore[arg-type]
-    return reduction._structural_log_rounds(kernel, terminals, frozenset(), **policies)  # type: ignore[arg-type]
+        return reduction._structural_log_moves(kernel, preserved_nodes, frozenset(), **policies)  # type: ignore[arg-type]
+    return reduction._structural_log_rounds(kernel, preserved_nodes, frozenset(), **policies)  # type: ignore[arg-type]
 
 
 def workflow_reduce_engine(timer: PhaseTimer, size: int, engine: str) -> str:
@@ -510,17 +510,17 @@ def workflow_reduce_engine(timer: PhaseTimer, size: int, engine: str) -> str:
     omitted and the four tables line up row by row.
     """
     with timer.phase(PHASE_GENERATE, setup=True):
-        nodes, endpoints, terminals = engine_input(size)
+        nodes, endpoints, preserved_nodes = engine_input(size)
     with timer.phase(PHASE_KERNEL):
         graph = reduction.MultiGraph(nodes, endpoints)
         kernel = graph._kernel
     if engine == "python":
         with timer.phase(PHASE_STRUCTURAL):
-            reduced = reduction.reduce(graph, terminals, engine="python")
+            reduced = reduction.reduce(graph, preserved_nodes, engine="python")
         timer.absent(PHASE_FOLD)
     else:
         with timer.phase(PHASE_STRUCTURAL):
-            log = structural_log(engine, kernel, terminals)
+            log = structural_log(engine, kernel, preserved_nodes)
         with timer.phase(PHASE_FOLD):
             reduced = reduction._fold_operation_log(graph, kernel, log, pendant=reduction.PendantPolicy("absorb"))
         del log
@@ -529,7 +529,7 @@ def workflow_reduce_engine(timer: PhaseTimer, size: int, engine: str) -> str:
         f"{len(reduced.provenance)} provenance trees, {len(reduced.folded_nodes)} folded payloads"
     )
     with timer.phase(PHASE_RELEASE):
-        del nodes, endpoints, terminals, graph, kernel, reduced
+        del nodes, endpoints, preserved_nodes, graph, kernel, reduced
     return outcome
 
 
@@ -1525,7 +1525,7 @@ new engines' structural phase. This artifact profiles the four and diffs the
 profiles against each other.
 
 **One workflow per engine, identical but for the engine.** Same seeded graph
-(`sparse_edge_pairs`, seed {seed}), same terminal set (every
+(`sparse_edge_pairs`, seed {seed}), same preserved node set (every
 {stride}th node), same sizes, same phase names. Where an engine has no
 counterpart to a phase it is recorded as zero, not omitted, so the tables line
 up row by row.
@@ -1549,7 +1549,7 @@ def engine_comparison_markdown(comparison: EngineComparison) -> str:
     lines = [
         ENGINE_COMPARISON_HEADER.format(
             seed=ENGINE_SEED,
-            stride=ENGINE_TERMINAL_STRIDE,
+            stride=ENGINE_PRESERVED_NODE_STRIDE,
             rounds=ENGINE_COMPARISON_ROUNDS,
             warmups=MEASUREMENT_WARMUPS,
             profiled=", ".join(f"{size:,}" for size in ENGINE_PROFILED_SIZES),
@@ -1566,7 +1566,9 @@ def engine_comparison_markdown(comparison: EngineComparison) -> str:
         profiled = "profiled and timed" if size in ENGINE_PROFILED_SIZES else "timed only"
         by_engine = comparison.measurements[size]
         lines.extend([
-            (f"### {size:,} nodes, {size * 5 // 4:,} edges, {size // ENGINE_TERMINAL_STRIDE:,} terminals ({profiled})"),
+            (
+                f"### {size:,} nodes, {size * 5 // 4:,} edges, {size // ENGINE_PRESERVED_NODE_STRIDE:,} preserved nodes ({profiled})"
+            ),
             "",
         ])
         lines.extend(phase_table_lines(by_engine))

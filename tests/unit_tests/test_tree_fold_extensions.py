@@ -297,8 +297,8 @@ def test_every_step_of_every_chain_reduce_produces_names_the_endpoints_its_edge_
     chains_with_a_nested_series = 0
     for _trial in range(CHAIN_TRIALS):
         graph = random_multigraph(rng, rng.randrange(4, 10), rng.randrange(4, 16))
-        terminals = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
-        reduced = reduce(graph, terminals)
+        preserved_nodes = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
+        reduced = reduce(graph, preserved_nodes)
         for edge_id, tree in reduced.provenance.items():
             from_node, to_node = reduced.graph.endpoints[edge_id]
             if isinstance(tree, Parallel) or from_node == to_node:

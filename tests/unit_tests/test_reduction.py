@@ -1,4 +1,4 @@
-"""Tests for the terminal-preserving graph reduction kernel in ``pygraphc.reduction``.
+"""Tests for the node-preserving graph reduction kernel in ``pygraphc.reduction``.
 
 The four reference scenarios and the two property checks mirror the paper's
 ``check_kernel.py``: parallel edges survive as one parallel node, a long
@@ -379,7 +379,7 @@ def test_folds_survive_a_chain_deeper_than_the_recursion_limit():
     graph = MultiGraph(range(length + 1), endpoints)
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={0, length})
+    reduced = reduce(graph, preserved_nodes={0, length})
     (tree,) = reduced.provenance.values()
 
     # --- Assert ---
@@ -394,13 +394,13 @@ def test_folds_survive_a_chain_deeper_than_the_recursion_limit():
 
 
 def test_pendant_node_is_folded_into_its_neighbour():
-    """Pendant material carries no path between terminals but carries payload,
+    """Pendant material carries no path between preserved nodes but carries payload,
     so the node moves to its neighbour instead of vanishing."""
     # --- Input ---
     graph = MultiGraph([1, 2, 3], {"e": (1, 2), "f": (1, 3)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 2})
+    reduced = reduce(graph, preserved_nodes={1, 2})
 
     # --- Assert ---
     assert reduced.graph.nodes == [1, 2]
@@ -415,7 +415,7 @@ def test_pendant_node_is_dropped_without_folding():
     graph = MultiGraph([1, 2, 3], {"e": (1, 2), "f": (1, 3)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 2}, fold_leaves=False)
+    reduced = reduce(graph, preserved_nodes={1, 2}, fold_leaves=False)
 
     # --- Assert ---
     assert reduced.folded_nodes == {1: [], 2: []}
@@ -429,7 +429,7 @@ def test_series_merge_is_oriented_from_first_to_second_edge():
     graph = MultiGraph([1, 2, 3], {"a": (2, 1), "b": (2, 3)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 3})
+    reduced = reduce(graph, preserved_nodes={1, 3})
     ((edge_id, pair),) = reduced.graph.endpoints.items()
 
     # --- Assert ---
@@ -444,7 +444,7 @@ def test_parallel_merge_yields_one_parallel_node_with_sorted_endpoints():
     graph = MultiGraph([2, 1], {"a": (2, 1), "b": (1, 2), "c": (2, 1)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 2})
+    reduced = reduce(graph, preserved_nodes={1, 2})
 
     # --- Assert ---
     assert reduced.graph.endpoints == {VirtualEdgeId(1): (1, 2)}
@@ -458,7 +458,7 @@ def test_series_then_parallel_nests_the_trees():
     graph = MultiGraph([1, 2, 3], {"direct": (1, 3), "a": (1, 2), "b": (2, 3)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 3})
+    reduced = reduce(graph, preserved_nodes={1, 3})
     (tree,) = reduced.provenance.values()
 
     # --- Assert ---
@@ -466,13 +466,13 @@ def test_series_then_parallel_nests_the_trees():
     assert list(reduced.graph.endpoints) == [VirtualEdgeId(2)]
 
 
-def test_terminals_survive_even_as_pendants():
-    """Terminals carry the question and must never be removed."""
+def test_preserved_nodes_survive_even_as_pendants():
+    """Preserved nodes carry the question and must never be removed."""
     # --- Input ---
     graph = MultiGraph([1, 2, 3], {"a": (1, 2), "b": (2, 3)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 3})
+    reduced = reduce(graph, preserved_nodes={1, 3})
 
     # --- Assert ---
     assert reduced.graph.nodes == [1, 3]
@@ -483,11 +483,11 @@ def test_protected_node_blocks_series_and_parallel_but_not_pendant():
     """A protected node will be split by a later scenario, so its incident
     edges must stay separate; pendant deletion of a protected node is still fine."""
     # --- Input ---
-    # 1 -a- 2 -b- 3, 2 protected and not a terminal; 4 protected pendant on 1; parallels c, d at 3
+    # 1 -a- 2 -b- 3, 2 protected and not a preserved node; 4 protected pendant on 1; parallels c, d at 3
     graph = MultiGraph([1, 2, 3, 4], {"a": (1, 2), "b": (2, 3), "c": (1, 3), "d": (1, 3), "p": (1, 4)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1}, protected={2, 3, 4})
+    reduced = reduce(graph, preserved_nodes={1}, protected={2, 3, 4})
 
     # --- Assert ---
     assert reduced.graph.nodes == [1, 2, 3]
@@ -502,7 +502,7 @@ def test_self_loop_never_moves_and_leaves_with_its_node():
     graph = MultiGraph([1, 2, 3], {"a": (1, 2), "b": (2, 3), "loop3": (3, 3), "loop1": (1, 1)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1})
+    reduced = reduce(graph, preserved_nodes={1})
 
     # --- Assert ---
     assert reduced.graph.nodes == [1]
@@ -519,20 +519,20 @@ def test_node_with_two_edges_to_one_protected_neighbour_is_not_a_series_candidat
     graph = MultiGraph([1, 2], {"a": (1, 2), "b": (1, 2)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1}, protected={1})
+    reduced = reduce(graph, preserved_nodes={1}, protected={1})
 
     # --- Assert ---
     assert reduced.graph.nodes == [1, 2]
     assert reduced.graph.endpoints == {"a": (1, 2), "b": (1, 2)}
 
 
-def test_path_without_terminals_reduces_to_the_empty_graph():
-    """A component without a terminal carries no question and is removed whole."""
+def test_path_without_preserved_nodes_reduces_to_the_empty_graph():
+    """A component without a preserved node carries no question and is removed whole."""
     # --- Input ---
     graph = MultiGraph([0, 1, 2], {"a": (0, 1), "b": (1, 2)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals=set())
+    reduced = reduce(graph, preserved_nodes=set())
 
     # --- Assert ---
     assert reduced.graph == MultiGraph([], {})
@@ -541,16 +541,16 @@ def test_path_without_terminals_reduces_to_the_empty_graph():
     assert reduced.dropped == []
 
 
-def test_terminal_free_components_are_removed_before_the_moves():
-    """Removing terminal-free components first makes the residual independent of
-    the move order: a terminal-free cycle would otherwise leave one arbitrary
-    survivor. Components with a terminal are untouched, self-loops included."""
+def test_components_without_preserved_nodes_are_removed_before_the_moves():
+    """Removing components without a preserved node first makes the residual independent of
+    the move order: a cycle without a preserved node would otherwise leave one arbitrary
+    survivor. Components with a preserved node are untouched, self-loops included."""
     # --- Input ---
-    # component A: terminal 1 with loop; component B: isolated 5; component C: cycle 6-7-8
+    # component A: preserved node 1 with loop; component B: isolated 5; component C: cycle 6-7-8
     graph = MultiGraph([1, 2, 5, 6, 7, 8], {"a": (1, 2), "loop": (1, 1), "x": (6, 7), "y": (7, 8), "z": (8, 6)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 2})
+    reduced = reduce(graph, preserved_nodes={1, 2})
 
     # --- Assert ---
     assert reduced.graph.nodes == [1, 2]
@@ -567,7 +567,7 @@ def test_folded_material_of_a_series_node_is_kept_in_folded_interior():
     graph = MultiGraph([1, 2, 3, 4], {"a": (1, 2), "b": (2, 3), "leaf": (2, 4)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 3})
+    reduced = reduce(graph, preserved_nodes={1, 3})
     (tree,) = reduced.provenance.values()
 
     # --- Assert ---
@@ -577,14 +577,14 @@ def test_folded_material_of_a_series_node_is_kept_in_folded_interior():
 
 
 def test_pendant_edge_with_a_series_tree_folds_its_interior_nodes():
-    """A chain without terminals is series-merged before its end becomes a
+    """A chain without preserved nodes is series-merged before its end becomes a
     pendant; deleting the pendant edge must pass every node of the chain on,
     and the interior entries leave ``folded_interior`` with the tree."""
     # --- Input ---
     graph = MultiGraph([1, 2, 3, 4], {"a": (1, 2), "b": (2, 3), "c": (3, 4)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1})
+    reduced = reduce(graph, preserved_nodes={1})
 
     # --- Assert ---
     assert reduced.graph.nodes == [1]
@@ -593,34 +593,34 @@ def test_pendant_edge_with_a_series_tree_folds_its_interior_nodes():
     assert [(neighbour, tree_interior_nodes(tree)) for neighbour, tree in reduced.dropped] == [(1, [2, 3])]
 
 
-def test_chain_payload_reaches_the_terminal_in_either_move_order():
+def test_chain_payload_reaches_the_preserved_node_in_either_move_order():
     """Series-then-pendant used to lose the middle node's payload while
-    pendant-then-pendant kept it; both orders must fold both nodes into the terminal."""
+    pendant-then-pendant kept it; both orders must fold both nodes into the preserved node."""
     # --- Input ---
-    # w=0 -- u=1 -- v=2, terminal w
+    # w=0 -- u=1 -- v=2, preserved node w
     graph = MultiGraph([0, 1, 2], {"wu": (0, 1), "uv": (1, 2)})
 
     # --- Execute ---
-    series_first = reduce(graph, terminals={0}, order=[1, 2])
-    pendant_first = reduce(graph, terminals={0}, order=[2, 1])
+    series_first = reduce(graph, preserved_nodes={0}, order=[1, 2])
+    pendant_first = reduce(graph, preserved_nodes={0}, order=[2, 1])
 
     # --- Assert ---
     assert sorted(series_first.folded_nodes[0]) == [1, 2]
     assert sorted(pendant_first.folded_nodes[0]) == [1, 2]
-    assert canonical(series_first) == canonical(pendant_first) == canonical(reduce(graph, terminals={0}))
+    assert canonical(series_first) == canonical(pendant_first) == canonical(reduce(graph, preserved_nodes={0}))
 
 
 # ── Reference scenarios from the paper ──
 
 
 def test_parallel_edges_survive_as_one_parallel_node():
-    """Two parallel edges between the same terminals must both survive as leaves
+    """Two parallel edges between the same preserved nodes must both survive as leaves
     of one parallel node, so opening the residual edge needs both."""
     # --- Input ---
     graph = MultiGraph([1, 2], {"p1": (1, 2), "p2": (1, 2)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 2})
+    reduced = reduce(graph, preserved_nodes={1, 2})
     (tree,) = reduced.provenance.values()
 
     # --- Assert ---
@@ -637,7 +637,7 @@ def test_long_chain_keeps_all_six_edges():
     graph = MultiGraph(range(7), {f"w{index}": (index, index + 1) for index in range(6)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={0, 6})
+    reduced = reduce(graph, preserved_nodes={0, 6})
     (tree,) = reduced.provenance.values()
     only_paths = paths(tree)
 
@@ -670,7 +670,7 @@ def test_removing_a_parallel_pair_splits_the_block():
 def test_two_level_quotient_keeps_edge_identity():
     """The base mask forms blocks, the crossing class becomes level-one edges and
     a second class level-two edges with identity kept, so the reduced tree lists
-    both terminal paths and the minimal toggle set has two edges."""
+    both preserved node paths and the minimal toggle set has two edges."""
     # --- Input ---
     endpoints = {
         "c12": (1, 2),
@@ -695,7 +695,7 @@ def test_two_level_quotient_keeps_edge_identity():
     level_two_base = Partition.from_components(meta_one, set(meta_one.endpoints))
     level_two = level_two_base.compose(level_one)
     meta_two, internal = quotient(level_two, graph, second_class)
-    reduced = reduce(meta_two, terminals={1, 7})
+    reduced = reduce(meta_two, preserved_nodes={1, 7})
     (tree,) = reduced.provenance.values()
     state = dict.fromkeys(second_class, False)
     to_close = minimal_toggles(tree, state, target_closed=True)
@@ -722,8 +722,8 @@ def test_provenance_round_trips_against_brute_force_paths():
     # --- Execute ---
     for _ in range(PROPERTY_TRIALS):
         graph = random_multigraph(rng, rng.randrange(4, 10), rng.randrange(4, 16))
-        terminals = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
-        reduced = reduce(graph, terminals)
+        preserved_nodes = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
+        reduced = reduce(graph, preserved_nodes)
         survivors = set(reduced.graph.nodes)
         for edge_id, (from_block, to_block) in reduced.graph.endpoints.items():
             if from_block == to_block:
@@ -746,7 +746,7 @@ def test_reduction_is_deterministic_under_input_shuffling():
     # --- Execute ---
     for _ in range(PROPERTY_TRIALS):
         graph = random_multigraph(rng, rng.randrange(4, 10), rng.randrange(4, 16))
-        terminals = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
+        preserved_nodes = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
         nodes = list(graph.nodes)
         rng.shuffle(nodes)
         edge_ids = list(graph.endpoints)
@@ -754,12 +754,12 @@ def test_reduction_is_deterministic_under_input_shuffling():
         shuffled = MultiGraph(nodes, {edge_id: graph.endpoints[edge_id] for edge_id in edge_ids})
 
         # --- Assert ---
-        assert canonical(reduce(shuffled, terminals)) == canonical(reduce(graph, terminals))
+        assert canonical(reduce(shuffled, preserved_nodes)) == canonical(reduce(graph, preserved_nodes))
 
 
 def test_every_eliminated_node_is_accounted_for_exactly_once_when_folding():
     """With folding, node payloads must survive: every node of a component with
-    a terminal is a survivor, folded into a survivor, recorded in a series node
+    a preserved node is a survivor, folded into a survivor, recorded in a series node
     or folded into such a recorded node, exactly once."""
     # --- Input ---
     rng = random.Random(SEED)
@@ -767,12 +767,12 @@ def test_every_eliminated_node_is_accounted_for_exactly_once_when_folding():
     # --- Execute ---
     for trial in range(PROPERTY_TRIALS):
         graph = random_multigraph(rng, rng.randrange(4, 10), rng.randrange(4, 16))
-        terminals = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
+        preserved_nodes = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
         protected = set(rng.sample(graph.nodes, trial % 3))
         components = Partition.from_components(graph, set(graph.endpoints))
-        terminal_blocks = {components.block_of[node_id] for node_id in terminals}
-        expected = [node_id for node_id in graph.nodes if components.block_of[node_id] in terminal_blocks]
-        reduced = reduce(graph, terminals, protected)
+        preserved_blocks = {components.block_of[node_id] for node_id in preserved_nodes}
+        expected = [node_id for node_id in graph.nodes if components.block_of[node_id] in preserved_blocks]
+        reduced = reduce(graph, preserved_nodes, protected)
         folded = [node_id for members in reduced.folded_nodes.values() for node_id in members]
         folded_interior = [node_id for members in reduced.folded_interior.values() for node_id in members]
 
@@ -792,18 +792,18 @@ def test_reduction_is_confluent_without_protected_nodes():
     # --- Execute ---
     for _ in range(PROPERTY_TRIALS // 10):
         graph = random_multigraph(rng, rng.randrange(4, 10), rng.randrange(4, 16))
-        terminals = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
-        expected = canonical(reduce(graph, terminals))
+        preserved_nodes = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
+        expected = canonical(reduce(graph, preserved_nodes))
         for _ in range(20):
             order = list(graph.nodes)
             rng.shuffle(order)
 
             # --- Assert ---
-            assert canonical(reduce(graph, terminals, order=order)) == expected
+            assert canonical(reduce(graph, preserved_nodes, order=order)) == expected
 
 
 def test_protected_node_can_make_the_residual_order_dependent():
-    """Documented limit of confluence: on a triangle with the terminal protected,
+    """Documented limit of confluence: on a triangle with the preserved node protected,
     the first series move decides which edge pair ends up parallel at the
     protected node, where it cannot merge. Two orders give two residuals; the
     module returns the increasing-id one."""
@@ -811,9 +811,9 @@ def test_protected_node_can_make_the_residual_order_dependent():
     graph = MultiGraph([0, 1, 2], {"a": (0, 1), "b": (1, 2), "c": (2, 0)})
 
     # --- Execute ---
-    node_one_first = reduce(graph, terminals={0}, protected={0}, order=[1, 2])
-    node_two_first = reduce(graph, terminals={0}, protected={0}, order=[2, 1])
-    default = reduce(graph, terminals={0}, protected={0})
+    node_one_first = reduce(graph, preserved_nodes={0}, protected={0}, order=[1, 2])
+    node_two_first = reduce(graph, preserved_nodes={0}, protected={0}, order=[2, 1])
+    default = reduce(graph, preserved_nodes={0}, protected={0})
 
     # --- Assert ---
     assert node_one_first.graph.nodes == [0, 2]
@@ -899,7 +899,7 @@ def test_tree_records_do_not_depend_on_the_hash_seed():
         "from pygraphc.reduction import MultiGraph, reduce, tree_records\n"
         "edges = {f'p{index}': (1, 2) for index in range(8)}\n"
         "edges.update({'a': (2, 3), 'b': (3, 4), 'c': (1, 4), 'd': (1, 4)})\n"
-        "reduced = reduce(MultiGraph([1, 2, 3, 4], edges), terminals={1, 2})\n"
+        "reduced = reduce(MultiGraph([1, 2, 3, 4], edges), preserved_nodes={1, 2})\n"
         "print([tree_records(tree) for tree in reduced.provenance.values()])\n"
     )
 
@@ -930,7 +930,7 @@ def test_tree_records_round_trip_a_chain_deeper_than_the_recursion_limit():
     graph = MultiGraph(range(length + 1), endpoints)
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={0, length})
+    reduced = reduce(graph, preserved_nodes={0, length})
     ((edge_id, tree),) = reduced.provenance.items()
     records = tree_records(tree)
     rebuilt = tree_from_records(records)
@@ -954,8 +954,8 @@ def test_tree_records_round_trip_random_trees():
     # --- Execute ---
     for _ in range(200):
         graph = random_multigraph(rng, rng.randrange(4, 10), rng.randrange(4, 16))
-        terminals = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
-        reduced = reduce(graph, terminals)
+        preserved_nodes = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
+        reduced = reduce(graph, preserved_nodes)
         for tree in reduced.provenance.values():
             records = tree_records(tree)
             rebuilt = tree_from_records(records)
@@ -982,7 +982,7 @@ def test_virtual_edge_ids_are_numbered_above_those_in_the_input():
     graph = MultiGraph([1, 2, 3], {VirtualEdgeId(1): (1, 2), "b": (2, 3)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 3})
+    reduced = reduce(graph, preserved_nodes={1, 3})
 
     # --- Assert ---
     assert reduced.graph.endpoints == {VirtualEdgeId(2): (3, 1)}
@@ -991,7 +991,7 @@ def test_virtual_edge_ids_are_numbered_above_those_in_the_input():
 
 def test_reducing_the_residual_again_changes_nothing():
     """The residual is a fixpoint of the three moves, so reducing it with the
-    same terminals returns it unchanged: same nodes, same edge ids, leaf
+    same preserved nodes returns it unchanged: same nodes, same edge ids, leaf
     provenance, nothing folded or dropped, and the same canonical form once
     the residual's ids are expanded through the first reduction's trees."""
     # --- Input ---
@@ -1000,9 +1000,9 @@ def test_reducing_the_residual_again_changes_nothing():
     # --- Execute ---
     for _ in range(200):
         graph = random_multigraph(rng, rng.randrange(4, 10), rng.randrange(4, 16))
-        terminals = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
-        first = reduce(graph, terminals)
-        second = reduce(first.graph, terminals)
+        preserved_nodes = set(rng.sample(graph.nodes, rng.randrange(1, 4)))
+        first = reduce(graph, preserved_nodes)
+        second = reduce(first.graph, preserved_nodes)
         expanded = sorted(
             (tuple(sorted(pair)), tuple(sorted(leaves(first.provenance[residual]))))
             for residual, pair in second.graph.endpoints.items()
@@ -1024,7 +1024,7 @@ def test_node_with_a_loop_and_two_incidences_is_a_series_candidate_and_the_loop_
     graph = MultiGraph([1, 2, 3], {"a": (1, 2), "b": (2, 3), "loop": (2, 2)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1, 3})
+    reduced = reduce(graph, preserved_nodes={1, 3})
 
     # --- Assert ---
     assert reduced.graph.endpoints == {VirtualEdgeId(1): (1, 3)}
@@ -1032,16 +1032,16 @@ def test_node_with_a_loop_and_two_incidences_is_a_series_candidate_and_the_loop_
     assert reduced.folded_interior == {2: []}
 
 
-def test_unknown_terminals_and_protected_nodes_are_rejected():
-    """A mistyped terminal would silently let the component it should protect vanish."""
+def test_unknown_preserved_nodes_and_protected_nodes_are_rejected():
+    """A mistyped preserved node would silently let the component it should protect vanish."""
     # --- Input ---
     graph = MultiGraph([1, 2], {"a": (1, 2)})
 
     # --- Assert ---
     with pytest.raises(ValueError, match=r"unknown: \[99\]"):
-        reduce(graph, terminals={1, 99})
+        reduce(graph, preserved_nodes={1, 99})
     with pytest.raises(ValueError, match=r"unknown: \[7, 99\]"):
-        reduce(graph, terminals={1}, protected={7, 99})
+        reduce(graph, preserved_nodes={1}, protected={7, 99})
 
 
 def test_fold_leaves_false_drops_the_interior_nodes_with_the_tree():
@@ -1052,7 +1052,7 @@ def test_fold_leaves_false_drops_the_interior_nodes_with_the_tree():
     graph = MultiGraph([1, 2, 3, 4], {"a": (1, 2), "b": (2, 3), "c": (3, 4)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={1}, fold_leaves=False)
+    reduced = reduce(graph, preserved_nodes={1}, fold_leaves=False)
 
     # --- Assert ---
     assert reduced.graph.nodes == [1]
@@ -1063,15 +1063,15 @@ def test_fold_leaves_false_drops_the_interior_nodes_with_the_tree():
     ]
 
 
-def test_dead_end_cycle_at_a_terminal_keeps_its_edges_in_dropped():
+def test_dead_end_cycle_at_a_preserved_node_keeps_its_edges_in_dropped():
     """A cycle returning to one node becomes a parallel edge to a pendant; the
     pendant move used to discard that tree with its leaves. The cycle's
-    edges must be reported and the payload of every cycle node folded into the terminal."""
+    edges must be reported and the payload of every cycle node folded into the preserved node."""
     # --- Input ---
     graph = MultiGraph([0, 1, 2, 3], {"t": (0, 1), "r12": (1, 2), "r23": (2, 3), "r31": (3, 1)})
 
     # --- Execute ---
-    reduced = reduce(graph, terminals={0})
+    reduced = reduce(graph, preserved_nodes={0})
     dropped_leaves = frozenset().union(*(leaves(tree) for _neighbour, tree in reduced.dropped))
 
     # --- Assert ---
