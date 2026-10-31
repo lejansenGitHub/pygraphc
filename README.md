@@ -1369,10 +1369,20 @@ and is skipped otherwise.
   `benchmarks/profile_workflows.py`. CI builds the merge base and the branch
   with the same packages, on x86-64 and arm64, and fails on a count that moves
   by more than 0.5% in either direction. Within one binary the counts are
-  exact; a changed C extension moves unchanged Python work by up to about 0.5%
-  through the allocator, so that is the floor. Every change is in the table,
+  exact; a changed C extension moves unchanged work by up to about 1.1%
+  through the allocator, so a C change often needs review even when only the
+  layout moved. The threshold stays below that noise on purpose, because real
+  code generation changes of 0.5 to 1% matter. Every change is in the table,
   largest first. A pull request labelled `accept-instruction-change` still gets
   the table but does not fail.
+
+  What the counts cannot see: they measure portable work, compiled with GCC.
+  The same instructions can run slower on one machine (splitting `_core.c`
+  left topological sort's instructions, simulated cache misses and branch
+  mispredictions unchanged, yet 8 to 14% slower on an Apple M3, most likely
+  through code alignment), and clang can generate different code than GCC
+  (four counts moved by 0.5 to 1.3% under clang only). Machine-specific
+  effects show only in walltime, in the experience tier once they are large.
   The design claims ("a mask costs at most 15%") are instruction-count ratios
   in `test_claims.py`. Needs valgrind, so it runs on Linux; on macOS:
 
