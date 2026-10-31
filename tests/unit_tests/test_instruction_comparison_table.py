@@ -57,3 +57,13 @@ def test_every_table_row_starts_its_columns_at_the_same_character() -> None:
     assert len({line.index("|", 2) for line in rows}) == 1
     assert "**Measured on one side only: 2**" in table
     assert sorted(changed) == ["gone", "long_scenario_name/size", "rise"]
+
+
+def test_the_failure_message_is_one_line_without_the_scenario_names() -> None:
+    """The names are in the tables; the message after them only counts and says what to do."""
+    message = instruction_compare.failure_message(31, 0.005)
+
+    assert message == (
+        "31 count(s) moved by more than 0.5%, marked **changed** in the tables above; "
+        "review them and label the pull request accept-instruction-change"
+    )
