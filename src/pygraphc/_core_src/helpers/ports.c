@@ -230,3 +230,51 @@ void release_port_mask(PortMask *mask) {
     mask->two_port_edges = NULL;
     release_mask(&mask->ports_buffer);
 }
+
+int parse_pass_weights(const PortList *ports, Py_ssize_t edge_count, const double *weights, int directed,
+                       PassWeights *pass_weights) {
+    pass_weights->shifts = NULL;
+    pass_weights->negative_ports = NULL;
+    for (Py_ssize_t edge = 0; edge < edge_count; edge++) {
+        int first = ports->port_offsets[edge], end = ports->port_offsets[edge + 1];
+        int first_out = directed ? ports->out_port_offsets[edge] : end;
+        double lowest = HUGE_VAL, second_lowest = HUGE_VAL, lowest_out = HUGE_VAL;
+        int lowest_port = -1;
+        for (int port = first; port < end; port++) {
+            double weight = weights[port];
+            if (port >= first_out) { if (weight < lowest_out) lowest_out = weight; }
+            else if (weight < lowest) { second_lowest = lowest; lowest = weight; lowest_port = port; }
+            else if (weight < second_lowest) second_lowest = weight;
+        }
+        double cheapest_pass = directed ? lowest + lowest_out : lowest + second_lowest;
+        if (cheapest_pass < 0.0) {
+            release_pass_weights(pass_weights);
+            char message[200];
+            snprintf(message, sizeof message, "the port weights of edge %zd allow a pass costing %g; %s must sum to at least 0",
+                     edge, cheapest_pass, directed ? "every in-port and out-port of an edge" : "every two ports of an edge");
+            PyErr_SetString(PyExc_ValueError, message);
+            return -1;
+        }
+        if (lowest >= 0.0) continue;
+        if (!pass_weights->shifts) {
+            pass_weights->shifts = (double *)calloc((size_t)edge_count, sizeof(double));
+            pass_weights->negative_ports = (int *)malloc((size_t)edge_count * sizeof(int));
+            if (!pass_weights->shifts || !pass_weights->negative_ports) {
+                release_pass_weights(pass_weights);
+                PyErr_NoMemory();
+                return -1;
+            }
+            memset(pass_weights->negative_ports, -1, (size_t)edge_count * sizeof(int));
+        }
+        pass_weights->shifts[edge] = lowest;
+        pass_weights->negative_ports[edge] = lowest_port;
+    }
+    return 0;
+}
+
+void release_pass_weights(PassWeights *pass_weights) {
+    free(pass_weights->shifts);
+    free(pass_weights->negative_ports);
+    pass_weights->shifts = NULL;
+    pass_weights->negative_ports = NULL;
+}

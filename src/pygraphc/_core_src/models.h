@@ -169,6 +169,7 @@ typedef struct {
     double *values;
     Py_ssize_t count;
     int owns_memory;
+    int has_sign_bit;  /* parse_counted_weights with tracks_sign: some value has its sign bit set (negative or -0.0) */
 } WeightList;
 
 PYGRAPHC_INTERNAL void free_weights(WeightList *weights);

@@ -1,6 +1,7 @@
 /* Dijkstra: source-target paths, single-source and multi-source lengths. */
 #include "entry_points.h"
 #include "../helpers/ports.h"
+#include "../helpers/arrival_labels.h"
 #include "../helpers/parse.h"
 #include "../helpers/min_heap.h"
 #include "../helpers/bidirectional_dijkstra.h"
@@ -359,7 +360,7 @@ PyObject *py_dijkstra_by_node_id(PyObject *self, PyObject *args) {
     if (build_adjacency(node_count, &context.edges, &adjacency, 0) < 0) { node_id_context_free(&context); free_weights(&weights); return NULL; }
 
     BidirectionalPath bidirectional_path;
-    int failed = bidirectional_dijkstra(node_count, 0, &adjacency, weights.values, NULL, NULL, NULL, NULL, NULL, 0,
+    int failed = bidirectional_dijkstra(node_count, 0, &adjacency, weights.values, NULL, NULL, NULL, NULL, NULL, NULL, 0,
                                         source, target, &bidirectional_path) < 0;
     PyObject *path = failed ? NULL : bidirectional_path_to_list(&bidirectional_path, &context);
     free(bidirectional_path.path);
@@ -510,6 +511,10 @@ PyObject *py_multi_source_dijkstra_by_node_id(PyObject *self, PyObject *args) {
     return result;
 }
 
+static int labeled_shortest_path(const GraphContext *graph, const double *weights, const PassWeights *pass_weights,
+                                 const uint8_t *two_port_edge_mask, const uint8_t *edge_mask, const uint8_t *port_mask,
+                                 const uint8_t *node_mask, int source, int target, BidirectionalPath *out);
+
 PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *weights_obj, *source_obj, *target_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *port_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OOOO|OOO", &capsule, &weights_obj, &source_obj, &target_obj, &edge_mask_obj, &node_mask_obj, &port_mask_obj))
@@ -550,35 +555,119 @@ PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     }
 
     WeightList weights;
-    if (parse_counted_weights(weights_obj, &weights, ports ? ports->port_count : edge_count, ports ? "port" : "edge") < 0) { release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL; }
+    if (parse_counted_weights(weights_obj, &weights, ports ? ports->port_count : edge_count, ports ? "port" : "edge", ports != NULL) < 0) { release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL; }
     if (!graph->has_adjacency) { free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); PyObject *empty_path = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, empty_path); }
 
+    PassWeights pass_weights = {NULL, NULL};
+    if (ports && weights.has_sign_bit && parse_pass_weights(ports, edge_count, weights.values, graph->directed, &pass_weights) < 0) {
+        free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+        return NULL;
+    }
     BidirectionalPath bidirectional_path;
-    int failed = bidirectional_dijkstra(node_count, edge_count, &graph->adjacency, weights.values, ports,
-                                        two_port_edge_mask(&port_mask, edge_mask), edge_mask, port_mask.ports,
-                                        node_mask, graph->directed, source, target, &bidirectional_path) < 0;
+    int failed = (pass_weights.shifts && !graph->directed)
+        ? labeled_shortest_path(graph, weights.values, &pass_weights, two_port_edge_mask(&port_mask, edge_mask), edge_mask,
+                                port_mask.ports, node_mask, source, target, &bidirectional_path) < 0
+        : bidirectional_dijkstra(node_count, edge_count, &graph->adjacency, weights.values, ports, &pass_weights,
+                                 two_port_edge_mask(&port_mask, edge_mask), edge_mask, port_mask.ports,
+                                 node_mask, graph->directed, source, target, &bidirectional_path) < 0;
     PyObject *path = failed ? NULL : bidirectional_path_to_list(&bidirectional_path, &graph->node_ids);
     free(bidirectional_path.path);
+    release_pass_weights(&pass_weights);
     free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
     if (!path) return NULL;
     return Py_BuildValue("(dN)", bidirectional_path.weight, path);
 }
 
+/* Lower a state's distance to candidate_distance when that is shorter and within the cutoff. */
+static inline __attribute__((always_inline)) void relax_state(MinHeap *min_heap, int state, double candidate_distance,
+                                                              int use_cutoff, double cutoff) {
+    double *distance = min_heap->distance;
+    if (candidate_distance >= distance[state] || (use_cutoff && candidate_distance > cutoff)) return;
+    distance[state] = candidate_distance;
+    if (min_heap->heap_position[state] == -1) {
+        int heap_slot = min_heap->size++;
+        min_heap->nodes[heap_slot] = state;
+        min_heap->heap_position[state] = heap_slot;
+        min_heap_sift_up(min_heap, heap_slot);
+    } else {
+        min_heap_sift_up(min_heap, min_heap->heap_position[state]);
+    }
+}
+
+/* Relax a node from state `from`: plainly, or keeping its arrival labels when the search has them. */
+static inline __attribute__((always_inline)) void relax_node(MinHeap *min_heap, ArrivalLabels *labels, int node,
+                                                             double candidate_distance, int arrival, int from,
+                                                             int use_cutoff, double cutoff) {
+    if (!labels) { relax_state(min_heap, node, candidate_distance, use_cutoff, cutoff); return; }
+    if (use_cutoff && candidate_distance > cutoff) return;
+    relax_labeled(min_heap, &labels->arrival_edges[node], labels->predecessors, node, labels->second_node_states + node,
+                  candidate_distance, arrival, from);
+}
+
 /*
- * Dijkstra from the sources already in the heap, over the search states of a
- * graph: its nodes, and with has_multiport_edges also one state per edge with
- * three or more ports (node_count + e). A two-port edge relaxes its neighbor
- * directly, at its edge weight or, with port weights, at the sum of its two
- * port weights. An edge with more ports is entered through an active port at
- * that port's weight, settled once at its cheapest entry and then relaxes each
- * active exit port (directed: out-port) at the exit port's weight, so an edge
- * with k ports costs O(k). The function is instantiated for both values of
- * has_multiport_edges, so graphs of two-port edges run the loop as before.
+ * The passes of an undirected edge out of its negative port n, from search
+ * state `from` (node n, or its second label): each other active port at
+ * w_n + w_q, untagged.
+ */
+static inline __attribute__((always_inline)) void relax_negative_port_pass(const GraphContext *graph, const double *weights, const PassWeights *pass_weights,
+                                     const uint8_t *edge_mask, const uint8_t *port_mask, const uint8_t *node_mask,
+                                     int use_cutoff, double cutoff, MinHeap *min_heap, ArrivalLabels *labels, int edge,
+                                     int from) {
+    const PortList *ports = graph->ports;
+    int negative_port = pass_weights->negative_ports[edge];
+    if (!port_is_active(ports, edge, negative_port, edge_mask, port_mask, node_mask)) return;
+    double base = min_heap->distance[from] + weights[negative_port];
+    for (int exit = ports->port_offsets[edge]; exit < ports->port_offsets[edge + 1]; exit++) {
+        if (exit == negative_port || !port_is_active(ports, edge, exit, edge_mask, port_mask, node_mask)) continue;
+        relax_node(min_heap, labels, ports->port_nodes[exit], base + weights[exit], -1, from, use_cutoff, cutoff);
+    }
+}
+
+/*
+ * Leave an edge state through its active exit ports (directed: out-ports);
+ * with labels through every port but `excluded_exit`, or only through
+ * `only_exit` when that is not -1. Leaving through the negative port tags the
+ * arrival with the edge.
+ */
+static inline __attribute__((always_inline)) void leave_edge_state(
+    const GraphContext *graph, const double *weights, const PassWeights *pass_weights, const uint8_t *edge_mask,
+    const uint8_t *port_mask, const uint8_t *node_mask, int use_cutoff, double cutoff, MinHeap *min_heap,
+    ArrivalLabels *labels, const double *shifts, int edge, int from, int excluded_exit, int only_exit) {
+    const PortList *ports = graph->ports;
+    int directed = graph->directed;
+    double exit_shift = shifts ? (directed ? shifts[edge] : -shifts[edge]) : 0.0;
+    int tagged_exit = labels ? pass_weights->negative_ports[edge] : -1;
+    int first_exit = only_exit >= 0 ? only_exit : directed ? ports->out_port_offsets[edge] : ports->port_offsets[edge];
+    int end_exit = only_exit >= 0 ? only_exit + 1 : ports->port_offsets[edge + 1];
+    for (int exit = first_exit; exit < end_exit; exit++) {
+        if (exit == excluded_exit || !port_is_active(ports, edge, exit, edge_mask, port_mask, node_mask)) continue;
+        relax_node(min_heap, labels, ports->port_nodes[exit], min_heap->distance[from] + weights[exit] + exit_shift,
+                   exit == tagged_exit ? edge : -1, from, use_cutoff, cutoff);
+    }
+}
+
+/*
+ * Dijkstra from the sources already in the heap until it is empty or, with
+ * target >= 0, the target is settled. Search states: the nodes, with
+ * has_multiport_edges one state per edge with three or more ports
+ * (node_count + e), and with labels the second labels of nodes and edges.
+ * A two-port edge relaxes its neighbor directly, at its edge weight or, with
+ * port weights, at the sum of its two port weights. An edge with more ports
+ * is entered through an active port and left through each active exit port
+ * (directed: out-port), so an edge with k ports costs O(k); with a negative
+ * port weight the steps are shifted as PassWeights describes, and an
+ * undirected search keeps ArrivalLabels. The function is instantiated per
+ * value of has_multiport_edges and has_negative_port_weights, so graphs of
+ * two-port edges and weights without a negative port run the loop as before.
  */
 static inline __attribute__((always_inline)) void relax_until_settled(
     const GraphContext *graph, const double *weights, const uint8_t *two_port_edge_mask, const uint8_t *edge_mask,
     const uint8_t *port_mask, const uint8_t *node_mask, int use_cutoff, double cutoff, MinHeap *min_heap,
-    uint8_t *settled_edges, const int has_multiport_edges) {
+    uint8_t *settled_edges, const PassWeights *pass_weights, ArrivalLabels *labels, int target,
+    const int has_multiport_edges, const int has_negative_port_weights) {
+    const double *shifts = has_negative_port_weights ? pass_weights->shifts : NULL;
+    if (!has_negative_port_weights) labels = NULL;
+    const int directed = graph->directed;
     const AdjacencyList *adjacency = &graph->adjacency;
     const PortList *ports = graph->ports;
     int node_count = graph->node_ids.node_count;
@@ -588,20 +677,24 @@ static inline __attribute__((always_inline)) void relax_until_settled(
         int state = min_heap_pop(min_heap);
         if (distance[state]==HUGE_VAL) break;
         if (use_cutoff && distance[state]>cutoff) break;
+        if (has_multiport_edges && state == target) break;
+        if (has_multiport_edges && labels && state >= labels->second_edge_states) {
+            int edge = state - labels->second_edge_states;
+            leave_edge_state(graph, weights, pass_weights, edge_mask, port_mask, node_mask, use_cutoff, cutoff, min_heap,
+                             labels, shifts, edge, state, -1, labels->entry_ports[edge]);
+            continue;
+        }
+        if (has_multiport_edges && labels && state >= labels->second_node_states) {
+            int node = state - labels->second_node_states, edge = labels->arrival_edges[node];
+            if (edge >= 0) relax_negative_port_pass(graph, weights, pass_weights, edge_mask, port_mask, node_mask,
+                                                    use_cutoff, cutoff, min_heap, labels, edge, state);
+            continue;
+        }
         if (has_multiport_edges && state >= node_count) {
             int edge = state - node_count;
-            settled_edges[edge] = 1;
-            int first_exit = graph->directed ? ports->out_port_offsets[edge] : ports->port_offsets[edge];
-            for (int exit = first_exit; exit < ports->port_offsets[edge + 1]; exit++) {
-                if (!port_is_active(ports, edge, exit, edge_mask, port_mask, node_mask)) continue;
-                int reached = ports->port_nodes[exit];
-                double candidate_distance = distance[state] + weights[exit];
-                if (candidate_distance < distance[reached] && (!use_cutoff || candidate_distance <= cutoff)) {
-                    distance[reached] = candidate_distance;
-                    if (heap_position[reached]==-1) { int heap_slot=min_heap->size++; heap[heap_slot]=reached; heap_position[reached]=heap_slot; min_heap_sift_up(min_heap,heap_slot); }
-                    else min_heap_sift_up(min_heap, heap_position[reached]);
-                }
-            }
+            if (!labels) settled_edges[edge] = 1;
+            leave_edge_state(graph, weights, pass_weights, edge_mask, port_mask, node_mask, use_cutoff, cutoff, min_heap,
+                             labels, shifts, edge, state, labels ? labels->entry_ports[edge] : -1, -1);
             continue;
         }
         int node = state;
@@ -609,14 +702,23 @@ static inline __attribute__((always_inline)) void relax_until_settled(
             int neighbor=adjacency->neighbors[slot];
             if (has_multiport_edges && neighbor < 0) {
                 int edge = -1 - neighbor, entry = adjacency->edge_indices[slot];
-                if (settled_edges[edge] || !port_is_active(ports, edge, entry, edge_mask, port_mask, node_mask)) continue;
-                int edge_state = node_count + edge;
-                double candidate_distance = distance[node] + weights[entry];
-                if (candidate_distance < distance[edge_state] && (!use_cutoff || candidate_distance <= cutoff)) {
-                    distance[edge_state] = candidate_distance;
-                    if (heap_position[edge_state]==-1) { int heap_slot=min_heap->size++; heap[heap_slot]=edge_state; heap_position[edge_state]=heap_slot; min_heap_sift_up(min_heap,heap_slot); }
-                    else min_heap_sift_up(min_heap, heap_position[edge_state]);
+                if (!port_is_active(ports, edge, entry, edge_mask, port_mask, node_mask)) continue;
+                double entry_shift = shifts ? (directed ? -shifts[edge] : shifts[edge]) : 0.0;
+                if (!labels) {
+                    if (!settled_edges[edge])
+                        relax_state(min_heap, node_count + edge, distance[node] + weights[entry] + entry_shift, use_cutoff, cutoff);
+                    continue;
                 }
+                if (pass_weights->negative_ports[edge] == entry) {
+                    if (labels->arrival_edges[node] != edge)
+                        relax_negative_port_pass(graph, weights, pass_weights, edge_mask, port_mask, node_mask, use_cutoff,
+                                                 cutoff, min_heap, labels, edge, node);
+                    continue;
+                }
+                double candidate_distance = distance[node] + weights[entry] + entry_shift;
+                if (use_cutoff && candidate_distance > cutoff) continue;
+                relax_labeled(min_heap, &labels->entry_ports[edge], labels->predecessors, node_count + edge,
+                              labels->second_edge_states + edge, candidate_distance, entry, node);
                 continue;
             }
             int edge_index = adjacency->edge_indices[slot];
@@ -626,12 +728,79 @@ static inline __attribute__((always_inline)) void relax_until_settled(
                 ? weights[ports->port_offsets[edge_index]] + weights[ports->port_offsets[edge_index] + 1]
                 : weights[edge_index];
             double candidate_distance=distance[node]+edge_weight;
+            if (has_multiport_edges && labels) {
+                int negative_port = pass_weights->negative_ports[edge_index];
+                if (negative_port < 0) {
+                    relax_node(min_heap, labels, neighbor, candidate_distance, -1, node, use_cutoff, cutoff);
+                    continue;
+                }
+                for (int entry = ports->port_offsets[edge_index]; entry < ports->port_offsets[edge_index] + 2; entry++) {
+                    if (ports->port_nodes[entry] != node) continue;
+                    if (entry == negative_port && labels->arrival_edges[node] == edge_index) continue;
+                    int exit = 2 * ports->port_offsets[edge_index] + 1 - entry;
+                    relax_node(min_heap, labels, ports->port_nodes[exit], candidate_distance,
+                               exit == negative_port ? edge_index : -1, node, use_cutoff, cutoff);
+                }
+                continue;
+            }
             if (candidate_distance < distance[neighbor] && (!use_cutoff || candidate_distance <= cutoff)) {
                 if (heap_position[neighbor]==-1) { distance[neighbor]=candidate_distance; int heap_slot=min_heap->size++; heap[heap_slot]=neighbor; heap_position[neighbor]=heap_slot; min_heap_sift_up(min_heap,heap_slot); }
                 else { distance[neighbor]=candidate_distance; min_heap_sift_up(min_heap, heap_position[neighbor]); }
             }
         }
     }
+}
+
+/*
+ * Cheapest path from source to target on an undirected graph with a negative
+ * port weight: the labelled search of relax_until_settled, stopped at the
+ * target, the path read back through the labels' predecessors. A path may
+ * visit a node twice (it may come back to the negative port's node by another
+ * way and then pass the edge). Returns -1 with an exception set.
+ */
+static int labeled_shortest_path(const GraphContext *graph, const double *weights, const PassWeights *pass_weights,
+                                 const uint8_t *two_port_edge_mask, const uint8_t *edge_mask, const uint8_t *port_mask,
+                                 const uint8_t *node_mask, int source, int target, BidirectionalPath *out) {
+    int node_count = graph->node_ids.node_count, edge_count = (int)graph->node_ids.edges.edge_count;
+    out->weight = HUGE_VAL; out->path = NULL; out->path_length = 0;
+    ArrivalLabels labels;
+    int state_count = allocate_arrival_labels(&labels, node_count, edge_count, node_count + edge_count, 1);
+    if (state_count < 0) return -1;
+    double *distance = malloc((size_t)state_count * sizeof(double));
+    int *heap = malloc((size_t)state_count * sizeof(int)), *heap_position = malloc((size_t)state_count * sizeof(int));
+    if (!distance || !heap || !heap_position) {
+        free(distance); free(heap); free(heap_position); free_arrival_labels(&labels);
+        PyErr_NoMemory();
+        return -1;
+    }
+    for (int state = 0; state < state_count; state++) { distance[state] = HUGE_VAL; heap_position[state] = -1; }
+    MinHeap min_heap = {distance, heap, heap_position, 1};
+    distance[source] = 0.0; heap[0] = source; heap_position[source] = 0;
+    relax_until_settled(graph, weights, two_port_edge_mask, edge_mask, port_mask, node_mask, 0, 0.0, &min_heap, NULL,
+                        pass_weights, &labels, target, 1, 1);
+    int status = 0;
+    if (distance[target] < HUGE_VAL) {
+        int length = 0;
+        for (int state = target; state != -1; state = labels.predecessors[state]) length++;
+        out->path = (int *)malloc((size_t)length * sizeof(int));
+        if (!out->path) { status = -1; PyErr_NoMemory(); }
+        else {
+            out->weight = distance[target];
+            for (int state = target, position = length; state != -1; state = labels.predecessors[state]) {
+                int node = state < node_count ? state
+                         : (state >= labels.second_node_states && state < labels.second_edge_states) ? state - labels.second_node_states
+                         : -1;
+                if (node >= 0) out->path[--position] = node;
+                else out->path[--position] = -1;
+            }
+            int kept = 0;
+            for (int position = 0; position < length; position++)
+                if (out->path[position] >= 0) out->path[kept++] = out->path[position];
+            out->path_length = kept;
+        }
+    }
+    free(distance); free(heap); free(heap_position); free_arrival_labels(&labels);
+    return status;
 }
 
 /*
@@ -656,14 +825,29 @@ static PyObject *shortest_path_lengths_from(const GraphContext *graph, PyObject 
     const PortList *ports = graph->ports;
     WeightList weights;
     if (parse_counted_weights(weights_obj, &weights, ports ? ports->port_count : graph->node_ids.edges.edge_count,
-                              ports ? "port" : "edge") < 0) {
+                              ports ? "port" : "edge", ports != NULL) < 0) {
         release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL;
     }
-    int state_count = node_count + (ports ? (int)graph->node_ids.edges.edge_count : 0);
+    PassWeights pass_weights = {NULL, NULL};
+    if (ports && weights.has_sign_bit &&
+        parse_pass_weights(ports, graph->node_ids.edges.edge_count, weights.values, graph->directed, &pass_weights) < 0) {
+        free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result);
+        return NULL;
+    }
+    int edge_count = (int)graph->node_ids.edges.edge_count;
+    int uses_labels = pass_weights.shifts && !graph->directed;
+    int state_count = node_count + (ports ? edge_count : 0);
+    ArrivalLabels labels = {NULL, NULL, NULL, 0, 0};
+    if (uses_labels && (state_count = allocate_arrival_labels(&labels, node_count, edge_count, state_count, 0)) < 0) {
+        release_pass_weights(&pass_weights);
+        free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result);
+        return NULL;
+    }
     double *distance = malloc((size_t)state_count*sizeof(double));
     int *heap = malloc((size_t)state_count*sizeof(int)), *heap_position = malloc((size_t)state_count*sizeof(int));
-    uint8_t *settled_edges = ports ? calloc((size_t)graph->node_ids.edges.edge_count + 1, 1) : NULL;
+    uint8_t *settled_edges = ports ? calloc((size_t)edge_count + 1, 1) : NULL;
     if (!distance||!heap||!heap_position||(ports && !settled_edges)) {
+        release_pass_weights(&pass_weights); free_arrival_labels(&labels);
         free(distance);free(heap);free(heap_position);free(settled_edges);
         free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result);
         PyErr_NoMemory(); return NULL;
@@ -677,12 +861,16 @@ static PyObject *shortest_path_lengths_from(const GraphContext *graph, PyObject 
         }
     }
     const uint8_t *traversal_edge_mask = two_port_edge_mask(&port_mask, edge_mask);
-    if (ports)
+    if (ports && pass_weights.shifts)
         relax_until_settled(graph, weights.values, traversal_edge_mask, edge_mask, port_mask.ports, node_mask,
-                            use_cutoff, cutoff, &min_heap, settled_edges, 1);
+                            use_cutoff, cutoff, &min_heap, settled_edges, &pass_weights, uses_labels ? &labels : NULL, -1, 1, 1);
+    else if (ports)
+        relax_until_settled(graph, weights.values, traversal_edge_mask, edge_mask, port_mask.ports, node_mask,
+                            use_cutoff, cutoff, &min_heap, settled_edges, &pass_weights, NULL, -1, 1, 0);
     else
         relax_until_settled(graph, weights.values, traversal_edge_mask, NULL, NULL, node_mask, use_cutoff, cutoff,
-                            &min_heap, NULL, 0);
+                            &min_heap, NULL, &pass_weights, NULL, -1, 0, 0);
+    release_pass_weights(&pass_weights); free_arrival_labels(&labels);
     for (int node=0;node<node_count;node++) {
         if (node_mask && node_mask[node]) continue;
         if (distance[node] < HUGE_VAL && (!use_cutoff || distance[node] <= cutoff)) {

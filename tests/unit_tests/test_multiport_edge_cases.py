@@ -183,3 +183,42 @@ def test_edge_case_18_methods_not_yet_on_ports_refuse_the_whole_graph() -> None:
         graph.cycle_basis()
     with pytest.raises(NotImplementedError, match="port masks"):
         two_port_view.cycle_basis()
+
+
+def test_edge_case_19_negative_port_weights_need_every_pass_to_cost_at_least_zero() -> None:
+    """EC19: a star equivalent may have one negative port weight; a pass that would cost less than 0 is rejected."""
+    star = Graph([1, 2, 3], [(1, 2, 3)])
+    directed = Graph([1, 2, 3], [((1, 2), (3,))], directed=True)
+
+    assert star.shortest_path_lengths([3, -1, 2], 1) == {1: 0.0, 2: 2.0, 3: 5.0}
+    assert directed.shortest_path_lengths([-1, 4, 2], 1) == {1: 0.0, 3: 1.0}
+    with pytest.raises(ValueError, match="pass costing -2"):
+        star.shortest_path_lengths([-3, 1, 2], 1)
+    with pytest.raises(ValueError, match="every in-port and out-port"):
+        directed.shortest_path_lengths([-2, 1, 1], 1)
+
+
+def test_edge_case_20_a_path_never_leaves_an_edge_through_the_port_it_entered_by() -> None:
+    """EC20: no U-turn; with a negative port weight it would undercut the node itself."""
+    star = Graph([1, 2, 3], [(1, 2, 3)])
+    star_with_a_tail = Graph([1, 2, 3, 4], [(1, 2, 3), (2, 4)])
+
+    assert star.shortest_path_lengths([3, -1, 2], 2) == {1: 2.0, 2: 0.0, 3: 1.0}
+    assert star_with_a_tail.shortest_path_lengths([3, -1, 2, 0.5, 0.5], 4) == {1: 3.0, 2: 1.0, 3: 2.0, 4: 0.0}
+
+
+def test_edge_case_21_no_second_pass_right_at_the_negative_port() -> None:
+    """EC21: after leaving an edge through its negative port, a path does not pass that edge again from there."""
+    star = Graph([1, 2, 3], [(1, 2, 3)])
+
+    assert star.shortest_path_lengths([3, -1, 2], 1)[3] == 5.0
+    assert star.shortest_path([3, -1, 2], 1, 3) == [1, 3]
+
+
+def test_edge_case_22_a_path_may_come_back_to_the_negative_port_another_way() -> None:
+    """EC22: only the immediate second pass is banned; a detour back to the node allows it, so a node may repeat."""
+    star_with_a_loop = Graph([1, 2, 3, 4], [(1, 2, 3), (2, 4), (4, 2)])
+    weights = [3, -1, 2, 0.25, 0.25, 0.25, 0.25]
+
+    assert star_with_a_loop.shortest_path_lengths(weights, 1)[3] == 4.0
+    assert star_with_a_loop.shortest_path(weights, 1, 3) == [1, 2, 4, 2, 3]

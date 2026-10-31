@@ -33,6 +33,8 @@ OPERATIONS: dict[str, Operation] = {
     "bfs": lambda graph: lambda: graph.bfs(0),
     "shortest_path_lengths": lambda graph: _shortest_path_lengths_with_unit_weights(graph),
     "shortest_path": lambda graph: _shortest_path_with_unit_weights(graph),
+    "shortest_path_lengths_negative_ports": lambda graph: _shortest_path_lengths_with_a_negative_port(graph),
+    "shortest_path_negative_ports": lambda graph: _shortest_path_with_a_negative_port(graph),
     "critical_edges": lambda graph: graph.critical_edges,
     "articulation_points": lambda graph: graph.articulation_points,
     "biconnected_components": lambda graph: lambda: list(graph.biconnected_components()),
@@ -51,6 +53,28 @@ def _shortest_path_lengths_with_unit_weights(graph: Graph[int, int]) -> Callable
 def _shortest_path_with_unit_weights(graph: Graph[int, int]) -> Callable[[], object]:
     """From the first to the last node, with one weight per port built outside the timed call."""
     weights = [1.0] * graph.port_count
+    return lambda: graph.shortest_path(weights, 0, graph.node_count - 1)
+
+
+def _weights_with_a_negative_port(graph: Graph[int, int]) -> list[float]:
+    """The first port of every edge at -0.5, every other at 1.0: each pass costs at least 0.5."""
+    weights = [1.0] * graph.port_count
+    for edge_index in range(graph.edge_count):
+        ports = graph._ports_of(edge_index)
+        if len(ports) >= 2:
+            weights[ports.start] = -0.5
+    return weights
+
+
+def _shortest_path_lengths_with_a_negative_port(graph: Graph[int, int]) -> Callable[[], object]:
+    """The labelled search: a second label per node and per edge state, still linear."""
+    weights = _weights_with_a_negative_port(graph)
+    return lambda: graph.shortest_path_lengths(weights, 0)
+
+
+def _shortest_path_with_a_negative_port(graph: Graph[int, int]) -> Callable[[], object]:
+    """The labelled search stopped at the target, path read back through the labels."""
+    weights = _weights_with_a_negative_port(graph)
     return lambda: graph.shortest_path(weights, 0, graph.node_count - 1)
 
 

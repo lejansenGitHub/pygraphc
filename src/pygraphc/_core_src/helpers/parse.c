@@ -436,8 +436,39 @@ static int check_weight_count(WeightList *weights, Py_ssize_t expected_count, co
     return -1;
 }
 
-int parse_counted_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_count, const char *counted) {
+/* Whether any value has its sign bit set: an OR over the bit patterns, which needs no floating point comparison. */
+static int any_sign_bit(const double *values, Py_ssize_t count) {
+    uint64_t sign_bits = 0;
+    for (Py_ssize_t index = 0; index < count; index++) {
+        uint64_t bits;
+        memcpy(&bits, &values[index], sizeof bits);
+        sign_bits |= bits;
+    }
+    return (int)(sign_bits >> 63);
+}
+
+/* Convert a sequence's items to doubles, with tracks_sign also noting whether any has its sign bit set. */
+static inline __attribute__((always_inline)) int convert_weights(PyObject **items, Py_ssize_t count, WeightList *weights,
+                                                                 const int tracks_sign) {
+    uint64_t sign_bits = 0;
+    for (Py_ssize_t index = 0; index < count; index++) {
+        double value = PyFloat_AsDouble(items[index]);
+        weights->values[index] = value;
+        if (tracks_sign) {
+            uint64_t bits;
+            memcpy(&bits, &value, sizeof bits);
+            sign_bits |= bits;
+        }
+        if (PyErr_Occurred()) return -1;
+    }
+    weights->has_sign_bit = (int)(sign_bits >> 63);
+    return 0;
+}
+
+int parse_counted_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_count, const char *counted,
+                          int tracks_sign) {
     Py_buffer buffer;
+    weights->has_sign_bit = 0;
     if (PyObject_GetBuffer(weights_obj, &buffer, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
         if (buffer.format && strcmp(buffer.format, "d") == 0 &&
             buffer.ndim == 1 && buffer.itemsize == 8) {
@@ -445,6 +476,7 @@ int parse_counted_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t
             weights->count = buffer.shape[0];
             weights->owns_memory = 0;
             PyBuffer_Release(&buffer);
+            if (tracks_sign) weights->has_sign_bit = any_sign_bit(weights->values, weights->count);
             return check_weight_count(weights, expected_count, counted);
         }
         PyBuffer_Release(&buffer);
@@ -460,16 +492,15 @@ int parse_counted_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t
     weights->values = (double *)malloc((size_t)weight_count * sizeof(double));
     if (!weights->values) { Py_DECREF(weights_fast); PyErr_NoMemory(); return -1; }
     PyObject **weight_items = PySequence_Fast_ITEMS(weights_fast);
-    for (Py_ssize_t weight_index = 0; weight_index < weight_count; weight_index++) {
-        weights->values[weight_index] = PyFloat_AsDouble(weight_items[weight_index]);
-        if (PyErr_Occurred()) { free(weights->values); Py_DECREF(weights_fast); return -1; }
-    }
+    int status = tracks_sign ? convert_weights(weight_items, weight_count, weights, 1)
+                             : convert_weights(weight_items, weight_count, weights, 0);
+    if (status < 0) { free(weights->values); Py_DECREF(weights_fast); return -1; }
     Py_DECREF(weights_fast);
     return check_weight_count(weights, expected_count, counted);
 }
 
 int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_edge_count) {
-    return parse_counted_weights(weights_obj, weights, expected_edge_count, "edge");
+    return parse_counted_weights(weights_obj, weights, expected_edge_count, "edge", 0);
 }
 
 /*

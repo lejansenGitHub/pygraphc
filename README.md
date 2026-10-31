@@ -558,12 +558,24 @@ component of its active end.
 #### Weights per port
 
 Weighted algorithms take one weight per port, in edge order and, within an
-edge, in port order. Passing through an edge from one port to another costs
-the entry port's weight plus the exit port's weight, which is how the star
-equivalent of a three-winding transformer is written down. Two-port edges keep
-their single weight per edge: weights with one entry per edge are read as before,
-and the per-port form is only needed when a graph has an edge with more than
-two ports.
+edge, in port order. A **pass** through an edge goes from one port to another
+port (directed: from an in-port to an out-port) and costs the entry port's
+weight plus the exit port's weight, which is how the star equivalent of a
+three-winding transformer is written down. Two-port edges keep their single
+weight per edge: weights with one entry per edge are read as before, and the
+per-port form is only needed when a graph has an edge with more than two ports.
+
+A port weight may be negative, as one arm of a star equivalent can be, as long
+as every pass costs at least 0: every two ports of an edge (directed: every
+in-port and out-port) must sum to at least 0, otherwise the call raises
+`ValueError`. A path never leaves an edge through the port it entered by, and
+after leaving an edge through its negative port it does not pass that edge
+again right there, since either would count the negative weight twice:
+
+```python
+star = Graph([1, 2, 3], [(1, 2, 3)])
+star.shortest_path_lengths([3, -1, 2], 1)   # {1: 0.0, 2: 2.0, 3: 5.0}: 1 -> 3 costs 3 + 2, not (3 - 1) + (-1 + 2)
+```
 
 #### Edges with a single port
 
@@ -1518,3 +1530,7 @@ implementing; the D and O numbers refer to `docs/multiport-decisions.md`.
 | 16 | `edge_indices_at(node_ids)` | Returns the edges whose set of port nodes equals the given set. Order, repeats and direction do not matter, and an unknown node matches nothing. | Match with repeats counted (multiset), match edges with a port at all given nodes (superset), or respect direction. | Claude |
 | 17 | Pair methods on a graph with a multiport edge | `bridges()`, `bridges_with_branch_ids()` and `edge_indices(u, v)` raise for the whole graph, even when asked about a two-port edge, and name `critical_edges()` or `edge_indices_at()` instead (D13). | Answer for the two-port edges and leave out the multiport ones. | user |
 | 18 | Methods not yet defined on ports | They raise `NotImplementedError` on a graph with a multiport edge and on any view with a port mask, rather than answering for part of the graph (O3, D19). | Answer on the two-port edges only. | user |
+| 19 | Negative port weights | Allowed when every pass costs at least 0: every two ports of an edge (directed: every in-port and out-port) sum to at least 0, so an undirected edge has at most one negative port; otherwise `ValueError`. | Reject every negative port weight. | user |
+| 20 | Leaving through the entry port | Never: a pass goes from one port to another. Without negative weights it could not shorten a path anyway. | — | user |
+| 21 | Passing an edge again right after leaving it through its negative port | Not allowed: in `(1, 2, 3)` with weights `[3, -1, 2]` the path from 1 to 3 costs 5, not `(3 − 1) + (−1 + 2) = 3`. | Allow it: each pass is legal on its own. | user |
+| 22 | Coming back to the negative port's node another way | Allowed: only the immediate second pass is banned, so a shortest path may visit a node twice (`[1, 2, 4, 2, 3]` in the test). | Ban every second pass through the same edge, which makes shortest paths a constrained, much harder problem. | Claude |

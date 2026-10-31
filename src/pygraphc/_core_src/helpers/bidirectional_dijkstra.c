@@ -73,14 +73,18 @@ static void bidirectional_keep_nodes(BidirectionalPath *out, int node_count) {
    relaxed edges is tracked as the searches proceed, and the search stops once
    a state has been settled by both. With has_multiport_edges, each edge with
    three or more ports is a search state (node_count + e), entered through an
-   active port at its weight and left through each active exit port at its
-   weight (directed: forward in to out, backward out to in), never back to the
-   node it was entered from; a two-port edge then costs the sum of its two port
-   weights. Returns -1 on error. */
+   active port and left through each active exit port (directed: forward in to
+   out, backward out to in), never back to the node it was entered from; a
+   two-port edge then costs the sum of its two port weights. With a negative
+   port weight the steps are shifted as PassWeights describes, the backward
+   search running on the reverse of the forward one, so that a meeting at an
+   edge state adds up to the true pass cost. Returns -1 on error. */
 static inline __attribute__((always_inline)) int bidirectional_search(
     int node_count, int edge_count, const AdjacencyList *adjacency, const double *weights, const PortList *ports,
     const uint8_t *two_port_edge_mask, const uint8_t *edge_mask, const uint8_t *port_mask, const uint8_t *node_mask,
-    int directed, int source, int target, BidirectionalPath *out, const int has_multiport_edges) {
+    const PassWeights *pass_weights, int directed, int source, int target, BidirectionalPath *out,
+    const int has_multiport_edges) {
+    const double *shifts = has_multiport_edges ? pass_weights->shifts : NULL;
     out->weight = HUGE_VAL;
     out->path = NULL;
     out->path_length = 0;
@@ -146,13 +150,15 @@ static inline __attribute__((always_inline)) int bidirectional_search(
             int first_exit = (directed && expand_forward) ? ports->out_port_offsets[edge] : ports->port_offsets[edge];
             int end_exit = (directed && !expand_forward) ? ports->out_port_offsets[edge] : ports->port_offsets[edge + 1];
             int entry_node = predecessor_near[state];
+            double exit_shift = shifts ? (directed == expand_forward ? shifts[edge] : -shifts[edge]) : 0.0;
+            int closed_exit = (shifts && !directed && !expand_forward) ? pass_weights->negative_ports[edge] : -1;
             for (int exit = first_exit; exit < end_exit; exit++) {
-                if (ports->port_nodes[exit] == entry_node) continue;
+                if (ports->port_nodes[exit] == entry_node || exit == closed_exit) continue;
                 if (!port_is_active(ports, edge, exit, edge_mask, port_mask, node_mask)) continue;
                 bidirectional_relax(frontier, distance_near, predecessor_near, settled_near, heap_position_near,
                                     distance_far, settled_far, heap_position_far, expand_forward, state,
-                                    ports->port_nodes[exit], distance_near[state] + weights[exit], &best_weight,
-                                    &meet_forward, &meet_backward);
+                                    ports->port_nodes[exit], distance_near[state] + weights[exit] + exit_shift,
+                                    &best_weight, &meet_forward, &meet_backward);
             }
             continue;
         }
@@ -165,8 +171,21 @@ static inline __attribute__((always_inline)) int bidirectional_search(
             if (has_multiport_edges && neighbor < 0) {
                 int edge = -1 - neighbor;
                 if (!port_is_active(ports, edge, edge_index, edge_mask, port_mask, node_mask)) continue;
+                int negative_port = (shifts && !directed) ? pass_weights->negative_ports[edge] : -1;
+                if (negative_port >= 0 && (expand_forward ? edge_index == negative_port : edge_index != negative_port)) {
+                    int first_pass = expand_forward ? ports->port_offsets[edge] : negative_port;
+                    int end_pass = expand_forward ? ports->port_offsets[edge + 1] : negative_port + 1;
+                    for (int pass = first_pass; pass < end_pass; pass++) {
+                        if (pass == edge_index || !port_is_active(ports, edge, pass, edge_mask, port_mask, node_mask)) continue;
+                        bidirectional_relax(frontier, distance_near, predecessor_near, settled_near, heap_position_near,
+                                            distance_far, settled_far, heap_position_far, expand_forward, node,
+                                            ports->port_nodes[pass], distance_near[node] + weights[edge_index] + weights[pass],
+                                            &best_weight, &meet_forward, &meet_backward);
+                    }
+                    if (expand_forward) continue;
+                }
                 neighbor = node_count + edge;
-                edge_weight = weights[edge_index];
+                edge_weight = weights[edge_index] + (shifts ? (directed == expand_forward ? -shifts[edge] : shifts[edge]) : 0.0);
             } else {
                 if (two_port_edge_mask && two_port_edge_mask[edge_index]) continue;
                 if (node_mask && node_mask[neighbor]) continue;
@@ -192,14 +211,14 @@ static inline __attribute__((always_inline)) int bidirectional_search(
 }
 
 int bidirectional_dijkstra(int node_count, int edge_count, const AdjacencyList *adjacency, const double *weights,
-                           const PortList *ports, const uint8_t *two_port_edge_mask, const uint8_t *edge_mask,
-                           const uint8_t *port_mask, const uint8_t *node_mask, int directed, int source, int target,
-                           BidirectionalPath *out) {
+                           const PortList *ports, const PassWeights *pass_weights, const uint8_t *two_port_edge_mask,
+                           const uint8_t *edge_mask, const uint8_t *port_mask, const uint8_t *node_mask, int directed,
+                           int source, int target, BidirectionalPath *out) {
     return ports
         ? bidirectional_search(node_count, edge_count, adjacency, weights, ports, two_port_edge_mask, edge_mask,
-                               port_mask, node_mask, directed, source, target, out, 1)
+                               port_mask, node_mask, pass_weights, directed, source, target, out, 1)
         : bidirectional_search(node_count, 0, adjacency, weights, NULL, two_port_edge_mask, NULL, NULL, node_mask,
-                               directed, source, target, out, 0);
+                               NULL, directed, source, target, out, 0);
 }
 
 /* Turn the node indices of a bidirectional result into a list of node IDs. */

@@ -2,6 +2,7 @@
 #define PYGRAPHC_CORE_BIDIRECTIONAL_DIJKSTRA_H
 
 #include "../models.h"
+#include "ports.h"
 
 /* ── Bidirectional Dijkstra (source -> target) ── */
 
@@ -14,10 +15,12 @@ typedef struct {
 } BidirectionalPath;
 
 /* Cheapest source-target path. weights are one per edge without a port list,
-   one per port with one (ports non-NULL); two_port_edge_mask is the edge mask
-   with port-masked two-port edges folded in. Returns -1 with an exception set. */
+   one per port with one (ports non-NULL, with their pass_weights);
+   two_port_edge_mask is the edge mask with port-masked two-port edges folded
+   in. Returns -1 with an exception set. */
 PYGRAPHC_INTERNAL int bidirectional_dijkstra(int node_count, int edge_count, const AdjacencyList *adjacency,
                                              const double *weights, const PortList *ports,
+                                             const PassWeights *pass_weights,
                                              const uint8_t *two_port_edge_mask, const uint8_t *edge_mask,
                                              const uint8_t *port_mask, const uint8_t *node_mask, int directed,
                                              int source, int target, BidirectionalPath *out);
