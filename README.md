@@ -56,7 +56,7 @@ each other in this order.
 
 Sparse random graphs, ~3 edges per node. Algorithm time only: node ids, edge
 lists and the networkx graph are built before the timer starts. Measured on an
-Apple M3 Pro (12 cores, macOS 26.6), CPython 3.11.11, networkx 3.6.1, best of 3
+Apple M3 Pro (12 cores, macOS 26.7.2), CPython 3.11.13, networkx 3.6.1, best of 3
 runs after one warm-up. `benchmarks/networkx_baselines.py` measures every row
 of both tables and only reports; `tests/unit_tests/test_networkx_differential.py`
 checks that pygraphc and networkx return the same results. Speed itself is
@@ -64,47 +64,47 @@ guarded by the three performance tiers described under [Tests](#tests).
 
 | Algorithm | Nodes | pygraphc | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
-| Connected Components | 1K | 0.00007s | 0.0005s | **6.5x** |
-| Connected Components | 10K | 0.0004s | 0.003s | **6.0x** |
-| Connected Components | 100K | 0.004s | 0.061s | **14x** |
-| Connected Components | 1M | 0.059s | 1.15s | **20x** |
-| Bridges | 1M | 0.223s | 12.88s | **58x** |
-| Articulation Points | 1M | 0.204s | 3.55s | **17x** |
-| BFS | 1M | 0.073s | 6.94s | **95x** |
-| Dijkstra (single-source lengths) | 1M | 0.356s | 5.00s | **14x** |
+| Connected Components | 1K | 0.000012s | 0.00017s | **14x** |
+| Connected Components | 10K | 0.00012s | 0.0019s | **15x** |
+| Connected Components | 100K | 0.0023s | 0.048s | **21x** |
+| Connected Components | 1M | 0.028s | 1.11s | **39x** |
+| Bridges | 1M | 0.16s | 12.83s | **83x** |
+| Articulation Points | 1M | 0.13s | 3.26s | **25x** |
+| BFS | 1M | 0.035s | 8.56s | **246x** |
+| Dijkstra (single-source lengths) | 1M | 0.29s | 4.01s | **14x** |
 | Shortest path, single pair, `Graph` + float64 weights | 100K | 0.0002s | 0.0015s | **7.5x** |
-| Shortest path, single pair, `Graph` + list weights | 100K | 0.0007s | 0.0015s | **2.2x** |
+| Shortest path, single pair, `Graph` + list weights | 100K | 0.00062s | 0.0012s | **1.9x** |
 | Edge paths (cutoff=5) | 80 | 0.000001s | 0.0001s | **91x** |
-| SCC (directed) | 1M | 0.129s | 4.64s | **36x** |
-| WCC (directed) | 1M | 0.029s | 1.97s | **69x** |
-| Topological sort | 1M | 0.070s | 1.86s | **27x** |
-| DAG longest path | 1M | 0.090s | 4.49s | **50x** |
-| Cycle basis | 100K | 0.018s | 17.89s | **979x** |
+| SCC (directed) | 1M | 0.26s | 2.15s | **8.2x** |
+| WCC (directed) | 1M | 0.027s | 2.01s | **74x** |
+| Topological sort | 1M | 0.084s | 2.08s | **25x** |
+| DAG longest path | 1M | 0.10s | 4.73s | **47x** |
+| Cycle basis | 100K | 0.015s | 14.70s | **996x** |
 
 Further networkx baselines, same machine and discipline, from
 `benchmarks/networkx_baselines.py`:
 
 | Algorithm | Nodes | pygraphc | networkx | Speedup |
 |-----------|------:|-------:|---------:|--------:|
-| Articulation Points | 100K | 0.007s | 0.153s | **21x** |
-| Biconnected Components | 100K | 0.015s | 0.276s | **18x** |
-| Multi-source Dijkstra lengths | 100K | 0.014s | 0.262s | **18x** |
-| Eccentricity (weighted) | 100K | 0.015s | 0.257s | **17x** |
-| Two-edge-connected components | 10K | 0.005s | 0.087s | **18x** |
-| `nodes_on_simple_paths` | 24 | 0.00001s | 0.008s | **677x** |
-| Connected Components, edge-masked view | 100K | 0.003s | 0.059s | **21x** |
-| Single-pair `shortest_path` vs `nx.dijkstra_path` | 100K | 0.0002s | 0.206s | **1000x** |
-| Single-pair `shortest_path` vs `nx.shortest_path` | 100K | 0.0002s | 0.0015s | **7.5x** |
-| the same, both sides building their graph inside the timer | 100K | 0.0033s | 0.227s | **69x** |
+| Articulation Points | 100K | 0.0041s | 0.13s | **32x** |
+| Biconnected Components | 100K | 0.010s | 0.18s | **17x** |
+| Multi-source Dijkstra lengths | 100K | 0.011s | 0.27s | **25x** |
+| Eccentricity (weighted) | 100K | 0.011s | 0.23s | **20x** |
+| Two-edge-connected components | 10K | 0.00049s | 0.071s | **145x** |
+| `nodes_on_simple_paths` | 24 | 0.0000063s | 0.0060s | **953x** |
+| Connected Components, edge-masked view | 100K | 0.0024s | 0.050s | **20x** |
+| Single-pair `shortest_path` vs `nx.dijkstra_path` | 100K | 0.00019s | 0.22s | **1160x** |
+| Single-pair `shortest_path` vs `nx.shortest_path` | 100K | 0.00016s | 0.0013s | **7.9x** |
+| the same, both sides building their graph inside the timer | 100K | 0.0025s | 0.14s | **58x** |
 
 `nx.shortest_path` dispatches to bidirectional Dijkstra for a single
 source-target pair and pygraphc does the same, so the last two rows are one
 algorithm measured under two fair disciplines: both sides prepared, and both
 sides building their graph inside the timer. Prepared, with weights as a float64
-buffer, pygraphc is 7.5x ahead; building inside the timer it is 69x ahead,
+buffer, pygraphc is 7.9x ahead; building inside the timer it is 58x ahead,
 because constructing an `nx.Graph` over 150,000 weighted edges costs about
-225 ms against 3 ms for the whole pygraphc call. The same prepared call with a
-list of floats instead of a buffer gives 2.2x — the element-by-element
+140 ms against 2.5 ms for the whole pygraphc call. The same prepared call with a
+list of floats instead of a buffer gives 1.9x — the element-by-element
 conversion of the weights costs several times the search.
 
 An earlier version of this table reported **0.16x, "the one operation where
