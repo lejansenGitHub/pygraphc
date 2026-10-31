@@ -10,50 +10,50 @@ typedef struct {
     int size;
 } MinHeap;
 
-static inline void min_heap_swap(MinHeap *h, int i, int j) {
-    int ni = h->nodes[i], nj = h->nodes[j];
-    h->nodes[i] = nj; h->nodes[j] = ni;
-    h->heap_position[ni] = j; h->heap_position[nj] = i;
+static inline void min_heap_swap(MinHeap *heap, int first_position, int second_position) {
+    int first_node = heap->nodes[first_position], second_node = heap->nodes[second_position];
+    heap->nodes[first_position] = second_node; heap->nodes[second_position] = first_node;
+    heap->heap_position[first_node] = second_position; heap->heap_position[second_node] = first_position;
 }
 
 /* 4-ary heap: shallower tree = fewer cache misses in sift_down */
 #define MIN_HEAP_ARITY 4
 
-static inline void min_heap_sift_up(MinHeap *h, int i) {
-    while (i > 0) {
-        int p = (i - 1) / MIN_HEAP_ARITY;
-        if (h->distance[h->nodes[i]] < h->distance[h->nodes[p]]) {
-            min_heap_swap(h, i, p);
-            i = p;
+static inline void min_heap_sift_up(MinHeap *heap, int position) {
+    while (position > 0) {
+        int parent_position = (position - 1) / MIN_HEAP_ARITY;
+        if (heap->distance[heap->nodes[position]] < heap->distance[heap->nodes[parent_position]]) {
+            min_heap_swap(heap, position, parent_position);
+            position = parent_position;
         } else break;
     }
 }
 
-static inline void min_heap_sift_down(MinHeap *h, int i) {
+static inline void min_heap_sift_down(MinHeap *heap, int position) {
     while (1) {
-        int first = MIN_HEAP_ARITY * i + 1;
-        if (first >= h->size) break;
-        int last = first + MIN_HEAP_ARITY;
-        if (last > h->size) last = h->size;
-        int s = i;
-        double sd = h->distance[h->nodes[s]];
-        for (int c = first; c < last; c++) {
-            double cd = h->distance[h->nodes[c]];
-            if (cd < sd) { s = c; sd = cd; }
+        int first_child = MIN_HEAP_ARITY * position + 1;
+        if (first_child >= heap->size) break;
+        int end_child = first_child + MIN_HEAP_ARITY;
+        if (end_child > heap->size) end_child = heap->size;
+        int smallest_position = position;
+        double smallest_distance = heap->distance[heap->nodes[smallest_position]];
+        for (int child_position = first_child; child_position < end_child; child_position++) {
+            double child_distance = heap->distance[heap->nodes[child_position]];
+            if (child_distance < smallest_distance) { smallest_position = child_position; smallest_distance = child_distance; }
         }
-        if (s != i) { min_heap_swap(h, i, s); i = s; }
+        if (smallest_position != position) { min_heap_swap(heap, position, smallest_position); position = smallest_position; }
         else break;
     }
 }
 
-static inline int min_heap_pop(MinHeap *h) {
-    int node = h->nodes[0];
-    h->heap_position[node] = -1;
-    h->size--;
-    if (h->size > 0) {
-        h->nodes[0] = h->nodes[h->size];
-        h->heap_position[h->nodes[0]] = 0;
-        min_heap_sift_down(h, 0);
+static inline int min_heap_pop(MinHeap *heap) {
+    int node = heap->nodes[0];
+    heap->heap_position[node] = -1;
+    heap->size--;
+    if (heap->size > 0) {
+        heap->nodes[0] = heap->nodes[heap->size];
+        heap->heap_position[heap->nodes[0]] = 0;
+        min_heap_sift_down(heap, 0);
     }
     return node;
 }

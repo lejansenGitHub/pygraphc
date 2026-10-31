@@ -4,32 +4,32 @@
 /* Walk the two predecessor chains from the meeting edge into a single path.
    meet_forward and meet_backward are the endpoints of the meeting edge; they
    are the same node when the searches met on a node rather than an edge. */
-static int bidirectional_build_path(const int *prev_forward, const int *prev_backward,
-                           int meet_forward, int meet_backward, BidirectionalPath *out) {
+static int bidirectional_build_path(const int *predecessor_forward, const int *predecessor_backward,
+                                    int meet_forward, int meet_backward, BidirectionalPath *out) {
     int forward_length = 0;
-    for (int node = meet_forward; node != -1; node = prev_forward[node]) forward_length++;
-    int backward_start = (meet_forward == meet_backward) ? prev_backward[meet_backward]
+    for (int node = meet_forward; node != -1; node = predecessor_forward[node]) forward_length++;
+    int backward_start = (meet_forward == meet_backward) ? predecessor_backward[meet_backward]
                                                          : meet_backward;
     int backward_length = 0;
-    for (int node = backward_start; node != -1; node = prev_backward[node]) backward_length++;
+    for (int node = backward_start; node != -1; node = predecessor_backward[node]) backward_length++;
 
     int total = forward_length + backward_length;
     int *path = (int *)malloc((size_t)total * sizeof(int));
     if (!path) { PyErr_NoMemory(); return -1; }
     int node = meet_forward;
-    for (int i = forward_length - 1; i >= 0; i--) { path[i] = node; node = prev_forward[node]; }
+    for (int position = forward_length - 1; position >= 0; position--) { path[position] = node; node = predecessor_forward[node]; }
     node = backward_start;
-    for (int i = forward_length; i < total; i++) { path[i] = node; node = prev_backward[node]; }
+    for (int position = forward_length; position < total; position++) { path[position] = node; node = predecessor_backward[node]; }
 
     out->path = path;
     out->path_length = total;
     return 0;
 }
 
-/* Whether a search has a valid tentative distance for a node. dist entries are
+/* Whether a search has a valid tentative distance for a node. distance entries are
    left uninitialised, so this is what tells a fresh node from a reached one. */
-static inline int bidirectional_reached(const int *pos, const uint8_t *settled, int node) {
-    return pos[node] != -1 || settled[node];
+static inline int bidirectional_reached(const int *heap_position, const uint8_t *settled, int node) {
+    return heap_position[node] != -1 || settled[node];
 }
 
 /* Bidirectional Dijkstra over the CSR adjacency. The forward search follows
@@ -38,89 +38,89 @@ static inline int bidirectional_reached(const int *pos, const uint8_t *settled, 
    smaller top key is expanded next, the best source-target weight seen over
    relaxed edges is tracked as the searches proceed, and the search stops once
    a node has been settled by both. Returns -1 on error. */
-int bidirectional_dijkstra(int n, const AdjacencyList *al, const double *edge_weights,
-                  const uint8_t *edge_mask, const uint8_t *node_mask,
-                  int directed, int source, int target, BidirectionalPath *out) {
+int bidirectional_dijkstra(int node_count, const AdjacencyList *adjacency, const double *edge_weights,
+                           const uint8_t *edge_mask, const uint8_t *node_mask,
+                           int directed, int source, int target, BidirectionalPath *out) {
     out->weight = HUGE_VAL;
     out->path = NULL;
     out->path_length = 0;
 
-    const int *back_offset = directed ? al->reverse_offset : al->offset;
-    const int *back_adj = directed ? al->reverse_neighbors : al->neighbors;
-    const int *back_eid = directed ? al->reverse_edge_indices : al->edge_indices;
-    if (!back_offset) return 0;  /* directed graph without edges */
+    const int *backward_offset = directed ? adjacency->reverse_offset : adjacency->offset;
+    const int *backward_neighbors = directed ? adjacency->reverse_neighbors : adjacency->neighbors;
+    const int *backward_edge_indices = directed ? adjacency->reverse_edge_indices : adjacency->edge_indices;
+    if (!backward_offset) return 0;  /* directed graph without edges */
 
-    double *dist = (double *)malloc(2 * (size_t)n * sizeof(double));
-    int *prev = (int *)malloc(2 * (size_t)n * sizeof(int));
-    int *heap = (int *)malloc(2 * (size_t)n * sizeof(int));
-    int *pos = (int *)malloc(2 * (size_t)n * sizeof(int));
-    uint8_t *settled = (uint8_t *)calloc(2 * (size_t)n, 1);
-    if (!dist || !prev || !heap || !pos || !settled) {
-        free(dist); free(prev); free(heap); free(pos); free(settled);
+    double *distance = (double *)malloc(2 * (size_t)node_count * sizeof(double));
+    int *predecessor = (int *)malloc(2 * (size_t)node_count * sizeof(int));
+    int *heap = (int *)malloc(2 * (size_t)node_count * sizeof(int));
+    int *heap_position = (int *)malloc(2 * (size_t)node_count * sizeof(int));
+    uint8_t *settled = (uint8_t *)calloc(2 * (size_t)node_count, 1);
+    if (!distance || !predecessor || !heap || !heap_position || !settled) {
+        free(distance); free(predecessor); free(heap); free(heap_position); free(settled);
         PyErr_NoMemory();
         return -1;
     }
-    memset(pos, -1, 2 * (size_t)n * sizeof(int));
+    memset(heap_position, -1, 2 * (size_t)node_count * sizeof(int));
 
-    double *dist_forward = dist, *dist_backward = dist + n;
-    int *prev_forward = prev, *prev_backward = prev + n;
-    int *pos_forward = pos, *pos_backward = pos + n;
-    uint8_t *settled_forward = settled, *settled_backward = settled + n;
+    double *distance_forward = distance, *distance_backward = distance + node_count;
+    int *predecessor_forward = predecessor, *predecessor_backward = predecessor + node_count;
+    int *heap_position_forward = heap_position, *heap_position_backward = heap_position + node_count;
+    uint8_t *settled_forward = settled, *settled_backward = settled + node_count;
 
-    MinHeap heap_forward = {dist_forward, heap, pos_forward, 1};
-    MinHeap heap_backward = {dist_backward, heap + n, pos_backward, 1};
-    dist_forward[source] = 0.0; prev_forward[source] = -1;
-    heap_forward.nodes[0] = source; pos_forward[source] = 0;
-    dist_backward[target] = 0.0; prev_backward[target] = -1;
-    heap_backward.nodes[0] = target; pos_backward[target] = 0;
+    MinHeap heap_forward = {distance_forward, heap, heap_position_forward, 1};
+    MinHeap heap_backward = {distance_backward, heap + node_count, heap_position_backward, 1};
+    distance_forward[source] = 0.0; predecessor_forward[source] = -1;
+    heap_forward.nodes[0] = source; heap_position_forward[source] = 0;
+    distance_backward[target] = 0.0; predecessor_backward[target] = -1;
+    heap_backward.nodes[0] = target; heap_position_backward[target] = 0;
 
     double best_weight = HUGE_VAL;
     int meet_forward = -1, meet_backward = -1;
 
     while (heap_forward.size > 0 && heap_backward.size > 0) {
-        int expand_forward = dist_forward[heap_forward.nodes[0]]
-                          <= dist_backward[heap_backward.nodes[0]];
+        int expand_forward = distance_forward[heap_forward.nodes[0]]
+                          <= distance_backward[heap_backward.nodes[0]];
         MinHeap *frontier = expand_forward ? &heap_forward : &heap_backward;
-        double *dist_near = expand_forward ? dist_forward : dist_backward;
-        const double *dist_far = expand_forward ? dist_backward : dist_forward;
-        int *prev_near = expand_forward ? prev_forward : prev_backward;
+        double *distance_near = expand_forward ? distance_forward : distance_backward;
+        const double *distance_far = expand_forward ? distance_backward : distance_forward;
+        int *predecessor_near = expand_forward ? predecessor_forward : predecessor_backward;
         uint8_t *settled_near = expand_forward ? settled_forward : settled_backward;
         const uint8_t *settled_far = expand_forward ? settled_backward : settled_forward;
-        const int *pos_near = expand_forward ? pos_forward : pos_backward;
-        const int *pos_far = expand_forward ? pos_backward : pos_forward;
-        const int *offset = expand_forward ? al->offset : back_offset;
-        const int *adj = expand_forward ? al->neighbors : back_adj;
-        const int *eid = expand_forward ? al->edge_indices : back_eid;
+        const int *heap_position_near = expand_forward ? heap_position_forward : heap_position_backward;
+        const int *heap_position_far = expand_forward ? heap_position_backward : heap_position_forward;
+        const int *offset = expand_forward ? adjacency->offset : backward_offset;
+        const int *neighbors = expand_forward ? adjacency->neighbors : backward_neighbors;
+        const int *edge_indices = expand_forward ? adjacency->edge_indices : backward_edge_indices;
 
-        int u = min_heap_pop(frontier);
-        settled_near[u] = 1;
-        if (bidirectional_reached(pos_far, settled_far, u) && dist_near[u] + dist_far[u] < best_weight) {
-            best_weight = dist_near[u] + dist_far[u];
-            meet_forward = u; meet_backward = u;
+        int node = min_heap_pop(frontier);
+        settled_near[node] = 1;
+        if (bidirectional_reached(heap_position_far, settled_far, node) && distance_near[node] + distance_far[node] < best_weight) {
+            best_weight = distance_near[node] + distance_far[node];
+            meet_forward = node; meet_backward = node;
         }
-        if (settled_far[u]) break;
+        if (settled_far[node]) break;
 
-        for (int i = offset[u]; i < offset[u + 1]; i++) {
-            if (edge_mask && edge_mask[eid[i]]) continue;
-            int v = adj[i];
-            if (node_mask && node_mask[v]) continue;
-            double reach = dist_near[u] + edge_weights[eid[i]];
-            if (bidirectional_reached(pos_far, settled_far, v) && reach + dist_far[v] < best_weight) {
-                best_weight = reach + dist_far[v];
-                meet_forward = expand_forward ? u : v;
-                meet_backward = expand_forward ? v : u;
+        for (int slot = offset[node]; slot < offset[node + 1]; slot++) {
+            if (edge_mask && edge_mask[edge_indices[slot]]) continue;
+            int neighbor = neighbors[slot];
+            if (node_mask && node_mask[neighbor]) continue;
+            double reach = distance_near[node] + edge_weights[edge_indices[slot]];
+            if (bidirectional_reached(heap_position_far, settled_far, neighbor) && reach + distance_far[neighbor] < best_weight) {
+                best_weight = reach + distance_far[neighbor];
+                meet_forward = expand_forward ? node : neighbor;
+                meet_backward = expand_forward ? neighbor : node;
             }
-            if (!bidirectional_reached(pos_near, settled_near, v)) {
-                dist_near[v] = reach;
-                prev_near[v] = u;
-                int slot = frontier->size++;
-                frontier->nodes[slot] = v;
-                frontier->heap_position[v] = slot;
-                min_heap_sift_up(frontier, slot);
-            } else if (!settled_near[v] && reach < dist_near[v]) {
-                dist_near[v] = reach;
-                prev_near[v] = u;
-                min_heap_sift_up(frontier, frontier->heap_position[v]);
+            if (!bidirectional_reached(heap_position_near, settled_near, neighbor)) {
+                distance_near[neighbor] = reach;
+                predecessor_near[neighbor] = node;
+                int heap_slot = frontier->size++;
+                frontier->nodes[heap_slot] = neighbor;
+                frontier->heap_position[neighbor] = heap_slot;
+                min_heap_sift_up(frontier, heap_slot);
+            } else if (!settled_near[neighbor] && reach < distance_near[neighbor]) {
+                distance_near[neighbor] = reach;
+                predecessor_near[neighbor] = node;
+                min_heap_sift_up(frontier, frontier->heap_position[neighbor]);
             }
         }
     }
@@ -128,21 +128,21 @@ int bidirectional_dijkstra(int n, const AdjacencyList *al, const double *edge_we
     int status = 0;
     if (best_weight < HUGE_VAL) {
         out->weight = best_weight;
-        status = bidirectional_build_path(prev_forward, prev_backward, meet_forward, meet_backward, out);
+        status = bidirectional_build_path(predecessor_forward, predecessor_backward, meet_forward, meet_backward, out);
     }
 
-    free(dist); free(prev); free(heap); free(pos); free(settled);
+    free(distance); free(predecessor); free(heap); free(heap_position); free(settled);
     return status;
 }
 
 /* Turn the node indices of a bidirectional result into a list of node IDs. */
-PyObject *bidirectional_path_to_list(const BidirectionalPath *bp, const NodeIdContext *ctx) {
-    PyObject *path = PyList_New(bp->path_length);
+PyObject *bidirectional_path_to_list(const BidirectionalPath *bidirectional_path, const NodeIdContext *context) {
+    PyObject *path = PyList_New(bidirectional_path->path_length);
     if (!path) return NULL;
-    for (int i = 0; i < bp->path_length; i++) {
-        PyObject *item = ctx->node_id_items[bp->path[i]];
+    for (int position = 0; position < bidirectional_path->path_length; position++) {
+        PyObject *item = context->node_id_items[bidirectional_path->path[position]];
         Py_INCREF(item);
-        PyList_SET_ITEM(path, i, item);
+        PyList_SET_ITEM(path, position, item);
     }
     return path;
 }
