@@ -128,19 +128,23 @@ def main() -> int:
     table, changed = comparison_table(base, head, arguments.threshold)
     heading = f"Instruction counts against the merge base ({len(changed)} beyond {arguments.threshold:.1%})"
     report = f"### {heading}\n\n{table}\n"
-    print(report)  # noqa: T201 — the table is the command's output
+    print(report, flush=True)  # noqa: T201 — the table is the command's output
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with Path(summary).open("a", encoding="utf-8") as summary_file:
             summary_file.write(report)
     if changed:
-        print(  # noqa: T201 — the failure reason
-            f"{len(changed)} count(s) changed: {', '.join(changed)}; "
-            "review them and label the pull request accept-instruction-change",
-            file=sys.stderr,
-        )
+        print(failure_message(len(changed), arguments.threshold), file=sys.stderr)  # noqa: T201 — the failure reason
         return 1
     return 0
+
+
+def failure_message(changed_count: int, threshold: float) -> str:
+    """One line after the tables: how many counts moved; their names are the rows marked **changed**."""
+    return (
+        f"{changed_count} count(s) moved by more than {threshold:.1%}, marked **changed** in the tables above; "
+        "review them and label the pull request accept-instruction-change"
+    )
 
 
 if __name__ == "__main__":
