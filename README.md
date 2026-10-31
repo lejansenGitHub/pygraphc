@@ -542,7 +542,29 @@ incompletely: `critical_edges()` returns the edge indices of every edge whose
 removal disconnects its component, two-port and multiport edges alike, and
 `edge_indices_at(node_ids)` finds edges by their port nodes. On a graph of
 two-port edges they behave as before, and the `*_with_branch_ids` methods stay as they
-are.
+are. `critical_edges()` is available on every graph and view; `edge_indices_at`
+is not built yet, its exact matching rule is still open.
+
+#### Critical edges, critical nodes and blocks
+
+Computed on the active ports only (case 11), by one depth-first search that
+treats an edge with three or more ports as a single step between its port
+nodes:
+
+- an edge is **critical** when removing it disconnects nodes of its ports: a
+  bridge for a two-port edge;
+- a node is **critical** (`articulation_points`) when removing it disconnects
+  other nodes; an edge with one active port never makes its node critical;
+- **blocks** (`biconnected_components`) never split at a multiport edge, so a
+  tree-shaped edge with k ports is one block of its k nodes (case 12), and an
+  edge on a cycle merges with the cycle's block;
+- `two_edge_connected_components` are the components left once every
+  critical edge is removed.
+
+`nodes_on_simple_paths` stays unavailable on graphs with multiport edges: a
+simple path enters and leaves an edge through one port each, so not every node
+of a block lies on a path through it, and the block-based shortcut would
+answer wrongly.
 
 #### Methods not yet available on ports
 

@@ -138,9 +138,9 @@ static PyMethodDef methods[] = {
     {"edge_indices_ctx", py_edge_indices_ctx, METH_VARARGS,
      "edge_indices_ctx(capsule, u, v[, edge_mask]) -> list[int]\n\n"
      "Edge indices between u and v via CSR."},
-    {"bridges_as_edge_indices_ctx", py_bridges_as_edge_indices_ctx, METH_VARARGS,
-     "bridges_as_edge_indices_ctx(capsule[, edge_mask, node_mask]) -> list[int]\n\n"
-     "Bridge edge indices (for masked two_edge_connected_components)."},
+    {"critical_edges_ctx", py_critical_edges_ctx, METH_VARARGS,
+     "critical_edges_ctx(capsule[, edge_mask, node_mask, port_mask]) -> list[int]\n\n"
+     "Indices of the edges whose removal disconnects their component."},
     {"cycle_basis_ctx", py_cycle_basis_ctx, METH_VARARGS,
      "cycle_basis_ctx(capsule[, edge_mask, node_mask]) -> list[list[NodeId]]\n\n"
      "Fundamental cycle basis of an undirected graph."},

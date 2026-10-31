@@ -16,7 +16,6 @@ from pygraphc._core import bfs_ctx as _bfs_ctx
 from pygraphc._core import biconnected_component_edge_labels_ctx as _biconnected_component_edge_labels_ctx
 from pygraphc._core import biconnected_components_by_node_id as _biconnected_components_by_node_id
 from pygraphc._core import biconnected_components_ctx as _biconnected_components_ctx
-from pygraphc._core import bridges_as_edge_indices_ctx as _bridges_as_edge_indices_ctx
 from pygraphc._core import bridges_by_node_id as _bridges_by_node_id
 from pygraphc._core import bridges_ctx as _bridges_ctx
 from pygraphc._core import component_labels_ctx as _component_labels_ctx
@@ -25,6 +24,7 @@ from pygraphc._core import connected_components_by_node_id_split as _connected_c
 from pygraphc._core import connected_components_ctx as _connected_components_ctx
 from pygraphc._core import connected_components_with_branches_ctx as _connected_components_with_branches_ctx
 from pygraphc._core import connected_components_with_branches_remapped as _connected_components_with_branches_remapped
+from pygraphc._core import critical_edges_ctx as _critical_edges_ctx
 from pygraphc._core import cycle_basis_ctx as _cycle_basis_ctx
 from pygraphc._core import dag_longest_path_ctx as _dag_longest_path_ctx
 from pygraphc._core import degree_ctx as _degree_ctx
@@ -1234,9 +1234,20 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         return result
 
     def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
-        """Return bridge edges as (node_id, node_id) pairs."""
+        """Return bridge edges as (node_id, node_id) pairs; on a graph with multiport edges, see ``critical_edges``."""
         self._require_undirected("bridges")
         result: list[tuple[NodeIdT, NodeIdT]] = _bridges_ctx(self._graph_capsule)
+        return result
+
+    def critical_edges(self) -> list[EdgeIndex]:
+        """Indices of the edges whose removal disconnects some of their active ports.
+
+        On graphs of two-port edges these are the bridges. A multiport edge is
+        critical when removing it separates nodes of its ports; an edge with at
+        most one active port never is.
+        """
+        self._require_undirected("critical_edges")
+        result: list[EdgeIndex] = _critical_edges_ctx(self._graph_capsule)
         return result
 
     def bridges_with_branch_ids(self) -> list[tuple[NodeIdT, NodeIdT, BranchIdT]]:
@@ -1439,15 +1450,15 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     def two_edge_connected_components(
         self,
     ) -> Generator[set[NodeIdT], None, None]:
-        """Yield 2-edge-connected components (bridges removed, then CC)."""
+        """Yield 2-edge-connected components: the components left once every critical edge is removed."""
         self._require_undirected("two_edge_connected_components")
-        bridge_edge_indices: list[int] = _bridges_as_edge_indices_ctx(self._graph_capsule)
-        if not bridge_edge_indices:
+        critical_edge_indices: list[int] = _critical_edges_ctx(self._graph_capsule)
+        if not critical_edge_indices:
             yield from self.connected_components()
             return
         excluded_edges = bytearray(self.edge_count)
-        for idx in bridge_edge_indices:
-            excluded_edges[idx] = 1
+        for edge_index in critical_edge_indices:
+            excluded_edges[edge_index] = 1
         yield from _connected_components_ctx(self._graph_capsule, excluded_edges)
 
     def nodes_on_simple_paths(
@@ -1457,6 +1468,8 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     ) -> set[NodeIdT]:
         """Return all nodes on any simple path from source to any target."""
         self._require_undirected("nodes_on_simple_paths")
+        if self._has_multiport_edges:
+            raise NotImplementedError("nodes_on_simple_paths is not available on graphs with multiport edges")
         node_count = len(self._node_ids)
         if node_count == 0:
             return set()
@@ -1676,6 +1689,10 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         view._excluded_ports = excluded_ports
         return view
 
+    def _has_masked_port(self, edge_index: int) -> bool:
+        excluded_ports = self._excluded_ports
+        return excluded_ports is not None and any(excluded_ports[port] for port in self._graph._ports_of(edge_index))
+
     def _masks(self) -> tuple[bytearray, bytearray | None, bytearray | None]:
         """Edge, node and port masks, in the order the _core kernels take them."""
         return self._excluded_edges, self._excluded_nodes, self._excluded_ports
@@ -1774,8 +1791,6 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         Requires the base Graph to have been constructed with branch_ids.
         """
-        if self._excluded_ports is not None:
-            raise _port_mask_unsupported("bridges_with_branch_ids")
         self._require_undirected("bridges_with_branch_ids")
         if self._graph._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
@@ -1785,7 +1800,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             result.extend(
                 (first_node_id, second_node_id, self._graph._branch_ids[edge_idx])
                 for edge_idx in self._graph.edge_indices(first_node_id, second_node_id)
-                if not self._excluded_edges[edge_idx]
+                if not self._excluded_edges[edge_idx] and not self._has_masked_port(edge_idx)
             )
         return result
 
@@ -1919,30 +1934,26 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
         """Return bridge edges as (node_id, node_id) pairs."""
-        if self._excluded_ports is not None:
-            raise _port_mask_unsupported("bridges")
         self._require_undirected("bridges")
-        result: list[tuple[NodeIdT, NodeIdT]] = _bridges_ctx(
-            self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
-        )
+        result: list[tuple[NodeIdT, NodeIdT]] = _bridges_ctx(self._graph._graph_capsule, *self._masks())
+        return result
+
+    def critical_edges(self) -> list[EdgeIndex]:
+        """Indices of the edges whose removal disconnects some of their active ports, see ``Graph.critical_edges``."""
+        self._require_undirected("critical_edges")
+        result: list[EdgeIndex] = _critical_edges_ctx(self._graph._graph_capsule, *self._masks())
         return result
 
     def articulation_points(self) -> set[NodeIdT]:
         """Return the set of articulation points."""
-        if self._excluded_ports is not None:
-            raise _port_mask_unsupported("articulation_points")
         self._require_undirected("articulation_points")
-        result: set[NodeIdT] = _articulation_points_ctx(
-            self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
-        )
+        result: set[NodeIdT] = _articulation_points_ctx(self._graph._graph_capsule, *self._masks())
         return result
 
     def biconnected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each biconnected component as a set of node IDs."""
-        if self._excluded_ports is not None:
-            raise _port_mask_unsupported("biconnected_components")
         self._require_undirected("biconnected_components")
-        yield from _biconnected_components_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        yield from _biconnected_components_ctx(self._graph._graph_capsule, *self._masks())
 
     def component_labels(self) -> memoryview:
         """Connected component label per node index as an int32 view, see ``Graph.component_labels``.

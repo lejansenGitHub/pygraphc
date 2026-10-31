@@ -2,8 +2,8 @@
 
 One edge with a port at every node grows the number of ports of a single
 edge, a chain of three-port edges grows the depth, and random edges with two
-to four ports grow the plain size. BFS and Dijkstra expand each multiport edge
-once, so they may not pay per pair of ports.
+to four ports grow the plain size. BFS, Dijkstra and the Tarjan search expand
+each multiport edge once, so they may not pay per pair of ports.
 """
 
 from collections.abc import Callable
@@ -33,6 +33,10 @@ OPERATIONS: dict[str, Operation] = {
     "bfs": lambda graph: lambda: graph.bfs(0),
     "shortest_path_lengths": lambda graph: _shortest_path_lengths_with_unit_weights(graph),
     "shortest_path": lambda graph: _shortest_path_with_unit_weights(graph),
+    "critical_edges": lambda graph: graph.critical_edges,
+    "articulation_points": lambda graph: graph.articulation_points,
+    "biconnected_components": lambda graph: lambda: list(graph.biconnected_components()),
+    "two_edge_connected_components": lambda graph: lambda: list(graph.two_edge_connected_components()),
 }
 
 

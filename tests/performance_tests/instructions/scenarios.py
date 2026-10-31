@@ -524,6 +524,18 @@ def _port_shortest_path() -> Measured:
     return lambda: graph.shortest_path(weights, 0, SIZE - 1)
 
 
+@register("port_critical_edges/random_ports_20k")
+def _port_critical_edges() -> Measured:
+    graph = _port_graph()
+    return graph.critical_edges
+
+
+@register("port_biconnected_components/random_ports_20k")
+def _port_biconnected_components() -> Measured:
+    graph = _port_graph()
+    return lambda: list(graph.biconnected_components())
+
+
 # ── Structure learning ──
 
 

@@ -231,7 +231,7 @@ def test_methods_of_later_stages_say_so() -> None:
 
     # --- Assert ---
     with pytest.raises(NotImplementedError, match="multiport edges"):
-        graph.articulation_points()
+        graph.cycle_basis()
     with pytest.raises(NotImplementedError, match="multiport edges"):
         graph.with_edges([(1, 3)])
     with pytest.raises(NotImplementedError, match="multiport edges"):
@@ -243,7 +243,7 @@ def test_methods_of_later_stages_refuse_a_port_mask_on_two_port_edges() -> None:
     view = Graph([1, 2, 3], [(1, 2), (2, 3)]).without_ports([(0, 1)])
 
     with pytest.raises(NotImplementedError, match="port masks"):
-        view.bridges()
+        view.cycle_basis()
 
 
 _METHODS_WITHOUT_PORT_MASKS = {
@@ -259,10 +259,6 @@ _METHODS_WITHOUT_PORT_MASKS = {
     "out_degree": lambda view: view.out_degree(2),
     "in_degree": lambda view: view.in_degree(2),
     "all_edge_paths": lambda view: view.all_edge_paths(1, 3),
-    "bridges": lambda view: view.bridges(),
-    "bridges_with_branch_ids": lambda view: view.bridges_with_branch_ids(),
-    "articulation_points": lambda view: view.articulation_points(),
-    "biconnected_components": lambda view: list(view.biconnected_components()),
     "strongly_connected_components": lambda view: list(view.strongly_connected_components()),
     "topological_sort": lambda view: view.topological_sort(),
     "dag_longest_path": lambda view: view.dag_longest_path(),
@@ -292,6 +288,93 @@ def test_pure_python_methods_refuse_multiport_edges() -> None:
         _ = graph.is_multigraph
     with pytest.raises(NotImplementedError, match="split_node"):
         graph.split_node(2, 9, [0])
+    with pytest.raises(NotImplementedError, match="nodes_on_simple_paths"):
+        graph.nodes_on_simple_paths(1, [5])
+
+
+# ── Critical edges, critical nodes and blocks ──
+
+
+def _sorted_blocks(view: object) -> list[list[int]]:
+    return sorted(sorted(block) for block in view.biconnected_components())  # type: ignore[attr-defined]
+
+
+def test_tree_of_edges_has_every_edge_critical() -> None:
+    """D14 and case 12: in a tree, every edge is critical, its inner port nodes are critical, each edge is one block."""
+    graph = _three_port_edge_between_two_port_edges()
+
+    # --- Assert ---
+    assert sorted(graph.critical_edges()) == [0, 1, 2]
+    assert graph.articulation_points() == {2, 4}
+    assert _sorted_blocks(graph) == [[1, 2], [2, 3, 4], [4, 5]]
+
+
+def test_multiport_edge_on_a_cycle_is_not_critical() -> None:
+    """A three-port edge whose ports are also joined by two-port edges: one block, nothing critical."""
+    graph = Graph([1, 2, 3], [(1, 2), (2, 3), (1, 2, 3)])
+
+    # --- Assert ---
+    assert graph.critical_edges() == []
+    assert graph.articulation_points() == set()
+    assert _sorted_blocks(graph) == [[1, 2, 3]]
+
+
+def test_blocks_merge_at_a_multiport_edge() -> None:
+    """D14: the edge (1, 2, 4) lies on the cycle 1-2-3 and holds node 4, so all four nodes form one block."""
+    graph = Graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 1), (1, 2, 4)])
+
+    # --- Assert ---
+    assert _sorted_blocks(graph) == [[1, 2, 3, 4]]
+    assert graph.articulation_points() == set()
+    assert graph.critical_edges() == [3]
+    assert sorted(sorted(component) for component in graph.two_edge_connected_components()) == [[1, 2, 3], [4]]
+
+
+def test_masking_case_3_an_edge_with_one_active_port_is_never_critical() -> None:
+    """Case 3: the three-port edge keeps only its port at node 2, so neither it nor node 2 is critical through it."""
+    view = Graph([1, 2, 3, 4], [(1, 2), (2, 3, 4)]).without_ports([(1, 1), (1, 2)])
+
+    # --- Assert ---
+    assert view.critical_edges() == [0]
+    assert view.articulation_points() == set()
+    assert _sorted_blocks(view) == [[1, 2]]
+
+
+def test_masking_case_11_critical_elements_on_active_ports_only() -> None:
+    """Case 11: masking the port at node 3 breaks the cycle, so the remaining edges become critical."""
+    graph = Graph([1, 2, 3], [(1, 2), (2, 3), (1, 3, 2)])
+    view = graph.without_ports([(2, 1)])
+
+    # --- Assert ---
+    assert graph.critical_edges() == []
+    assert sorted(view.critical_edges()) == [1]
+    assert view.articulation_points() == {2}
+    assert _sorted_blocks(view) == [[1, 2], [2, 3]]
+
+
+def test_pair_methods_raise_on_multiport_graphs() -> None:
+    """D13: a node pair cannot name an edge with more than two ports, so the pair methods point to critical_edges()."""
+    graph = _three_port_edge_between_two_port_edges()
+
+    # --- Assert ---
+    with pytest.raises(NotImplementedError, match=r"critical_edges\(\)"):
+        graph.bridges()
+    with pytest.raises(NotImplementedError, match=r"critical_edges\(\)"):
+        graph.bridges_with_branch_ids()
+    with pytest.raises(NotImplementedError, match="multiport edges"):
+        graph.edge_indices(2, 3)
+
+
+def test_port_mask_on_two_port_edges_in_critical_elements() -> None:
+    """Case 5 in the Tarjan family: a parallel edge with a masked port no longer protects the other one."""
+    graph = Graph([1, 2, 3], [(1, 2), (1, 2), (2, 3)], branch_ids=[10, 11, 12])
+    view = graph.without_ports([(1, 0)])
+
+    # --- Assert ---
+    assert graph.bridges() == [(2, 3)]
+    assert sorted(view.bridges()) == [(1, 2), (2, 3)]
+    assert sorted(view.bridges_with_branch_ids()) == [(1, 2, 10), (2, 3, 12)]
+    assert sorted(view.critical_edges()) == [0, 2]
 
 
 # ── Graphs of two-port edges follow the same rules ──

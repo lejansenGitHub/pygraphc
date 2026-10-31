@@ -46,7 +46,7 @@ PYGRAPHC_INTERNAL PyObject *py_biconnected_components_by_node_id(PyObject *self,
 PYGRAPHC_INTERNAL PyObject *py_bridges_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_articulation_points_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_biconnected_components_ctx(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_bridges_as_edge_indices_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_critical_edges_ctx(PyObject *self, PyObject *args);
 
 /* traversal.c */
 PYGRAPHC_INTERNAL PyObject *py_bfs(PyObject *self, PyObject *args);
