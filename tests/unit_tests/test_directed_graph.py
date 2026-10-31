@@ -479,7 +479,7 @@ class TestGraphViewDirected:
     def test_with_edges_propagates_directed(self):
         graph = Graph([1, 2], [(1, 2)], directed=True)
         view = graph.with_edges([(2, 3)])
-        # _added_graph should be directed
+        # _rebuilt_graph should be directed
         assert view._graph._directed is True
 
     def test_view_bfs_directed(self):

@@ -243,20 +243,20 @@ def quotient(
     the sorted block list); the meta edges come back in edge id order. The
     partition must name a block for every node of the graph.
     """
-    block_nodes = sorted(set(partition.block_of.values()))
-    block_index = {block_id: index for index, block_id in enumerate(block_nodes)}
+    block_ids = sorted(set(partition.block_of.values()))
+    label_by_block_id = {block_id: index for index, block_id in enumerate(block_ids)}
     kernel = graph._kernel
-    labels = memoryview(array("i", [block_index[partition.block_of[node_id]] for node_id in kernel.nodes]))
+    labels = memoryview(array("i", [label_by_block_id[partition.block_of[node_id]] for node_id in kernel.nodes]))
     from_labels, to_labels, crossing_indices, internal_indices = kernel.restricted_to(crossing).quotient_edges(labels)
     endpoints: dict[EdgeId, tuple[int, int]] = {
-        kernel.edge_ids[index]: (block_nodes[from_label], block_nodes[to_label])
+        kernel.edge_ids[index]: (block_ids[from_label], block_ids[to_label])
         for from_label, to_label, index in zip(from_labels, to_labels, crossing_indices, strict=True)
     }
     internal: dict[int, list[EdgeId]] = {}
     for index in internal_indices:
         edge_id = kernel.edge_ids[index]
         internal.setdefault(partition.block_of[graph.endpoints[edge_id][0]], []).append(edge_id)
-    return MultiGraph(block_nodes, endpoints), internal
+    return MultiGraph(block_ids, endpoints), internal
 
 
 def lift(
@@ -284,7 +284,7 @@ class Leaf(Generic[EdgeId]):
 
     Equality and hashing are the generated ones over the edge id. A leaf has
     no children, so neither can recurse and there is nothing to cache: the
-    interior nodes below cache their hash because a structural one would walk
+    interior tree nodes below cache their hash because a structural one would walk
     their subtree. One leaf exists per edge of the input, so this constructor
     is the busiest in the module and stays as thin as the dataclass allows.
     """
@@ -378,17 +378,19 @@ def _canonical_post_order(tree: SPTree[EdgeId]) -> list[SPTree[EdgeId]]:
     result is the same in every process. Parallel children of a tree produced
     by ``reduce`` have disjoint leaf sets, so their smallest leaves differ.
     """
-    smallest_leaf: dict[int, tuple[int, str, int | str]] = {}
+    smallest_leaf_key_by_tree_node: dict[int, tuple[int, str, int | str]] = {}
     for node in _post_order(tree):
         if isinstance(node, Leaf):
-            smallest_leaf[id(node)] = _order_key(node.edge_id)
+            smallest_leaf_key_by_tree_node[id(node)] = _order_key(node.edge_id)
         else:
-            smallest_leaf[id(node)] = min(smallest_leaf[id(child)] for child in node.children)
+            smallest_leaf_key_by_tree_node[id(node)] = min(
+                smallest_leaf_key_by_tree_node[id(child)] for child in node.children
+            )
 
     def ordered_children(node: Series[EdgeId] | Parallel[EdgeId]) -> Iterable[SPTree[EdgeId]]:
         if isinstance(node, Series):
             return node.children
-        return sorted(node.children, key=lambda child: smallest_leaf[id(child)])
+        return sorted(node.children, key=lambda child: smallest_leaf_key_by_tree_node[id(child)])
 
     return _post_order(tree, ordered_children)
 
@@ -403,16 +405,16 @@ def tree_records(tree: SPTree[EdgeId]) -> list[TreeRecord[EdgeId]]:
     ``tree_from_records`` inverts it.
     """
     order = _canonical_post_order(tree)
-    index_of = {id(node): index for index, node in enumerate(order)}
+    record_index_by_tree_node = {id(node): index for index, node in enumerate(order)}
     records: list[TreeRecord[EdgeId]] = []
     for index, node in enumerate(order):
         if isinstance(node, Leaf):
             records.append((index, "leaf", (), (), node.edge_id))
         elif isinstance(node, Series):
-            child_indices = tuple(index_of[id(child)] for child in node.children)
+            child_indices = tuple(record_index_by_tree_node[id(child)] for child in node.children)
             records.append((index, "series", child_indices, node.interior_nodes, None))
         else:
-            child_indices = tuple(sorted(index_of[id(child)] for child in node.children))
+            child_indices = tuple(sorted(record_index_by_tree_node[id(child)] for child in node.children))
             records.append((index, "parallel", child_indices, (), None))
     return records
 
@@ -449,47 +451,47 @@ def paths(tree: SPTree[EdgeId], cutoff: int | None = None) -> set[frozenset[Edge
     """
     order = _post_order(tree)
     pending_parents = Counter(id(child) for node in order if not isinstance(node, Leaf) for child in node.children)
-    paths_of: dict[int, set[frozenset[EdgeId]]] = {}
+    paths_by_tree_node: dict[int, set[frozenset[EdgeId]]] = {}
     for node in order:
         if isinstance(node, Leaf):
-            paths_of[id(node)] = {frozenset({node.edge_id})}
+            paths_by_tree_node[id(node)] = {frozenset({node.edge_id})}
             continue
-        child_paths = [_release(paths_of, pending_parents, id(child)) for child in node.children]
+        child_paths = [_release(paths_by_tree_node, pending_parents, id(child)) for child in node.children]
         if isinstance(node, Parallel):
-            paths_of[id(node)] = set().union(*child_paths)
+            paths_by_tree_node[id(node)] = set().union(*child_paths)
             continue
         result: set[frozenset[EdgeId]] = set()
         for combination in product(*child_paths):
             joined: frozenset[EdgeId] = frozenset().union(*combination)
             if cutoff is None or len(joined) <= cutoff:
                 result.add(joined)
-        paths_of[id(node)] = result
-    return paths_of[id(tree)]
+        paths_by_tree_node[id(node)] = result
+    return paths_by_tree_node[id(tree)]
 
 
 def _release(
-    paths_of: dict[int, set[frozenset[EdgeId]]],
+    paths_by_tree_node: dict[int, set[frozenset[EdgeId]]],
     pending_parents: Counter[int],
     child_key: int,
 ) -> set[frozenset[EdgeId]]:
     """Path set of a child, dropped from the table once its last parent has consumed it."""
     pending_parents[child_key] -= 1
     if pending_parents[child_key] == 0:
-        return paths_of.pop(child_key)
-    return paths_of[child_key]
+        return paths_by_tree_node.pop(child_key)
+    return paths_by_tree_node[child_key]
 
 
 def _closed_states(tree: SPTree[EdgeId], edge_closed: Mapping[EdgeId, bool]) -> dict[int, bool]:
-    """Closed state of every node of the tree, keyed by ``id``. Series is AND, parallel is OR."""
-    state: dict[int, bool] = {}
+    """Closed state of every tree node, keyed by ``id``. Series is AND, parallel is OR."""
+    closed_by_tree_node: dict[int, bool] = {}
     for node in _post_order(tree):
         if isinstance(node, Leaf):
-            state[id(node)] = edge_closed[node.edge_id]
+            closed_by_tree_node[id(node)] = edge_closed[node.edge_id]
         elif isinstance(node, Series):
-            state[id(node)] = all(state[id(child)] for child in node.children)
+            closed_by_tree_node[id(node)] = all(closed_by_tree_node[id(child)] for child in node.children)
         else:
-            state[id(node)] = any(state[id(child)] for child in node.children)
-    return state
+            closed_by_tree_node[id(node)] = any(closed_by_tree_node[id(child)] for child in node.children)
+    return closed_by_tree_node
 
 
 def closed(tree: SPTree[EdgeId], edge_closed: Mapping[EdgeId, bool]) -> bool:
@@ -527,23 +529,25 @@ def minimal_toggles(
     means no subset of ``togglable_leaves`` makes the tree take the target
     state.
     """
-    state = _closed_states(tree, edge_closed)
-    toggles: dict[int, frozenset[EdgeId] | None] = {}
+    closed_by_tree_node = _closed_states(tree, edge_closed)
+    toggles_by_tree_node: dict[int, frozenset[EdgeId] | None] = {}
     for node in _post_order(tree):
-        if state[id(node)] == target_closed:
-            toggles[id(node)] = frozenset()
+        if closed_by_tree_node[id(node)] == target_closed:
+            toggles_by_tree_node[id(node)] = frozenset()
         elif isinstance(node, Leaf):
             togglable = togglable_leaves is None or node.edge_id in togglable_leaves
-            toggles[id(node)] = frozenset({node.edge_id}) if togglable else None
+            toggles_by_tree_node[id(node)] = frozenset({node.edge_id}) if togglable else None
         elif isinstance(node, Series) == target_closed:
-            options = [toggles[id(child)] for child in node.children]
+            options = [toggles_by_tree_node[id(child)] for child in node.children]
             reachable = [option for option in options if option is not None]
-            toggles[id(node)] = frozenset[EdgeId]().union(*reachable) if len(reachable) == len(options) else None
+            toggles_by_tree_node[id(node)] = (
+                frozenset[EdgeId]().union(*reachable) if len(reachable) == len(options) else None
+            )
         else:
-            candidates = [toggles[id(child)] for child in node.children]
+            candidates = [toggles_by_tree_node[id(child)] for child in node.children]
             reachable = [candidate for candidate in candidates if candidate is not None]
-            toggles[id(node)] = min(reachable, key=_toggle_order) if reachable else None
-    return toggles[id(tree)]
+            toggles_by_tree_node[id(node)] = min(reachable, key=_toggle_order) if reachable else None
+    return toggles_by_tree_node[id(tree)]
 
 
 @dataclass(frozen=True)
@@ -561,7 +565,7 @@ def _has_chain_order(tree: SPTree[EdgeId]) -> bool:
 
 
 def _check_interior_count(node: Series[EdgeId]) -> None:
-    """A series node has exactly one eliminated node between each pair of neighbouring children."""
+    """A series node has exactly one eliminated node between each pair of neighboring children."""
     if len(node.interior_nodes) != len(node.children) - 1:
         message = (
             f"a series node with {len(node.children)} children needs {len(node.children) - 1} "
@@ -581,7 +585,7 @@ def _chain_boundaries(
     what its children span except the nodes its merges ate, which are exactly
     its interior nodes. Anything else is not a piece of a chain and is an error.
     """
-    boundaries: dict[int, frozenset[int]] = {}
+    boundaries_by_tree_node: dict[int, frozenset[int]] = {}
     for node in _post_order(tree):
         if isinstance(node, Leaf):
             if node.edge_id not in edge_endpoints:
@@ -589,21 +593,21 @@ def _chain_boundaries(
                 raise ValueError(message)
             spanned = frozenset(edge_endpoints[node.edge_id])
         else:
-            spanned = frozenset[int]().union(*(boundaries[id(child)] for child in node.children))
+            spanned = frozenset[int]().union(*(boundaries_by_tree_node[id(child)] for child in node.children))
             if isinstance(node, Series):
                 _check_interior_count(node)
                 spanned -= frozenset(node.interior_nodes)
         if len(spanned) != 2:
             message = f"{node!r} spans {sorted(spanned)}, a subtree of a chain spans exactly two nodes"
             raise ValueError(message)
-        boundaries[id(node)] = spanned
-    return boundaries
+        boundaries_by_tree_node[id(node)] = spanned
+    return boundaries_by_tree_node
 
 
 def _in_walk_order(
     node: Series[EdgeId],
     step_from: int,
-    boundaries: Mapping[int, frozenset[int]],
+    boundaries_by_tree_node: Mapping[int, frozenset[int]],
 ) -> tuple[tuple[SPTree[EdgeId], ...], tuple[int, ...]]:
     """The children and interior nodes of a series node in the direction that leaves ``step_from``.
 
@@ -612,9 +616,9 @@ def _in_walk_order(
     when that node is the one it steps from and against it otherwise, which is
     unambiguous because an interior node is never an endpoint.
     """
-    if step_from in boundaries[id(node.children[0])]:
+    if step_from in boundaries_by_tree_node[id(node.children[0])]:
         return node.children, node.interior_nodes
-    if step_from in boundaries[id(node.children[-1])]:
+    if step_from in boundaries_by_tree_node[id(node.children[-1])]:
         return tuple(reversed(node.children)), tuple(reversed(node.interior_nodes))
     message = f"node {step_from} is an endpoint of no outer child of {node!r}, so the chain does not run through it"
     raise ValueError(message)
@@ -656,8 +660,8 @@ def series_chain(
     if not _has_chain_order(tree):
         message = "a parallel tree has no chain order: its children are unordered alternatives, not a sequence"
         raise ValueError(message)
-    boundaries = _chain_boundaries(tree, edge_endpoints)
-    spanned = boundaries[id(tree)]
+    boundaries_by_tree_node = _chain_boundaries(tree, edge_endpoints)
+    spanned = boundaries_by_tree_node[id(tree)]
     if start_node not in spanned:
         endpoint_names = " and ".join(str(node_id) for node_id in sorted(spanned))
         message = f"start node {start_node} is not an endpoint of the tree, the endpoints are {endpoint_names}"
@@ -667,7 +671,7 @@ def series_chain(
     pending: list[tuple[SPTree[EdgeId], int, int]] = [(tree, start_node, end_node)]
     while pending:
         subtree, step_from, step_to = pending.pop()
-        subtree_span = boundaries[id(subtree)]
+        subtree_span = boundaries_by_tree_node[id(subtree)]
         if subtree_span != frozenset({step_from, step_to}):
             message = (
                 f"{subtree!r} spans {sorted(subtree_span)} but sits between {step_from} and {step_to} "
@@ -677,7 +681,7 @@ def series_chain(
         if not isinstance(subtree, Series):
             steps.append(SeriesStep(step_from, subtree, step_to))
             continue
-        children, interior_nodes = _in_walk_order(subtree, step_from, boundaries)
+        children, interior_nodes = _in_walk_order(subtree, step_from, boundaries_by_tree_node)
         chain_nodes = [step_from, *interior_nodes, step_to]
         pending.extend(
             (child, chain_nodes[position], chain_nodes[position + 1])
@@ -705,7 +709,7 @@ _PENDANT_ACTIONS: frozenset[str] = frozenset({"absorb", "discard", "keep"})
 class PendantPolicy:
     """What the pendant move does at a node: absorb its material, discard it, or leave the node alone.
 
-    ``absorb`` removes the pendant and hands its material to the neighbour,
+    ``absorb`` removes the pendant and hands its material to the neighbor,
     ``discard`` removes it and drops the material, ``keep`` makes the node
     ineligible for the pendant move so it survives with its one incidence. The
     action of a pendant move is the action of the node it removes, so material
@@ -758,7 +762,7 @@ class Reduced(Generic[EdgeId]):
     material of the pendant it removes, a ``keep`` action leaves the node in
     the residual and its ``folded_nodes`` entry with it.
 
-    ``dropped`` lists, per pendant move in processing order, the neighbour the
+    ``dropped`` lists, per pendant move in processing order, the neighbor the
     pendant hung on and the provenance tree of the removed edge, so edge
     material merged before its attachment became pendant (a ring returning to
     one node) stays available. Edges of terminal-free components are not
@@ -803,7 +807,7 @@ class _Reduction(Generic[EdgeId]):
         self.pendant = pendant
         self.series_ineligible = series_ineligible
         self.rank: dict[int, int] = {} if order is None else {node_id: rank for rank, node_id in enumerate(order)}
-        self.unranked = len(self.rank)
+        self.unranked_rank = len(self.rank)
         self.endpoints: dict[EdgeId | VirtualEdgeId, tuple[int, int]] = {}
         self.provenance: dict[EdgeId | VirtualEdgeId, SPTree[EdgeId]] = {}
         self.incident: dict[int, set[EdgeId | VirtualEdgeId]] = {node_id: set() for node_id in graph.nodes}
@@ -814,7 +818,7 @@ class _Reduction(Generic[EdgeId]):
         self.dropped: list[tuple[int, SPTree[EdgeId]]] = []
         self.alive = set(graph.nodes)
         virtual_indices = (edge_id.index for edge_id in graph.endpoints if isinstance(edge_id, VirtualEdgeId))
-        self.fresh = count(1 + max(virtual_indices, default=0))
+        self.virtual_edge_indices = count(1 + max(virtual_indices, default=0))
         for edge_id in sorted(graph.endpoints, key=_order_key):
             from_node, to_node = graph.endpoints[edge_id]
             self.endpoints[edge_id] = (from_node, to_node)
@@ -841,7 +845,7 @@ class _Reduction(Generic[EdgeId]):
 
     def _priority(self, node_id: int) -> tuple[int, int]:
         """Heap key: the caller's rank if given (unlisted nodes last), then the node id."""
-        return (self.rank.get(node_id, self.unranked), node_id)
+        return (self.rank.get(node_id, self.unranked_rank), node_id)
 
     def _drop_terminal_free_components(self) -> None:
         """A component without a terminal carries no question and is removed whole."""
@@ -864,51 +868,51 @@ class _Reduction(Generic[EdgeId]):
             return (self._pendant(node_id, edge_id),)
         if len(incident) == 2 and node_id not in self.protected and node_id not in self.series_ineligible:
             first, second = sorted(incident, key=_order_key)
-            neighbour_first = _other_end(self.endpoints[first], node_id)
-            neighbour_second = _other_end(self.endpoints[second], node_id)
-            if neighbour_first != neighbour_second:
-                return self._series(node_id, first, second, neighbour_first, neighbour_second)
+            first_neighbor = _other_end(self.endpoints[first], node_id)
+            second_neighbor = _other_end(self.endpoints[second], node_id)
+            if first_neighbor != second_neighbor:
+                return self._series(node_id, first, second, first_neighbor, second_neighbor)
         return ()
 
     def _pendant(self, node_id: int, edge_id: EdgeId | VirtualEdgeId) -> int:
-        """Remove the pendant node and its edge; under ``absorb``, its material moves to the neighbour.
+        """Remove the pendant node and its edge; under ``absorb``, its material moves to the neighbor.
 
         The material is the node, what was folded into it, and every interior
         node of the removed edge's tree with what was folded into that. The
         tree itself is reported in ``dropped`` whatever the action.
         """
-        neighbour = _other_end(self.endpoints[edge_id], node_id)
+        neighbor = _other_end(self.endpoints[edge_id], node_id)
         tree = self.provenance[edge_id]
         interior = _interior_nodes(tree)
         self._remove_edge(edge_id)
-        self.dropped.append((neighbour, tree))
+        self.dropped.append((neighbor, tree))
         absorbed = [node_id, *self.folded_nodes.pop(node_id)]
         for interior_node in interior:
             absorbed.extend([interior_node, *self.folded_interior.pop(interior_node)])
         if self.pendant.action_at(node_id) == "absorb":
-            self.folded_nodes[neighbour].extend(absorbed)
+            self.folded_nodes[neighbor].extend(absorbed)
         self._eliminate(node_id)
-        return neighbour
+        return neighbor
 
     def _series(
         self,
         node_id: int,
         first: EdgeId | VirtualEdgeId,
         second: EdgeId | VirtualEdgeId,
-        neighbour_first: int,
-        neighbour_second: int,
+        first_neighbor: int,
+        second_neighbor: int,
     ) -> tuple[int, int]:
         tree: SPTree[EdgeId] = Series((self.provenance[first], self.provenance[second]), (node_id,))
         self._remove_edge(first)
         self._remove_edge(second)
-        self._add_edge(tree, (neighbour_first, neighbour_second))
+        self._add_edge(tree, (first_neighbor, second_neighbor))
         self.folded_interior[node_id] = self.folded_nodes.pop(node_id)
         self._eliminate(node_id)
-        if neighbour_first not in self.protected and neighbour_second not in self.protected:
-            parallel = self.pair_edges[_sorted_pair(neighbour_first, neighbour_second)]
+        if first_neighbor not in self.protected and second_neighbor not in self.protected:
+            parallel = self.pair_edges[_sorted_pair(first_neighbor, second_neighbor)]
             if len(parallel) >= 2:
-                self._merge_parallel(neighbour_first, neighbour_second, sorted(parallel, key=_order_key))
-        return neighbour_first, neighbour_second
+                self._merge_parallel(first_neighbor, second_neighbor, sorted(parallel, key=_order_key))
+        return first_neighbor, second_neighbor
 
     def _merge_all_parallels(self) -> None:
         """Initial parallel sweep, pairs in order of their first edge."""
@@ -927,7 +931,7 @@ class _Reduction(Generic[EdgeId]):
         self._add_edge(tree, _sorted_pair(from_node, to_node))
 
     def _add_edge(self, tree: SPTree[EdgeId], pair: tuple[int, int]) -> None:
-        edge_id = VirtualEdgeId(next(self.fresh))
+        edge_id = VirtualEdgeId(next(self.virtual_edge_indices))
         self.endpoints[edge_id] = pair
         self.provenance[edge_id] = tree
         self._index_edge(edge_id, pair)
@@ -946,9 +950,9 @@ class _Reduction(Generic[EdgeId]):
         for node_id in pair:
             self.incident[node_id].discard(edge_id)
         key = _sorted_pair(*pair)
-        between = self.pair_edges[key]
-        between.discard(edge_id)
-        if not between:
+        pair_edge_ids = self.pair_edges[key]
+        pair_edge_ids.discard(edge_id)
+        if not pair_edge_ids:
             del self.pair_edges[key]
 
     def _eliminate(self, node_id: int) -> None:
@@ -1095,10 +1099,10 @@ def _structural_log_moves(
         while move is not None:
             _created, parallel_pending = apply_move(move)
             if parallel_pending:
-                first_neighbour, second_neighbour = move[4], move[5]
-                members = pair_edges(first_neighbour, second_neighbour)
+                first_neighbor, second_neighbor = move[4], move[5]
+                members = pair_edges(first_neighbor, second_neighbor)
                 if members is not None:
-                    apply_parallel(first_neighbour, second_neighbour, members)
+                    apply_parallel(first_neighbor, second_neighbor, members)
             move = next_move()
         return state.log()
 
@@ -1195,14 +1199,14 @@ def _fold_operation_log(
     instead of walking its subtree and a chain of series moves stays linear.
     """
     nodes, edge_ids = kernel.nodes, kernel.edge_ids
-    kinds = log.op_kind.tolist()
-    leaf_edges = log.leaf_edge_index.tolist()
-    leaf_count = kinds.count(_OPERATION_LEAF)
+    operation_kinds = log.op_kind.tolist()
+    leaf_edge_indices = log.leaf_edge_index.tolist()
+    leaf_count = operation_kinds.count(_OPERATION_LEAF)
     trees: dict[int, SPTree[EdgeId]] = {
-        operation: Leaf(edge_ids[index]) for operation, index in enumerate(leaf_edges[:leaf_count])
+        operation: Leaf(edge_ids[index]) for operation, index in enumerate(leaf_edge_indices[:leaf_count])
     }
     moves = zip(
-        kinds[leaf_count:],
+        operation_kinds[leaf_count:],
         log.left[leaf_count:].tolist(),
         log.right[leaf_count:].tolist(),
         log.endpoint_u[leaf_count:].tolist(),
@@ -1213,58 +1217,64 @@ def _fold_operation_log(
 
     chain_children: dict[int, list[SPTree[EdgeId]]] = {}
     subtree_interior: dict[int, list[int]] = {}
-    virtual_id_of: dict[int, VirtualEdgeId] = {}
+    virtual_edge_id_by_operation: dict[int, VirtualEdgeId] = {}
     folded_nodes: dict[int, list[int]] = {}
     folded_interior: dict[int, list[int]] = {}
     dropped: list[tuple[int, SPTree[EdgeId]]] = []
-    highest = edge_ids[-1] if edge_ids else None
-    virtual_ids = count(1 + (highest.index if isinstance(highest, VirtualEdgeId) else 0))
+    highest_edge_id = edge_ids[-1] if edge_ids else None
+    virtual_ids = count(1 + (highest_edge_id.index if isinstance(highest_edge_id, VirtualEdgeId) else 0))
 
-    for operation, (kind, first, second, endpoint, interior_index, absorber) in enumerate(moves, start=leaf_count):
+    for operation, (kind, left_operation, right_operation, first_endpoint, removed_node_index, absorber) in enumerate(
+        moves, start=leaf_count
+    ):
         if kind == _OPERATION_SERIES:
-            interior_node = nodes[interior_index]
-            trees[operation] = Series((trees[first], trees[second]), (interior_node,))
-            carried = _joined(subtree_interior.pop(first, None), subtree_interior.pop(second, None))
+            interior_node = nodes[removed_node_index]
+            trees[operation] = Series((trees[left_operation], trees[right_operation]), (interior_node,))
+            carried = _joined(subtree_interior.pop(left_operation, None), subtree_interior.pop(right_operation, None))
             carried.append(interior_node)
             subtree_interior[operation] = carried
             folded_interior[interior_node] = folded_nodes.pop(interior_node, [])
-            virtual_id_of[operation] = VirtualEdgeId(next(virtual_ids))
+            virtual_edge_id_by_operation[operation] = VirtualEdgeId(next(virtual_ids))
         elif kind == _OPERATION_PARALLEL:
-            partial = chain_children.pop(first, None)
-            children = [trees[first]] if partial is None else partial
-            children.append(trees[second])
-            subtree_interior[operation] = _joined(subtree_interior.pop(first, None), subtree_interior.pop(second, None))
-            if endpoint < 0:
+            partial = chain_children.pop(left_operation, None)
+            children = [trees[left_operation]] if partial is None else partial
+            children.append(trees[right_operation])
+            subtree_interior[operation] = _joined(
+                subtree_interior.pop(left_operation, None), subtree_interior.pop(right_operation, None)
+            )
+            if first_endpoint < 0:
                 chain_children[operation] = children
             else:
                 trees[operation] = Parallel(frozenset(children))
-                virtual_id_of[operation] = VirtualEdgeId(next(virtual_ids))
+                virtual_edge_id_by_operation[operation] = VirtualEdgeId(next(virtual_ids))
         else:
-            tree = trees[first]
-            removed_node, neighbour = nodes[interior_index], nodes[absorber]
-            dropped.append((neighbour, tree))
+            tree = trees[left_operation]
+            removed_node, neighbor = nodes[removed_node_index], nodes[absorber]
+            dropped.append((neighbor, tree))
             absorbed = [removed_node, *folded_nodes.pop(removed_node, ())]
-            for interior_node in sorted(subtree_interior.pop(first, ())):
+            for interior_node in sorted(subtree_interior.pop(left_operation, ())):
                 absorbed.extend([interior_node, *folded_interior.pop(interior_node)])
             if pendant.action_at(removed_node) != "absorb":
                 continue
-            material = folded_nodes.get(neighbour)
+            material = folded_nodes.get(neighbor)
             if material is None:
-                folded_nodes[neighbour] = absorbed
+                folded_nodes[neighbor] = absorbed
             else:
                 material.extend(absorbed)
 
-    residual, provenance = _residual_from_log(kernel, log, trees, virtual_id_of, leaf_edges, leaf_count)
-    kept = {node_id: folded_nodes.pop(node_id, []) for node_id in residual.nodes}
-    return Reduced(residual, provenance, kept, folded_interior, dropped)
+    residual, provenance = _residual_from_log(
+        kernel, log, trees, virtual_edge_id_by_operation, leaf_edge_indices, leaf_count
+    )
+    folded_nodes_by_survivor = {node_id: folded_nodes.pop(node_id, []) for node_id in residual.nodes}
+    return Reduced(residual, provenance, folded_nodes_by_survivor, folded_interior, dropped)
 
 
 def _residual_from_log(
     kernel: _KernelGraph[EdgeId],
     log: pygraphc.ReductionLog,
     trees: Mapping[int, SPTree[EdgeId]],
-    virtual_id_of: Mapping[int, VirtualEdgeId],
-    leaf_edges: Sequence[int],
+    virtual_edge_id_by_operation: Mapping[int, VirtualEdgeId],
+    leaf_edge_indices: Sequence[int],
     leaf_count: int,
 ) -> tuple[MultiGraph[EdgeId | VirtualEdgeId], dict[EdgeId | VirtualEdgeId, SPTree[EdgeId]]]:
     """The surviving nodes and the endpoints and provenance tree of every surviving edge.
@@ -1280,7 +1290,9 @@ def _residual_from_log(
         log.residual_op.tolist(), log.residual_u.tolist(), log.residual_v.tolist(), strict=True
     ):
         edge_id: EdgeId | VirtualEdgeId = (
-            edge_ids[leaf_edges[operation]] if operation < leaf_count else virtual_id_of[operation]
+            edge_ids[leaf_edge_indices[operation]]
+            if operation < leaf_count
+            else virtual_edge_id_by_operation[operation]
         )
         endpoints[edge_id] = (nodes[from_index], nodes[to_index])
         provenance[edge_id] = trees[operation]
@@ -1321,10 +1333,10 @@ def reduce(
     whatever the pendant policy says: a component with no terminal carries no
     question, so nothing in it is kept. Pendant deletion removes a non-terminal
     with exactly one non-loop incidence unless its ``pendant`` action is
-    ``keep``, and records its material on the neighbour if that action is
+    ``keep``, and records its material on the neighbor if that action is
     ``absorb``. Series merge replaces a non-terminal, non-protected,
     series-eligible node with exactly two non-loop incidences to two distinct
-    neighbours by one edge (loops do not count). Parallel merge replaces the
+    neighbors by one edge (loops do not count). Parallel merge replaces the
     edges between one endpoint pair, neither protected, by one edge. Self-loops
     take part in no move and leave with their node.
 
@@ -1360,7 +1372,7 @@ def reduce(
     which can leave one of two competing nodes inert. A ``keep`` action makes
     them order dependent because it blocks the move that fires at degree one
     while leaving the series move that removes the node at degree two, so
-    whether the node is reached before or after a neighbour's move decides its
+    whether the node is reached before or after a neighbor's move decides its
     fate. A series-ineligible node does not: a node offers the pendant move at
     degree one and the series move at degree two, never both, and degrees only
     fall, so taking the series move away leaves a degree-two node inert instead
