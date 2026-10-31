@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Performance tests are three tiers instead of walltime limits. `complexity/`
+  asserts the scaling exponent over five sizes and several graph shapes;
+  `instructions/` counts instructions with callgrind, compares every scenario
+  against the merge base in CI and checks the design claims as instruction
+  ratios; `experience/` runs one million-node input per workflow against a
+  generous budget. An instruction count that moves by more than 0.5% fails
+  CI on x86-64 or arm64 until the pull request is labelled
+  `accept-instruction-change`; layout noise after a C change reaches about
+  1.1%, so such a change is reviewed even when only the layout moved.
+- The workflow phase guard counts instructions per phase instead of comparing
+  walltime shares against `benchmarks/baseline.json`; the baseline,
+  `tests/unit_tests/test_workflow_profiles.py` and `--write-baseline` are
+  removed. The networkx equality checks moved to
+  `tests/unit_tests/test_networkx_differential.py`, the README speedups to
+  `benchmarks/networkx_baselines.py`, which reports without asserting.
+
 ### Added
 - `Graph` and `GraphView` are generic over the caller's node and branch id
   types (`Graph[NodeIdT, BranchIdT]`, both bound to `int`). Results carry the

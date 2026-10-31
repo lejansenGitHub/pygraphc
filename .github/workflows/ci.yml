@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # labeled and unlabeled: accept-instruction-change only takes effect in a
+    # new run, since a re-run keeps the labels of the event that started it.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 jobs:
   lint:
@@ -51,20 +54,20 @@ jobs:
           name: coverage
           path: coverage.xml
 
-  # Reads the performance matrix off the directory so that adding a test file
+  # Reads the complexity matrix off the directory so that adding a test file
   # is enough to make it run. A hand-written list had silently stopped running
-  # two of the nine files.
-  performance-files:
+  # two of the nine files of the earlier walltime suite.
+  complexity-files:
     runs-on: ubuntu-latest
     outputs:
       files: ${{ steps.list.outputs.files }}
     steps:
       - uses: actions/checkout@v4
-      - name: List the performance test files
+      - name: List the complexity test files
         id: list
         run: |
           set -o pipefail
-          files=$(ls tests/performance_tests/test_*.py | xargs -n 1 basename |
+          files=$(ls tests/performance_tests/complexity/test_*.py | xargs -n 1 basename |
             jq -R -s -c 'split("\n") | map(select(. != ""))')
           echo "files=$files" >> "$GITHUB_OUTPUT"
           echo "$files"
@@ -90,34 +93,115 @@ jobs:
       - name: Integration cases
         run: pytest tests/integration_tests/ -x -v
 
-  performance:
-    needs: performance-files
+  # Deterministic tier: callgrind instruction counts of the scenarios and of
+  # every workflow phase, branch against merge base, both built the same way in
+  # this job, so a toolchain bump never shows up as a change. A count that moves
+  # by more than 0.5% fails; a pull request labelled accept-instruction-change
+  # still prints the table but does not fail.
+  instructions:
+    # Code generation differs by architecture (splitting _core.c made bridges 6%
+    # dearer on arm64 and 3% cheaper on x86-64), so a change to the C sources or
+    # the build is counted on both; any other change only on x86-64.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Find the merge base and whether arm64 needs counting
+        id: base
+        env:
+          BASE_REF: origin/${{ github.base_ref || 'main' }}
+        run: |
+          base=$(git merge-base "$BASE_REF" HEAD)
+          # A push to main is its own merge base: compare with the commit before it.
+          if [ "$base" = "$(git rev-parse HEAD)" ]; then base=$(git rev-parse HEAD^); fi
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+          if git diff --quiet "$base" HEAD -- 'src/*.c' 'src/*.h' setup.py pyproject.toml; then
+            echo "native=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "native=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install valgrind
+        if: matrix.runner == 'ubuntu-latest' || steps.base.outputs.native == 'true'
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+      - name: Build the merge base and the branch
+        if: matrix.runner == 'ubuntu-latest' || steps.base.outputs.native == 'true'
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          base="$BASE_SHA"
+          git worktree add "$RUNNER_TEMP/base" "$base"
+          # Both interpreters get exactly the same packages: a different set of
+          # installed modules shifts the heap layout and the counts by about 1%.
+          python -m venv "$RUNNER_TEMP/base-venv"
+          "$RUNNER_TEMP/base-venv/bin/pip" install "$RUNNER_TEMP/base" pytest
+          python -m venv "$RUNNER_TEMP/head-venv"
+          "$RUNNER_TEMP/head-venv/bin/pip" install . pytest
+      - name: Instruction counts against the merge base
+        if: matrix.runner == 'ubuntu-latest' || steps.base.outputs.native == 'true'
+        working-directory: tests
+        env:
+          ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'accept-instruction-change') }}
+        run: |
+          "$RUNNER_TEMP/head-venv/bin/python" -m performance_tests.instructions.compare \
+            --base-python "$RUNNER_TEMP/base-venv/bin/python" \
+            --head-python "$RUNNER_TEMP/head-venv/bin/python" || [ "$ACCEPTED" = "true" ]
+      - name: Design and memory claims
+        if: matrix.runner == 'ubuntu-latest' || steps.base.outputs.native == 'true'
+        working-directory: tests
+        run: '"$RUNNER_TEMP/head-venv/bin/pytest" performance_tests/instructions -v'
+
+  # Walltime at rising sizes, asserting the scaling exponent: superlinear
+  # behaviour only shows on inputs too large for callgrind.
+  complexity:
+    needs: complexity-files
     runs-on: ubuntu-latest
     strategy:
       # Every file reports: a failure in one must not cancel the others.
       fail-fast: false
       matrix:
-        file: ${{ fromJSON(needs.performance-files.outputs.files) }}
+        file: ${{ fromJSON(needs.complexity-files.outputs.files) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - name: Install
-        run: pip install -e ".[dev,benchmark]" vendor/blueprint_linters-*.whl
-      - name: Performance tests
+        run: pip install ".[dev]"
+      - name: Complexity tests
+        working-directory: tests
         env:
-          PERFORMANCE_FILE: ${{ matrix.file }}
-        run: |
-          cd tests/performance_tests
-          pytest "$PERFORMANCE_FILE" -v -s
+          COMPLEXITY_FILE: ${{ matrix.file }}
+        # -s keeps every measurement in the log: the calibration record of the runner.
+        run: pytest "performance_tests/complexity/$COMPLEXITY_FILE" -v -s
+
+  # One realistic large input per workflow against a generous budget.
+  experience:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: pip install ".[dev]"
+      - name: Customer experience tests
+        working-directory: tests
+        run: pytest performance_tests/experience -v
 
   profiles:
     runs-on: ubuntu-latest
     # Off the critical path on purpose: the uploaded artifact is the point, the
     # timing on a shared runner is not, so this job never gates a merge. The
-    # guard lives in the unit suite, where it compares both phase shares and
-    # absolute phase times against benchmarks/baseline.json.
+    # guard is the instructions job, which counts every phase of these
+    # workflows against the merge base.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
