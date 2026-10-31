@@ -466,13 +466,21 @@ def _workflow_components_with_branch_ids() -> Measured:
 # ── Edges with ports ──
 
 
+def _require_multiport_edges() -> None:
+    """Raise AttributeError on a build without multiport edges, so ``measure`` leaves the scenario out."""
+    if not hasattr(Graph, "without_ports"):
+        raise AttributeError("this build of pygraphc has no multiport edges")
+
+
 def _port_graph(size: int = SIZE) -> Graph[int, int]:
+    _require_multiport_edges()
     node_ids, edges = shapes.random_ports(size)
     return Graph(node_ids, edges, branch_ids=list(range(len(edges))))
 
 
 @register("parse_ports/random_ports_20k")
 def _parse_ports() -> Measured:
+    _require_multiport_edges()
     node_ids, edges = shapes.random_ports(SIZE)
     return lambda: Graph(node_ids, edges)
 
