@@ -258,6 +258,29 @@ def test_masking_case_9_directed_edge_without_an_active_in_port_transmits_nothin
     assert view.bfs(1) == [1]
 
 
+# ── Weighted paths ──
+
+
+def test_path_through_a_multiport_edge_costs_entry_plus_exit() -> None:
+    """D11: one weight per port; the three-port edge costs its entry port's weight plus its exit port's weight."""
+    graph = _three_port_edge_between_two_port_edges()
+    weights = [1.0, 1.0, 2.0, 5.0, 3.0, 1.0, 1.0]
+
+    # --- Assert ---
+    assert graph.shortest_path_lengths(weights, 1) == {1: 0.0, 2: 2.0, 3: 9.0, 4: 7.0, 5: 9.0}
+    assert graph.shortest_path_lengths(weights, 3) == {3: 0.0, 2: 7.0, 4: 8.0, 1: 9.0, 5: 10.0}
+
+
+def test_masking_case_10_paths_only_through_active_ports() -> None:
+    """Case 10: with the port at node 4 masked, no path enters or leaves the three-port edge there."""
+    view = _three_port_edge_between_two_port_edges().without_ports([(1, 2)])
+    weights = [1.0, 1.0, 2.0, 5.0, 3.0, 1.0, 1.0]
+
+    # --- Assert ---
+    assert view.shortest_path_lengths(weights, 1) == {1: 0.0, 2: 2.0, 3: 9.0}
+    assert view.shortest_path_lengths(weights, 4) == {4: 0.0, 5: 2.0}
+
+
 def test_bfs_under_an_edge_mask() -> None:
     """Case 1: a masked three-port edge carries nothing, so node 2 is as far as 1 gets."""
     view = _three_port_edge_between_two_port_edges().without_edges([1])

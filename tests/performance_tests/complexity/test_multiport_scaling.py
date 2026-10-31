@@ -2,8 +2,8 @@
 
 One edge with a port at every node grows the number of ports of a single
 edge, a chain of three-port edges grows the depth, and random edges with two
-to four ports grow the plain size. BFS expands each multiport edge once, so it
-may not pay per pair of ports.
+to four ports grow the plain size. BFS and Dijkstra expand each multiport edge
+once, so they may not pay per pair of ports.
 """
 
 from collections.abc import Callable
@@ -31,7 +31,14 @@ OPERATIONS: dict[str, Operation] = {
     "component_labels": lambda graph: graph.component_labels,
     "masked_ports_view": lambda graph: lambda: list(graph.without_ports([(0, 0)]).connected_components()),
     "bfs": lambda graph: lambda: graph.bfs(0),
+    "shortest_path_lengths": lambda graph: _shortest_path_lengths_with_unit_weights(graph),
 }
+
+
+def _shortest_path_lengths_with_unit_weights(graph: Graph[int, int]) -> Callable[[], object]:
+    """Build one weight per port outside the timed call."""
+    weights = [1.0] * graph.port_count
+    return lambda: graph.shortest_path_lengths(weights, 0)
 
 
 def _prepare(operation: Operation, shape: Shape) -> Callable[[int], Callable[[], object]]:

@@ -508,6 +508,14 @@ def _port_bfs() -> Measured:
     return lambda: graph.bfs(0)
 
 
+@register("port_shortest_path_lengths/random_ports_20k")
+def _port_shortest_path_lengths() -> Measured:
+    graph = _port_graph()
+    rng = random.Random(0)
+    weights = [rng.uniform(0.1, 10.0) for _ in range(graph.port_count)]
+    return lambda: graph.shortest_path_lengths(weights, 0)
+
+
 # ── Structure learning ──
 
 

@@ -2053,6 +2053,31 @@ class PortGraph(Graph[NodeIdT, BranchIdT]):
         result: list[NodeIdT] = _bfs_ctx(self._graph_capsule, source)
         return result
 
+    def shortest_path_lengths(
+        self, weights: Sequence[float], source: NodeIdT, cutoff: float | None = None
+    ) -> dict[NodeIdT, float]:
+        """``{node id: distance}`` within ``cutoff``; one weight per port, an edge costs its entry plus exit port."""
+        cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
+        result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(
+            self._graph_capsule, weights, source, cutoff_or_unbounded
+        )
+        return result
+
+    def multi_source_shortest_path_lengths(
+        self, weights: Sequence[float], sources: Sequence[NodeIdT], cutoff: float | None = None
+    ) -> dict[NodeIdT, float]:
+        """``{node id: distance}`` from the nearest source, one weight per port."""
+        cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
+        result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(
+            self._graph_capsule, weights, sources, cutoff_or_unbounded
+        )
+        return result
+
+    def eccentricity(self, weights: Sequence[float], source: NodeIdT) -> float:
+        """The largest shortest-path distance from ``source``, one weight per port."""
+        lengths = self.shortest_path_lengths(weights, source)
+        return max(lengths.values()) if lengths else 0.0
+
 
 class PortGraphView(Generic[NodeIdT, BranchIdT]):
     """A ``PortGraph`` with edges, ports and nodes masked; masks combine as a union in any order."""
@@ -2152,12 +2177,34 @@ class PortGraphView(Generic[NodeIdT, BranchIdT]):
         )
         return result
 
+    def shortest_path_lengths(
+        self, weights: Sequence[float], source: NodeIdT, cutoff: float | None = None
+    ) -> dict[NodeIdT, float]:
+        """``{node id: distance}`` within ``cutoff``; one weight per port, an edge costs its entry plus exit port."""
+        cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
+        result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(
+            self._graph._graph_capsule, weights, source, cutoff_or_unbounded, *self._masks()
+        )
+        return result
+
+    def multi_source_shortest_path_lengths(
+        self, weights: Sequence[float], sources: Sequence[NodeIdT], cutoff: float | None = None
+    ) -> dict[NodeIdT, float]:
+        """``{node id: distance}`` from the nearest source, one weight per port."""
+        cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
+        result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(
+            self._graph._graph_capsule, weights, sources, cutoff_or_unbounded, *self._masks()
+        )
+        return result
+
+    def eccentricity(self, weights: Sequence[float], source: NodeIdT) -> float:
+        """The largest shortest-path distance from ``source``, one weight per port."""
+        lengths = self.shortest_path_lengths(weights, source)
+        return max(lengths.values()) if lengths else 0.0
+
 
 _PORT_GRAPH_PLANNED = {
     "shortest_path": "the traversal stage",
-    "shortest_path_lengths": "the traversal stage",
-    "multi_source_shortest_path_lengths": "the traversal stage",
-    "eccentricity": "the traversal stage",
     "articulation_points": "the critical-elements stage",
     "biconnected_components": "the critical-elements stage",
     "two_edge_connected_components": "the critical-elements stage",
