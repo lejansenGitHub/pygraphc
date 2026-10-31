@@ -1,4 +1,4 @@
-"""Terminal-preserving graph reduction kernel (Python tier).
+"""Node-preserving graph reduction kernel (Python tier).
 
 The partition step and the edge split of the quotient run in the C tier on
 int32 label arrays of ``pygraphc.Graph`` (``component_labels`` and
@@ -696,7 +696,7 @@ def _interior_nodes(tree: SPTree[EdgeId]) -> list[int]:
 
 
 # ---------------------------------------------------------------------------
-# Terminal-preserving reduction
+# Node-preserving reduction
 # ---------------------------------------------------------------------------
 
 
@@ -757,7 +757,7 @@ class Reduced(Generic[EdgeId]):
     into it. ``folded_interior`` holds, per node recorded in a series node of a
     residual tree, the material folded into it before its series move. Under a
     uniform ``absorb`` policy every eliminated node of a component with a
-    terminal appears exactly once: as a series interior node, in
+    preserved node appears exactly once: as a series interior node, in
     ``folded_nodes`` or in ``folded_interior``. A ``discard`` action drops the
     material of the pendant it removes, a ``keep`` action leaves the node in
     the residual and its ``folded_nodes`` entry with it.
@@ -765,7 +765,7 @@ class Reduced(Generic[EdgeId]):
     ``dropped`` lists, per pendant move in processing order, the neighbor the
     pendant hung on and the provenance tree of the removed edge, so edge
     material merged before its attachment became pendant (a ring returning to
-    one node) stays available. Edges of terminal-free components are not
+    one node) stays available. Edges of components without a preserved node are not
     listed: no node absorbs them.
     """
 
@@ -794,7 +794,7 @@ class _Reduction(Generic[EdgeId]):
     def __init__(
         self,
         graph: MultiGraph[EdgeId],
-        terminals: AbstractSet[int],
+        preserved_nodes: AbstractSet[int],
         protected: AbstractSet[int],
         *,
         pendant: PendantPolicy,
@@ -802,7 +802,7 @@ class _Reduction(Generic[EdgeId]):
         order: Sequence[int] | None,
     ) -> None:
         self.graph = graph
-        self.terminals = terminals
+        self.preserved_nodes = preserved_nodes
         self.protected = protected
         self.pendant = pendant
         self.series_ineligible = series_ineligible
@@ -829,16 +829,16 @@ class _Reduction(Generic[EdgeId]):
                 self._index_edge(edge_id, (from_node, to_node))
 
     def run(self) -> Reduced[EdgeId]:
-        self._drop_terminal_free_components()
+        self._drop_components_without_preserved_nodes()
         self._merge_all_parallels()
-        candidates = [self._priority(node_id) for node_id in self.alive if node_id not in self.terminals]
+        candidates = [self._priority(node_id) for node_id in self.alive if node_id not in self.preserved_nodes]
         heapq.heapify(candidates)
         while candidates:
             _rank, node_id = heapq.heappop(candidates)
             if node_id not in self.alive:
                 continue
             for touched in self._move(node_id):
-                if touched not in self.terminals:
+                if touched not in self.preserved_nodes:
                     heapq.heappush(candidates, self._priority(touched))
         residual: MultiGraph[EdgeId | VirtualEdgeId] = MultiGraph(sorted(self.alive), self.endpoints)
         return Reduced(residual, self.provenance, self.folded_nodes, self.folded_interior, self.dropped)
@@ -847,12 +847,12 @@ class _Reduction(Generic[EdgeId]):
         """Heap key: the caller's rank if given (unlisted nodes last), then the node id."""
         return (self.rank.get(node_id, self.unranked_rank), node_id)
 
-    def _drop_terminal_free_components(self) -> None:
-        """A component without a terminal carries no question and is removed whole."""
+    def _drop_components_without_preserved_nodes(self) -> None:
+        """A component without a preserved node carries no question and is removed whole."""
         components = Partition.from_components(self.graph, self.graph.endpoints.keys())
-        terminal_blocks = {components.block_of[node_id] for node_id in self.terminals}
+        preserved_blocks = {components.block_of[node_id] for node_id in self.preserved_nodes}
         for node_id in self.graph.nodes:
-            if components.block_of[node_id] not in terminal_blocks:
+            if components.block_of[node_id] not in preserved_blocks:
                 for edge_id in list(self.incident[node_id]):
                     self._remove_edge(edge_id)
                 self.folded_nodes.pop(node_id)
@@ -966,7 +966,7 @@ class _Reduction(Generic[EdgeId]):
 
 def _reduce_python(
     graph: MultiGraph[EdgeId],
-    terminals: AbstractSet[int],
+    preserved_nodes: AbstractSet[int],
     protected: AbstractSet[int],
     *,
     pendant: PendantPolicy,
@@ -975,7 +975,7 @@ def _reduce_python(
 ) -> Reduced[EdgeId]:
     """The worklist over candidate nodes, in Python. The reference semantics of ``reduce``."""
     return _Reduction(
-        graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible, order=order
+        graph, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible, order=order
     ).run()
 
 
@@ -987,7 +987,7 @@ _OPERATION_PENDANT = 3
 
 def _node_masks(
     kernel: _KernelGraph[EdgeId],
-    terminals: AbstractSet[int],
+    preserved_nodes: AbstractSet[int],
     protected: AbstractSet[int],
     *,
     pendant: PendantPolicy,
@@ -1000,24 +1000,24 @@ def _node_masks(
     fold reads that off the policy per removed node.
     """
     node_count = len(kernel.nodes)
-    terminal_mask = bytearray(node_count)
+    preserved_mask = bytearray(node_count)
     protected_mask = bytearray(node_count)
     series_blocked_mask = bytearray(node_count)
     keep_mask = bytearray(b"\x01" * node_count if pendant.default == "keep" else node_count)
-    for node_id in terminals:
-        terminal_mask[bisect_left(kernel.nodes, node_id)] = 1
+    for node_id in preserved_nodes:
+        preserved_mask[bisect_left(kernel.nodes, node_id)] = 1
     for node_id in protected:
         protected_mask[bisect_left(kernel.nodes, node_id)] = 1
     for node_id in series_ineligible:
         series_blocked_mask[bisect_left(kernel.nodes, node_id)] = 1
     for node_id, action in pendant.exceptions.items():
         keep_mask[bisect_left(kernel.nodes, node_id)] = 1 if action == "keep" else 0
-    return terminal_mask, protected_mask, keep_mask, series_blocked_mask
+    return preserved_mask, protected_mask, keep_mask, series_blocked_mask
 
 
 def _structural_log_c(
     kernel: _KernelGraph[EdgeId],
-    terminals: AbstractSet[int],
+    preserved_nodes: AbstractSet[int],
     protected: AbstractSet[int],
     *,
     pendant: PendantPolicy,
@@ -1034,17 +1034,17 @@ def _structural_log_c(
     whether a removed pendant's material is absorbed or discarded changes no
     move, so the fold reads that off the policy per removed node.
     """
-    terminal_mask, protected_mask, keep_mask, series_blocked_mask = _node_masks(
-        kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible
+    preserved_mask, protected_mask, keep_mask, series_blocked_mask = _node_masks(
+        kernel, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible
     )
     return kernel.graph.series_parallel_reduce(
-        terminal_mask, protected_mask, pendant_keep_mask=keep_mask, series_blocked_mask=series_blocked_mask
+        preserved_mask, protected_mask, pendant_keep_mask=keep_mask, series_blocked_mask=series_blocked_mask
     )
 
 
 def _reduce_c(
     graph: MultiGraph[EdgeId],
-    terminals: AbstractSet[int],
+    preserved_nodes: AbstractSet[int],
     protected: AbstractSet[int],
     *,
     pendant: PendantPolicy,
@@ -1056,7 +1056,7 @@ def _reduce_c(
     ``Parallel`` trees and the same bookkeeping the Python worklist builds.
     """
     kernel = graph._kernel
-    log = _structural_log_c(kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible)
+    log = _structural_log_c(kernel, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible)
     return _fold_operation_log(graph, kernel, log, pendant=pendant)
 
 
@@ -1069,7 +1069,7 @@ def _sweep_parallels(state: pygraphc.ReductionState[int, int]) -> None:
 
 def _structural_log_moves(
     kernel: _KernelGraph[EdgeId],
-    terminals: AbstractSet[int],
+    preserved_nodes: AbstractSet[int],
     protected: AbstractSet[int],
     *,
     pendant: PendantPolicy,
@@ -1086,11 +1086,11 @@ def _structural_log_moves(
     It is a function of its own so that the structural work and the fold
     over its log can be called, and therefore measured, apart.
     """
-    terminal_mask, protected_mask, keep_mask, series_blocked_mask = _node_masks(
-        kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible
+    preserved_mask, protected_mask, keep_mask, series_blocked_mask = _node_masks(
+        kernel, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible
     )
     with kernel.graph.series_parallel_state(
-        terminal_mask, protected_mask, pendant_keep_mask=keep_mask, series_blocked_mask=series_blocked_mask
+        preserved_mask, protected_mask, pendant_keep_mask=keep_mask, series_blocked_mask=series_blocked_mask
     ) as state:
         _sweep_parallels(state)
         next_move, apply_move = state.next_move, state.apply_move
@@ -1109,7 +1109,7 @@ def _structural_log_moves(
 
 def _reduce_moves(
     graph: MultiGraph[EdgeId],
-    terminals: AbstractSet[int],
+    preserved_nodes: AbstractSet[int],
     protected: AbstractSet[int],
     *,
     pendant: PendantPolicy,
@@ -1117,13 +1117,15 @@ def _reduce_moves(
 ) -> Reduced[EdgeId]:
     """The same reduction driven from Python over the C primitives, then the fold."""
     kernel = graph._kernel
-    log = _structural_log_moves(kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible)
+    log = _structural_log_moves(
+        kernel, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible
+    )
     return _fold_operation_log(graph, kernel, log, pendant=pendant)
 
 
 def _structural_log_rounds(
     kernel: _KernelGraph[EdgeId],
-    terminals: AbstractSet[int],
+    preserved_nodes: AbstractSet[int],
     protected: AbstractSet[int],
     *,
     pendant: PendantPolicy,
@@ -1146,11 +1148,11 @@ def _structural_log_rounds(
     It is a function of its own so that the structural work and the fold
     over its log can be called, and therefore measured, apart.
     """
-    terminal_mask, protected_mask, keep_mask, series_blocked_mask = _node_masks(
-        kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible
+    preserved_mask, protected_mask, keep_mask, series_blocked_mask = _node_masks(
+        kernel, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible
     )
     with kernel.graph.series_parallel_state(
-        terminal_mask, protected_mask, pendant_keep_mask=keep_mask, series_blocked_mask=series_blocked_mask
+        preserved_mask, protected_mask, pendant_keep_mask=keep_mask, series_blocked_mask=series_blocked_mask
     ) as state:
         batch_moves, apply_batch = state.batch_moves, state.apply_batch
         progressed = True
@@ -1166,7 +1168,7 @@ def _structural_log_rounds(
 
 def _reduce_rounds(
     graph: MultiGraph[EdgeId],
-    terminals: AbstractSet[int],
+    preserved_nodes: AbstractSet[int],
     protected: AbstractSet[int],
     *,
     pendant: PendantPolicy,
@@ -1174,7 +1176,9 @@ def _reduce_rounds(
 ) -> Reduced[EdgeId]:
     """The same reduction driven from Python over the C primitives, then the fold."""
     kernel = graph._kernel
-    log = _structural_log_rounds(kernel, terminals, protected, pendant=pendant, series_ineligible=series_ineligible)
+    log = _structural_log_rounds(
+        kernel, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible
+    )
     return _fold_operation_log(graph, kernel, log, pendant=pendant)
 
 
@@ -1318,7 +1322,7 @@ def _joined(first: list[int] | None, second: list[int] | None) -> list[int]:
 
 def reduce(
     graph: MultiGraph[EdgeId],
-    terminals: AbstractSet[int],
+    preserved_nodes: AbstractSet[int],
     protected: AbstractSet[int] = frozenset(),
     *,
     pendant: PendantPolicy | None = None,
@@ -1327,14 +1331,14 @@ def reduce(
     order: Sequence[int] | None = None,
     engine: Literal["c", "moves", "python", "rounds"] = "c",
 ) -> Reduced[EdgeId]:
-    """Closure under the three simple reductions with a terminal set.
+    """Closure under the three simple reductions with a preserved node set.
 
-    Components without a terminal are removed whole first, before any move and
-    whatever the pendant policy says: a component with no terminal carries no
-    question, so nothing in it is kept. Pendant deletion removes a non-terminal
+    Components without a preserved node are removed whole first, before any move and
+    whatever the pendant policy says: a component with no preserved node carries no
+    question, so nothing in it is kept. Pendant deletion removes a non-preserved node
     with exactly one non-loop incidence unless its ``pendant`` action is
     ``keep``, and records its material on the neighbor if that action is
-    ``absorb``. Series merge replaces a non-terminal, non-protected,
+    ``absorb``. Series merge replaces a non-preserved, non-protected,
     series-eligible node with exactly two non-loop incidences to two distinct
     neighbors by one edge (loops do not count). Parallel merge replaces the
     edges between one endpoint pair, neither protected, by one edge. Self-loops
@@ -1345,16 +1349,16 @@ def reduce(
     ======================  =======  =========  ======================
     node is                 pendant  series     parallel at its edges
     ======================  =======  =========  ======================
-    a terminal              no       no         yes
+    a preserved node              no       no         yes
     ``protected``           yes      no         no
     ``series_ineligible``   yes      no         yes
     ``pendant`` ``keep``    no       yes        yes
     ======================  =======  =========  ======================
 
-    So a terminal is the only notion that both survives every move and keeps
+    So a preserved node is the only notion that both survives every move and keeps
     its parallel edges mergeable; ``protected`` is ``series_ineligible`` plus
     the parallel block, and the two compose by union on the series question; a
-    ``keep`` node is not a terminal, since it may still be merged away in
+    ``keep`` node is not a preserved node, since it may still be merged away in
     series, and a protected node is not preserved, since it may still be
     deleted as a pendant.
 
@@ -1378,7 +1382,7 @@ def reduce(
     fall, so taking the series move away leaves a degree-two node inert instead
     of creating a competing pair.
 
-    Every node named in ``terminals``, ``protected``, ``series_ineligible`` or
+    Every node named in ``preserved_nodes``, ``protected``, ``series_ineligible`` or
     the policy's exceptions must be a node of the graph. The residual of a
     reduction is a fixpoint: reducing it again with the same arguments changes
     nothing.
@@ -1401,23 +1405,23 @@ def reduce(
     if pendant is None:
         pendant = PendantPolicy("discard" if fold_leaves is False else "absorb")
     node_set = set(graph.nodes)
-    named = {*terminals, *protected, *series_ineligible, *pendant.exceptions}
+    named = {*preserved_nodes, *protected, *series_ineligible, *pendant.exceptions}
     unknown = sorted(node_id for node_id in named if node_id not in node_set)
     if unknown:
         message = (
-            "terminals, protected nodes, series-ineligible nodes and pendant policy exceptions "
+            "preserved nodes, protected nodes, series-ineligible nodes and pendant policy exceptions "
             f"must be nodes of the graph, unknown: {unknown}"
         )
         raise ValueError(message)
     if engine == "python" or order is not None:
         return _reduce_python(
-            graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible, order=order
+            graph, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible, order=order
         )
     if engine == "moves":
-        return _reduce_moves(graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible)
+        return _reduce_moves(graph, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible)
     if engine == "rounds":
-        return _reduce_rounds(graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible)
-    return _reduce_c(graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible)
+        return _reduce_rounds(graph, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible)
+    return _reduce_c(graph, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible)
 
 
 # ---------------------------------------------------------------------------

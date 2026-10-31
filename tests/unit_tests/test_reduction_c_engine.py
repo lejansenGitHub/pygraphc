@@ -5,7 +5,7 @@ the very trees the worklist builds, so the two engines must agree on every
 part of ``Reduced``: the residual multigraph, the leaf set and the canonical
 record log of every provenance tree, the folded node material and the dropped
 pendant trees. The differential test compares all of that on seeded random
-multigraphs with self-loops, parallel edges, terminals and protected nodes.
+multigraphs with self-loops, parallel edges, preserved nodes and protected nodes.
 """
 
 import random
@@ -18,7 +18,7 @@ from pygraphc.reduction import EdgeId, MultiGraph, Reduced, VirtualEdgeId, leave
 
 
 def random_multigraph(seed: int) -> tuple[MultiGraph[int], set[int], set[int], bool]:
-    """A multigraph with self-loops and parallel edges plus its terminals, protected nodes and fold flag."""
+    """A multigraph with self-loops and parallel edges plus its preserved nodes, protected nodes and fold flag."""
     rng = random.Random(seed)
     node_count = rng.randint(4, 40)
     nodes = list(range(node_count))
@@ -32,9 +32,9 @@ def random_multigraph(seed: int) -> tuple[MultiGraph[int], set[int], set[int], b
             endpoints[edge_id] = endpoints[rng.choice(list(endpoints))]
         else:
             endpoints[edge_id] = (from_node, rng.randrange(node_count))
-    terminals = set(rng.sample(nodes, rng.randint(0, 4)))
+    preserved_nodes = set(rng.sample(nodes, rng.randint(0, 4)))
     protected = set(rng.sample(nodes, rng.randint(0, 2)))
-    return MultiGraph(nodes, endpoints), terminals, protected, rng.random() < 0.5
+    return MultiGraph(nodes, endpoints), preserved_nodes, protected, rng.random() < 0.5
 
 
 def canonical(reduced: Reduced[EdgeId]) -> object:
@@ -65,60 +65,60 @@ def _edge_key(edge_id: object) -> tuple[int, int]:
 @pytest.mark.parametrize("seed", range(500))
 def test_the_two_engines_agree_on_random_multigraphs(seed: int) -> None:
     """The Python worklist is the reference semantics, so any difference is a defect of the C loop or the fold."""
-    graph, terminals, protected, fold_leaves = random_multigraph(seed)
-    from_c = reduce(graph, terminals, protected, fold_leaves=fold_leaves, engine="c")
-    from_python = reduce(graph, terminals, protected, fold_leaves=fold_leaves, engine="python")
+    graph, preserved_nodes, protected, fold_leaves = random_multigraph(seed)
+    from_c = reduce(graph, preserved_nodes, protected, fold_leaves=fold_leaves, engine="c")
+    from_python = reduce(graph, preserved_nodes, protected, fold_leaves=fold_leaves, engine="python")
     assert canonical(from_c) == canonical(from_python)
 
 
 def test_the_engines_agree_with_both_fold_settings_on_the_same_graph() -> None:
     """Only the fold flag differs, so a difference cannot come from the graph."""
     for seed in range(50):
-        graph, terminals, protected, _ = random_multigraph(seed)
+        graph, preserved_nodes, protected, _ = random_multigraph(seed)
         for fold_leaves in (True, False):
-            from_c = reduce(graph, terminals, protected, fold_leaves=fold_leaves, engine="c")
-            from_python = reduce(graph, terminals, protected, fold_leaves=fold_leaves, engine="python")
+            from_c = reduce(graph, preserved_nodes, protected, fold_leaves=fold_leaves, engine="c")
+            from_python = reduce(graph, preserved_nodes, protected, fold_leaves=fold_leaves, engine="python")
             assert canonical(from_c) == canonical(from_python), (seed, fold_leaves)
 
 
 def test_the_empty_graph_reduces_to_itself() -> None:
-    """No node carries a terminal and none can move, so the only correct residual is the empty graph."""
+    """No node is preserved and none can move, so the only correct residual is the empty graph."""
     graph: MultiGraph[int] = MultiGraph([], {})
-    reduced = reduce(graph, terminals=set())
+    reduced = reduce(graph, preserved_nodes=set())
     assert reduced.graph.nodes == []
     assert reduced.graph.endpoints == {}
-    assert canonical(reduced) == canonical(reduce(graph, terminals=set(), engine="python"))
+    assert canonical(reduced) == canonical(reduce(graph, preserved_nodes=set(), engine="python"))
 
 
-def test_a_single_node_survives_only_as_a_terminal() -> None:
-    """Its component holds no terminal without it, and a component without a terminal goes whole, which
+def test_a_single_node_survives_only_as_a_preserved_node() -> None:
+    """Its component holds no preserved node without it, and a component without a preserved node goes whole, which
     also drops its entry from the folded node material because no node absorbs it."""
     graph: MultiGraph[int] = MultiGraph([7], {})
-    assert reduce(graph, terminals={7}).graph.nodes == [7]
-    assert reduce(graph, terminals=set()).graph.nodes == []
-    assert reduce(graph, terminals=set()).folded_nodes == {}
+    assert reduce(graph, preserved_nodes={7}).graph.nodes == [7]
+    assert reduce(graph, preserved_nodes=set()).graph.nodes == []
+    assert reduce(graph, preserved_nodes=set()).folded_nodes == {}
 
 
-def test_all_nodes_terminal_leaves_the_graph_untouched() -> None:
-    """Every move needs a non-terminal to eliminate, so a six-cycle of terminals is already a fixpoint."""
+def test_all_nodes_preserved_leaves_the_graph_untouched() -> None:
+    """Every move needs a non-preserved node to eliminate, so a six-cycle of preserved nodes is already a fixpoint."""
     nodes = list(range(6))
     endpoints = {index: (index, (index + 1) % 6) for index in range(6)}
     graph = MultiGraph(nodes, endpoints)
-    reduced = reduce(graph, terminals=set(nodes))
+    reduced = reduce(graph, preserved_nodes=set(nodes))
     assert reduced.graph.nodes == nodes
     assert reduced.graph.endpoints == endpoints
-    assert canonical(reduced) == canonical(reduce(graph, terminals=set(nodes), engine="python"))
+    assert canonical(reduced) == canonical(reduce(graph, preserved_nodes=set(nodes), engine="python"))
 
 
-def test_no_terminal_at_all_removes_every_component() -> None:
-    """Terminal-free components go before any move, so nothing is left to absorb their nodes or to report."""
+def test_no_preserved_node_at_all_removes_every_component() -> None:
+    """Components without a preserved node go before any move, so nothing is left to absorb their nodes or to report."""
     graph = MultiGraph([0, 1, 2, 3], {0: (0, 1), 1: (2, 3), 2: (3, 3)})
-    reduced = reduce(graph, terminals=set())
+    reduced = reduce(graph, preserved_nodes=set())
     assert reduced.graph.nodes == []
     assert reduced.graph.endpoints == {}
     assert reduced.folded_nodes == {}
     assert reduced.dropped == []
-    assert canonical(reduced) == canonical(reduce(graph, terminals=set(), engine="python"))
+    assert canonical(reduced) == canonical(reduce(graph, preserved_nodes=set(), engine="python"))
 
 
 def test_a_chain_of_3000_nodes_becomes_one_edge() -> None:
@@ -127,7 +127,7 @@ def test_a_chain_of_3000_nodes_becomes_one_edge() -> None:
     nodes = list(range(node_count))
     endpoints = {index: (index, index + 1) for index in range(node_count - 1)}
     graph = MultiGraph(nodes, endpoints)
-    reduced = reduce(graph, terminals={0, node_count - 1})
+    reduced = reduce(graph, preserved_nodes={0, node_count - 1})
 
     assert reduced.graph.nodes == [0, node_count - 1]
     ((edge_id, tree),) = reduced.provenance.items()
@@ -147,55 +147,55 @@ def test_two_hubs_joined_by_many_two_paths_collapse_to_one_parallel_tree() -> No
         endpoints[2 * middle + 1] = (middle, 1)
     graph = MultiGraph(nodes, endpoints)
 
-    reduced = reduce(graph, terminals={0, 1})
+    reduced = reduce(graph, preserved_nodes={0, 1})
 
     # --- Assert ---
     ((_edge_id, tree),) = reduced.provenance.items()
     assert reduced.graph.nodes == [0, 1]
     assert len(leaves(tree)) == 2 * path_count
-    assert canonical(reduced) == canonical(reduce(graph, terminals={0, 1}, engine="python"))
+    assert canonical(reduced) == canonical(reduce(graph, preserved_nodes={0, 1}, engine="python"))
 
 
-def test_a_graph_of_only_self_loops_keeps_its_terminals_and_their_loops() -> None:
-    """A self-loop takes part in no move and leaves with its node, so a terminal keeps all of its loops
-    unmerged and the non-terminal node goes with its own."""
+def test_a_graph_of_only_self_loops_keeps_its_preserved_nodes_and_their_loops() -> None:
+    """A self-loop takes part in no move and leaves with its node, so a preserved node keeps all of its loops
+    unmerged and the non-preserved node goes with its own."""
     nodes = [0, 1, 2]
     endpoints = {0: (0, 0), 1: (0, 0), 2: (1, 1), 3: (2, 2)}
     graph = MultiGraph(nodes, endpoints)
 
-    reduced = reduce(graph, terminals={0, 2})
+    reduced = reduce(graph, preserved_nodes={0, 2})
     assert reduced.graph.nodes == [0, 2]
     assert reduced.graph.endpoints == {0: (0, 0), 1: (0, 0), 3: (2, 2)}
     assert reduced.dropped == []
-    assert canonical(reduced) == canonical(reduce(graph, terminals={0, 2}, engine="python"))
+    assert canonical(reduced) == canonical(reduce(graph, preserved_nodes={0, 2}, engine="python"))
 
 
 def test_a_caller_supplied_order_selects_the_python_engine() -> None:
     """The C work queue is fixed to increasing node index, so ``order`` picks the worklist."""
     graph = MultiGraph([0, 1, 2, 3, 4], {0: (0, 1), 1: (1, 2), 2: (2, 3), 3: (3, 4)})
-    ordered = reduce(graph, terminals={0, 4}, order=[3, 2, 1])
-    assert canonical(ordered) == canonical(reduce(graph, terminals={0, 4}, order=[3, 2, 1], engine="python"))
+    ordered = reduce(graph, preserved_nodes={0, 4}, order=[3, 2, 1])
+    assert canonical(ordered) == canonical(reduce(graph, preserved_nodes={0, 4}, order=[3, 2, 1], engine="python"))
 
 
-def test_unknown_terminals_are_rejected_by_both_engines() -> None:
+def test_unknown_preserved_nodes_are_rejected_by_both_engines() -> None:
     """The check belongs to ``reduce``, above the engine choice, so neither engine can see an unknown node."""
     graph = MultiGraph([0, 1], {0: (0, 1)})
     engines: tuple[Literal["c", "python"], ...] = ("c", "python")
     for engine in engines:
         with pytest.raises(ValueError, match="unknown: \\[9\\]"):
-            reduce(graph, terminals={9}, engine=engine)
+            reduce(graph, preserved_nodes={9}, engine=engine)
 
 
 def test_a_view_reduces_under_its_own_masks() -> None:
-    """Two triangles joined by a bridge, one terminal in each. With the bridge the two terminals keep
-    one edge between them; masking it leaves each triangle collapsing onto its own terminal, so the
+    """Two triangles joined by a bridge, one preserved node in each. With the bridge the two preserved nodes keep
+    one edge between them; masking it leaves each triangle collapsing onto its own preserved node, so the
     residual has no edge at all. Masking a triangle node takes that node out of every move."""
     graph = pygraphc.Graph([0, 1, 2, 3, 4, 5], [(0, 1), (1, 2), (2, 0), (2, 3), (3, 4), (4, 5), (5, 3)])
-    terminal_mask = bytes([1, 0, 0, 0, 1, 0])
+    preserved_mask = bytes([1, 0, 0, 0, 1, 0])
 
-    whole = graph.series_parallel_reduce(terminal_mask, bytes(6))
-    without_the_bridge = graph.without_edges([3]).series_parallel_reduce(terminal_mask, bytes(6))
-    without_a_triangle_node = graph.without_nodes([1]).series_parallel_reduce(terminal_mask, bytes(6))
+    whole = graph.series_parallel_reduce(preserved_mask, bytes(6))
+    without_the_bridge = graph.without_edges([3]).series_parallel_reduce(preserved_mask, bytes(6))
+    without_a_triangle_node = graph.without_nodes([1]).series_parallel_reduce(preserved_mask, bytes(6))
 
     # --- Assert ---
     assert whole.surviving_nodes.tolist() == [0, 4]
@@ -215,21 +215,21 @@ def test_the_loop_refuses_a_directed_graph() -> None:
         graph.series_parallel_reduce(bytes(2), bytes(2))
 
 
-def test_the_loop_refuses_a_missing_terminal_mask() -> None:
-    """With no terminal mask every component is terminal-free and the whole graph goes, which is
+def test_the_loop_refuses_a_missing_preserved_mask() -> None:
+    """With no preserved node mask every component has no preserved node and the whole graph goes, which is
     what no caller means by leaving the argument out. An all-zero mask still says it deliberately."""
     graph = pygraphc.Graph([0, 1, 2], [(0, 1), (1, 2)])
 
-    with pytest.raises(TypeError, match="requires a terminal mask"):
+    with pytest.raises(TypeError, match="requires a preserved node mask"):
         graph.series_parallel_reduce(None, bytes(3))  # type: ignore[arg-type] — the runtime guard is the subject
-    with pytest.raises(TypeError, match="requires a terminal mask"):
+    with pytest.raises(TypeError, match="requires a preserved node mask"):
         graph.without_nodes([2]).series_parallel_reduce(None, bytes(3))  # type: ignore[arg-type] — same guard
     assert graph.series_parallel_reduce(bytes(3), bytes(3)).surviving_nodes.tolist() == []
 
 
 def test_a_node_mask_is_a_buffer_and_not_a_list_of_node_ids() -> None:
     """Both masks are read as buffers of one byte per node index, so the list that the earlier
-    ``Collection[int]`` annotation invited is a TypeError rather than a mask of two terminals."""
+    ``Collection[int]`` annotation invited is a TypeError rather than a mask of two preserved nodes."""
     graph = pygraphc.Graph([0, 1, 2], [(0, 1), (1, 2)])
 
     with pytest.raises(TypeError):

@@ -146,9 +146,9 @@ def test_directed_workflow_within_budget(
 
 
 def test_reducing_a_million_node_grid_within_budget() -> None:
-    """The terminal-preserving reduction of a distribution-grid-shaped graph, one terminal per hundred nodes."""
+    """The node-preserving reduction of a distribution-grid-shaped graph, one preserved node per hundred nodes."""
     node_ids, edges = shapes.meshed_feeders(NODE_COUNT)
     graph = MultiGraph(node_ids, dict(enumerate(edges)))
-    terminals = set(random.Random(1).sample(node_ids, NODE_COUNT // 100))
+    preserved_nodes = set(random.Random(1).sample(node_ids, NODE_COUNT // 100))
 
-    _assert_within_budget(lambda: reduce(graph, terminals, engine="c"), 30.0)
+    _assert_within_budget(lambda: reduce(graph, preserved_nodes, engine="c"), 30.0)

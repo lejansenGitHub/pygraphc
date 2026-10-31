@@ -279,31 +279,31 @@ def _weakly_connected_components() -> Measured:
 
 def _feeder_multigraph(size: int) -> tuple[MultiGraph[int], set[int]]:
     node_ids, edges = shapes.meshed_feeders(size)
-    terminals = set(random.Random(1).sample(node_ids, size // 100))
-    return MultiGraph(node_ids, dict(enumerate(edges))), terminals
+    preserved_nodes = set(random.Random(1).sample(node_ids, size // 100))
+    return MultiGraph(node_ids, dict(enumerate(edges))), preserved_nodes
 
 
 @register("reduce_python/meshed_feeders_5k")
 def _reduce_python() -> Measured:
-    graph, terminals = _feeder_multigraph(5_000)
-    return lambda: reduce(graph, terminals, engine="python")
+    graph, preserved_nodes = _feeder_multigraph(5_000)
+    return lambda: reduce(graph, preserved_nodes, engine="python")
 
 
 @register("reduce_moves/meshed_feeders_5k")
 def _reduce_moves() -> Measured:
-    graph, terminals = _feeder_multigraph(5_000)
-    return lambda: reduce(graph, terminals, engine="moves")
+    graph, preserved_nodes = _feeder_multigraph(5_000)
+    return lambda: reduce(graph, preserved_nodes, engine="moves")
 
 
 @register("reduce_rounds/meshed_feeders_5k")
 def _reduce_rounds() -> Measured:
-    graph, terminals = _feeder_multigraph(5_000)
-    return lambda: reduce(graph, terminals, engine="rounds")
+    graph, preserved_nodes = _feeder_multigraph(5_000)
+    return lambda: reduce(graph, preserved_nodes, engine="rounds")
 
 
 @register("scenario/meshed_feeders_20k")
 def _scenario() -> Measured:
-    graph, _terminals = _feeder_multigraph(SIZE)
+    graph, _preserved_nodes = _feeder_multigraph(SIZE)
     active = set(graph.endpoints)
     removed = set(range(0, len(active), 50))
     return lambda: scenario(graph, active, removed)
@@ -311,15 +311,15 @@ def _scenario() -> Measured:
 
 @register("partition_from_components/meshed_feeders_20k")
 def _partition_from_components() -> Measured:
-    graph, _terminals = _feeder_multigraph(SIZE)
+    graph, _preserved_nodes = _feeder_multigraph(SIZE)
     active = set(graph.endpoints)
     return lambda: Partition.from_components(graph, active)
 
 
 @register("tree_folds/meshed_feeders_5k")
 def _tree_folds() -> Measured:
-    graph, terminals = _feeder_multigraph(5_000)
-    reduced = reduce(graph, terminals)
+    graph, preserved_nodes = _feeder_multigraph(5_000)
+    reduced = reduce(graph, preserved_nodes)
     trees = list(reduced.provenance.values())
     all_closed = dict.fromkeys(graph.endpoints, True)
 
@@ -408,8 +408,8 @@ def _parse_directed() -> Measured:
 
 @register("reduce_c/meshed_feeders_5k")
 def _reduce_c_small() -> Measured:
-    graph, terminals = _feeder_multigraph(5_000)
-    return lambda: reduce(graph, terminals, engine="c")
+    graph, preserved_nodes = _feeder_multigraph(5_000)
+    return lambda: reduce(graph, preserved_nodes, engine="c")
 
 
 @register("shortest_path_float_buffer/sparse_random_20k")

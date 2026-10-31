@@ -11,7 +11,7 @@ drift apart: a reader checks the picture, and the code cannot disagree with it.
 
 What this case exercises: the pendant and series moves of ``reduce`` down to a
 single residual edge, the ``paths`` fold over the resulting provenance chain,
-and ``scenario`` as a blocked-passage query. On a tree with two terminals the
+and ``scenario`` as a blocked-passage query. On a tree with two preserved nodes the
 reduction is a solver: dead ends fall away as pendants, corridors merge in
 series, and the one edge that survives carries the unique route.
 """
@@ -150,7 +150,7 @@ def test_reducing_the_maze_to_one_edge_solves_it() -> None:
     maze = parse_maze(MAZE_DRAWING)
     entrance = cell_id(ENTRANCE_CELL)
     exit_cell = cell_id(EXIT_CELL)
-    solved = reduce(maze, terminals=frozenset({entrance, exit_cell}))
+    solved = reduce(maze, preserved_nodes=frozenset({entrance, exit_cell}))
 
     # --- Assert ---
     # Every dead end has been filled and every corridor collapsed: only the

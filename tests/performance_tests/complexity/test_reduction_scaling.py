@@ -2,7 +2,7 @@
 
 Two hubs joined by many two-paths grow the degree of the hubs, the axis on
 which a per-move scan of the incidence set was once quadratic. A path between
-two terminals grows the depth of one series tree, the axis of every fold.
+two preserved nodes grows the depth of one series tree, the axis of every fold.
 """
 
 import random
@@ -33,7 +33,7 @@ SHAPES: dict[str, Callable[[int], tuple[list[int], list[tuple[int, int]]]]] = {
 }
 
 
-def _terminals(shape_name: str, node_ids: list[int]) -> set[int]:
+def _preserved_nodes(shape_name: str, node_ids: list[int]) -> set[int]:
     """The two ends for a path and the hubs for two hubs, one node in a hundred otherwise."""
     if shape_name == "path":
         return {node_ids[0], node_ids[-1]}
@@ -44,7 +44,7 @@ def _terminals(shape_name: str, node_ids: list[int]) -> set[int]:
 
 def _multigraph(shape_name: str, size: int) -> tuple[MultiGraph[int], set[int]]:
     node_ids, edges = SHAPES[shape_name](size)
-    return MultiGraph(node_ids, dict(enumerate(edges))), _terminals(shape_name, node_ids)
+    return MultiGraph(node_ids, dict(enumerate(edges))), _preserved_nodes(shape_name, node_ids)
 
 
 @pytest.mark.parametrize("shape_name", list(SHAPES))
@@ -53,8 +53,8 @@ def test_reduce_scales_linearly(engine: str, shape_name: str) -> None:
     """Every move removes a node or an edge and touches a bounded neighbourhood."""
 
     def prepare(size: int) -> Callable[[], object]:
-        graph, terminals = _multigraph(shape_name, size)
-        return lambda: reduce(graph, terminals, engine=engine)
+        graph, preserved_nodes = _multigraph(shape_name, size)
+        return lambda: reduce(graph, preserved_nodes, engine=engine)
 
     assert_scales_linearly(f"reduce_{engine}/{shape_name}", measure_scaling(prepare))
 
@@ -64,8 +64,8 @@ def test_python_engine_scales_linearly(shape_name: str) -> None:
     """The reference worklist makes the same moves in Python."""
 
     def prepare(size: int) -> Callable[[], object]:
-        graph, terminals = _multigraph(shape_name, size)
-        return lambda: reduce(graph, terminals, engine="python")
+        graph, preserved_nodes = _multigraph(shape_name, size)
+        return lambda: reduce(graph, preserved_nodes, engine="python")
 
     assert_scales_linearly(f"reduce_python/{shape_name}", measure_scaling(prepare))
 
@@ -75,8 +75,8 @@ def test_tree_folds_scale_linearly(shape_name: str) -> None:
     """A path gives one series tree as deep as the graph, two hubs one parallel node as wide."""
 
     def prepare(size: int) -> Callable[[], object]:
-        graph, terminals = _multigraph(shape_name, size)
-        (tree,) = reduce(graph, terminals).provenance.values()
+        graph, preserved_nodes = _multigraph(shape_name, size)
+        (tree,) = reduce(graph, preserved_nodes).provenance.values()
         all_closed = dict.fromkeys(graph.endpoints, True)
 
         def fold() -> None:
@@ -94,7 +94,7 @@ def test_scenario_and_partition_scale_linearly(shape_name: str) -> None:
     """Masking removed edges and labelling components is one pass over the graph."""
 
     def prepare(size: int) -> Callable[[], object]:
-        graph, _terminals = _multigraph(shape_name, size)
+        graph, _preserved_nodes = _multigraph(shape_name, size)
         active = set(graph.endpoints)
         removed = set(range(0, len(active), 50))
 
