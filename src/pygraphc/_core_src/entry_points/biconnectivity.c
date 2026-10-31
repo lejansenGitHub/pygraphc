@@ -495,10 +495,15 @@ PyObject *py_biconnected_components_by_node_id(PyObject *self, PyObject *args) {
  *   node, so an edge with one active port never makes its node critical;
  * - blocks: closed only below a node, never below an edge state, so the blocks
  *   meeting at a multiport edge merge into one (D14); a block with fewer than
- *   two nodes joins nothing and is not reported.
+ *   two nodes joins nothing and is not reported;
+ * - simple path blocks: the blocks of the search states themselves, closed
+ *   below every state, reported as (list of node sets, block index -> its
+ *   multiport edges), so a multiport edge can separate them as a node does. A simple path visits
+ *   each node and each multiport edge at most once, so the block-cut tree of
+ *   these blocks gives the nodes on simple paths.
  */
 
-enum { REPORT_BRIDGE_PAIRS, REPORT_CRITICAL_EDGES, REPORT_CRITICAL_NODES, REPORT_BLOCKS };
+enum { REPORT_BRIDGE_PAIRS, REPORT_CRITICAL_EDGES, REPORT_CRITICAL_NODES, REPORT_BLOCKS, REPORT_SIMPLE_PATH_BLOCKS };
 
 static inline __attribute__((always_inline)) int report_bridge_pair(const GraphContext *graph, int edge_index,
                                                                      PyObject *result) {
@@ -519,6 +524,48 @@ static inline __attribute__((always_inline)) int report_edge_index(int edge_inde
     return status;
 }
 
+/*
+ * Pop the links of the block below (parent, state), append its node ids as a
+ * set to the list result[0] and, when it holds multiport edges, map its index
+ * to their edge indices in the dict result[1]. Returns 0, or -1 with an
+ * exception set.
+ */
+static int report_simple_path_block(const GraphContext *graph, const int *link_from, const int *link_to,
+                                    int *link_top, int parent, int state, PyObject *result) {
+    int node_count = graph->node_ids.node_count;
+    PyObject *blocks = PyTuple_GET_ITEM(result, 0), *edge_indices_by_block = PyTuple_GET_ITEM(result, 1);
+    PyObject *block_nodes = PySet_New(NULL), *block_edges = NULL;
+    if (!block_nodes) return -1;
+    while (*link_top > 0) {
+        (*link_top)--;
+        int from = link_from[*link_top], to = link_to[*link_top];
+        int ends[2] = {from, to};
+        for (int end = 0; end < 2; end++) {
+            if (ends[end] < node_count) {
+                if (PySet_Add(block_nodes, graph->node_ids.node_id_items[ends[end]]) < 0) goto failed;
+                continue;
+            }
+            if (!block_edges && !(block_edges = PySet_New(NULL))) goto failed;
+            PyObject *edge_index_obj = PyLong_FromLong(ends[end] - node_count);
+            if (!edge_index_obj) goto failed;
+            int status = PySet_Add(block_edges, edge_index_obj);
+            Py_DECREF(edge_index_obj);
+            if (status < 0) goto failed;
+        }
+        if (from == parent && to == state) break;
+    }
+    if (PyList_Append(blocks, block_nodes) < 0) goto failed;
+    Py_DECREF(block_nodes);
+    if (!block_edges) return 0;
+    PyObject *block_index_obj = PyLong_FromSsize_t(PyList_GET_SIZE(blocks) - 1);
+    int status = block_index_obj ? PyDict_SetItem(edge_indices_by_block, block_index_obj, block_edges) : -1;
+    Py_XDECREF(block_index_obj); Py_DECREF(block_edges);
+    return status;
+failed:
+    Py_DECREF(block_nodes); Py_XDECREF(block_edges);
+    return -1;
+}
+
 static inline __attribute__((always_inline)) int tarjan_search(
     const GraphContext *graph, const uint8_t *two_port_edge_mask, const uint8_t *edge_mask, const uint8_t *port_mask,
     const uint8_t *node_mask, PyObject *result, const int mode, const int has_multiport_edges) {
@@ -530,9 +577,10 @@ static inline __attribute__((always_inline)) int tarjan_search(
     size_t link_capacity = (size_t)edge_count + (has_multiport_edges ? (size_t)ports->port_count : 0);
 
     int *scratch = (int *)malloc(6 * state_count * sizeof(int));
-    int *link_stack = mode == REPORT_BLOCKS ? (int *)malloc(2 * (link_capacity > 0 ? link_capacity : 1) * sizeof(int)) : NULL;
+    const int collects_links = mode == REPORT_BLOCKS || mode == REPORT_SIMPLE_PATH_BLOCKS;
+    int *link_stack = collects_links ? (int *)malloc(2 * (link_capacity > 0 ? link_capacity : 1) * sizeof(int)) : NULL;
     uint8_t *critical_edges = (has_multiport_edges && mode == REPORT_CRITICAL_EDGES) ? (uint8_t *)calloc((size_t)edge_count + 1, 1) : NULL;
-    if (!scratch || (mode == REPORT_BLOCKS && !link_stack) || (has_multiport_edges && mode == REPORT_CRITICAL_EDGES && !critical_edges)) {
+    if (!scratch || (collects_links && !link_stack) || (has_multiport_edges && mode == REPORT_CRITICAL_EDGES && !critical_edges)) {
         free(scratch); free(link_stack); free(critical_edges);
         PyErr_NoMemory();
         return -1;
@@ -580,14 +628,14 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 }
                 if (link == parent_link[state]) continue;
                 if (discovery_time[neighbor] == -1) {
-                    if (mode == REPORT_BLOCKS) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
+                    if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
                     discovery_time[neighbor] = low_link[neighbor] = timer++; parent_link[neighbor] = link;
                     if (counts_children) child_count[neighbor] = 0;
                     stack[++stack_top] = neighbor;
                     stack_next_slot[stack_top] = (has_multiport_edges && neighbor >= node_count)
                         ? ports->port_offsets[neighbor - node_count] : adjacency->offset[neighbor];
                 } else if (discovery_time[neighbor] < discovery_time[state]) {
-                    if (mode == REPORT_BLOCKS) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
+                    if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
                     if (low_link[state] > discovery_time[neighbor]) low_link[state] = discovery_time[neighbor];
                 }
                 continue;
@@ -617,6 +665,9 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 if (!parent_is_edge_state && parent_link[parent] != -1 && subtree_holds_node &&
                     low_link[state] >= discovery_time[parent] &&
                     PySet_Add(result, graph->node_ids.node_id_items[parent]) < 0) goto failed;
+            } else if (mode == REPORT_SIMPLE_PATH_BLOCKS) {
+                if (low_link[state] >= discovery_time[parent] &&
+                    report_simple_path_block(graph, link_from, link_to, &link_top, parent, state, result) < 0) goto failed;
             } else if (!parent_is_edge_state && low_link[state] >= discovery_time[parent]) {
                 PyObject *block = PySet_New(NULL);
                 if (!block) goto failed;
@@ -660,7 +711,9 @@ static PyObject *tarjan_entry(PyObject *args, const int mode) {
         PyErr_SetString(PyExc_TypeError, "critical edges, critical nodes and blocks are not defined for directed graphs");
         return NULL;
     }
-    PyObject *result = mode == REPORT_CRITICAL_NODES ? PySet_New(NULL) : PyList_New(0);
+    PyObject *result = mode == REPORT_CRITICAL_NODES ? PySet_New(NULL)
+                     : mode == REPORT_SIMPLE_PATH_BLOCKS ? Py_BuildValue("(NN)", PyList_New(0), PyDict_New())
+                     : PyList_New(0);
     if (!result || graph->node_ids.node_count == 0 || !graph->has_adjacency) return result;
 
     const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
@@ -686,6 +739,11 @@ static PyObject *tarjan_entry(PyObject *args, const int mode) {
             ? tarjan_search(graph, traversal_edge_mask, edge_mask, port_mask.ports, node_mask, result, REPORT_CRITICAL_NODES, 1)
             : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_CRITICAL_NODES, 0);
         break;
+    case REPORT_SIMPLE_PATH_BLOCKS:
+        status = graph->ports
+            ? tarjan_search(graph, traversal_edge_mask, edge_mask, port_mask.ports, node_mask, result, REPORT_SIMPLE_PATH_BLOCKS, 1)
+            : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_SIMPLE_PATH_BLOCKS, 0);
+        break;
     default:
         status = graph->ports
             ? tarjan_search(graph, traversal_edge_mask, edge_mask, port_mask.ports, node_mask, result, REPORT_BLOCKS, 1)
@@ -700,3 +758,4 @@ PyObject *py_bridges_ctx(PyObject *self, PyObject *args) { return tarjan_entry(a
 PyObject *py_critical_edges_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, REPORT_CRITICAL_EDGES); }
 PyObject *py_articulation_points_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, REPORT_CRITICAL_NODES); }
 PyObject *py_biconnected_components_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, REPORT_BLOCKS); }
+PyObject *py_simple_path_blocks_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, REPORT_SIMPLE_PATH_BLOCKS); }

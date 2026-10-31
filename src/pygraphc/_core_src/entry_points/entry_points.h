@@ -20,6 +20,7 @@ PYGRAPHC_INTERNAL PyObject *py_parse_graph(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_parse_port_graph(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_port_graph_shape(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_port_offsets(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_port_nodes(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_graph_is_directed(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_graph_edge_count(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_graph_node_count(PyObject *self, PyObject *args);
@@ -47,6 +48,7 @@ PYGRAPHC_INTERNAL PyObject *py_bridges_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_articulation_points_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_biconnected_components_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_critical_edges_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_simple_path_blocks_ctx(PyObject *self, PyObject *args);
 
 /* traversal.c */
 PYGRAPHC_INTERNAL PyObject *py_bfs(PyObject *self, PyObject *args);

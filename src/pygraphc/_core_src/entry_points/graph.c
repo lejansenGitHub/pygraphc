@@ -94,6 +94,25 @@ PyObject *py_port_offsets(PyObject *self, PyObject *args) {
                                      (graph->node_ids.edges.edge_count + 1) * (Py_ssize_t)sizeof(int));
 }
 
+PyObject *py_port_nodes(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    if (graph->ports)
+        return PyBytes_FromStringAndSize((const char *)graph->ports->port_nodes,
+                                         (Py_ssize_t)graph->ports->port_count * (Py_ssize_t)sizeof(int));
+    const EdgeList *edges = &graph->node_ids.edges;
+    PyObject *result = PyBytes_FromStringAndSize(NULL, 2 * (Py_ssize_t)edges->edge_count * (Py_ssize_t)sizeof(int));
+    if (!result) return NULL;
+    int *port_nodes = (int *)PyBytes_AS_STRING(result);
+    for (Py_ssize_t edge_index = 0; edge_index < edges->edge_count; edge_index++) {
+        port_nodes[2 * edge_index] = EDGE_FIRST_ENDPOINT(edges, edge_index);
+        port_nodes[2 * edge_index + 1] = EDGE_SECOND_ENDPOINT(edges, edge_index);
+    }
+    return result;
+}
+
 PyObject *py_graph_is_directed(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;

@@ -2,7 +2,53 @@
 
 Fast, general-purpose graph algorithm library implemented in C, callable from Python. Zero runtime dependencies.
 
+**Multiport edges are first-class.** An edge may join any number of nodes
+through its ports, and every algorithm works on that edge as one edge: no hidden
+hub nodes and no star expansion. Ports can be masked one by one, and weighted
+paths can take a weight per port. A graph of ordinary two-port edges runs as
+fast as before. See [Concepts](#concepts) and
+[Edges with ports](#edges-with-ports-multiport-edges).
+
 Edges use **original node IDs** — no manual index mapping needed. A C-side hash map translates IDs to internal indices automatically.
+
+## Concepts
+
+Every algorithm and every mask is defined in terms of these words, building on
+each other in this order.
+
+- **Node:** a vertex of the graph, given by its id. Node ids are integers of
+  your choice; the C core maps them to internal indices.
+- **Port:** one attachment of an edge to a node. A port belongs to exactly one
+  edge and sits at exactly one node. An edge's ports are numbered 0, 1, 2, …
+  in the order they are written, and a port is addressed as
+  `(edge_index, port_index)`. Two ports of one edge may sit at the same node
+  and stay distinct.
+- **Edge:** an element of the graph that joins its ports, written as the tuple
+  of its ports' nodes. The edge index is the position in the edge list.
+  - A **two-port edge** `(u, v)` is the ordinary edge between `u` and `v`.
+  - A **multiport edge** has three or more ports, e.g. `(u, v, w)`.
+  - An undirected edge may also have a single port; it then joins nothing.
+- **Directed edge:** each port is an **in-port** or an **out-port**. `(u, v)`
+  has its in-port at `u` and its out-port at `v`. A multiport edge is written
+  `(in_nodes, out_nodes)`. Every directed edge has at least one in-port and one
+  out-port.
+- **Mask:** a view that excludes nodes (`without_nodes`), edges
+  (`without_edges`) or single ports (`without_ports`) without rebuilding the
+  graph. Masks combine as a union.
+- **Active port:** a port whose edge, whose node and which itself are all
+  unmasked. Activity is the only thing an algorithm asks about masks, so each
+  of the following terms is defined through active ports alone.
+- **Connection:** an edge connects all of its active ports to each other.
+  On a directed edge, every active in-port leads to every active out-port.
+  An edge with fewer than two active ports connects nothing.
+- **Connected component:** a maximal set of unmasked nodes that are linked
+  through connections.
+- **Membership:** an edge belongs to the component of its active ports. Since
+  these are connected, there is exactly one such component. An edge without
+  an active port belongs to no component.
+- **Critical edge / critical node:** an edge or node whose removal splits the
+  nodes of its component (a bridge, an articulation point). Only active ports
+  count.
 
 ## Benchmarks
 
@@ -467,16 +513,9 @@ where it used to form a component of its own with no nodes. There is one
 
 #### One rule decides everything: active ports
 
-A port is **active** when its edge, the port itself and its node are all
-unmasked. Every algorithm asks only this rule, so a change in masking
-semantics is a change in one place.
-
-- **Connection:** an edge joins all of its active ports to each other.
-  Directed: from every active in-port to every active out-port.
-- **Membership:** an edge belongs to a connected component when all of its
-  active ports are at nodes of that component. Active ports are always joined,
-  so an edge with at least one active port belongs to exactly one component;
-  an edge without an active port belongs to none. Masked ports play no part.
+Connection, membership and critical elements are defined through **active
+ports** only (see [Concepts](#concepts)). Every algorithm asks only this rule,
+so a change in masking semantics is a change in one place.
 
 #### Masking cases
 
@@ -540,10 +579,16 @@ name an edge with more than two ports, so on a graph that has one, these
 methods raise an error naming their replacement instead of answering
 incompletely: `critical_edges()` returns the edge indices of every edge whose
 removal disconnects its component, two-port and multiport edges alike, and
-`edge_indices_at(node_ids)` finds edges by their port nodes. On a graph of
-two-port edges they behave as before, and the `*_with_branch_ids` methods stay as they
-are. `critical_edges()` is available on every graph and view; `edge_indices_at`
-is not built yet, its exact matching rule is still open.
+`edge_indices_at(node_ids)` returns the edges whose ports sit at exactly
+these nodes. On a graph of two-port edges they behave as before, and the
+`*_with_branch_ids` methods stay as they are. `critical_edges()` works on every
+graph and view, `edge_indices_at` on every graph.
+
+```python
+graph = Graph([1, 2, 3, 4], [(1, 2), (2, 3, 4)])
+graph.edge_indices_at([4, 2, 3])   # [1]: order and repeats do not matter
+graph.critical_edges()             # [1, 0]: both edges are critical
+```
 
 #### Critical edges, critical nodes and blocks
 
@@ -561,10 +606,11 @@ nodes:
 - `two_edge_connected_components` are the components left once every
   critical edge is removed.
 
-`nodes_on_simple_paths` stays unavailable on graphs with multiport edges: a
-simple path enters and leaves an edge through one port each, so not every node
-of a block lies on a path through it, and the block-based shortcut would
-answer wrongly.
+`nodes_on_simple_paths` uses its own blocks: a simple path visits each node
+and each multiport edge at most once, and enters and leaves an edge through one
+port each. A multiport edge can therefore separate these blocks the way a
+node does. In the tree-shaped edge `(1, 2, 3)`, the paths from 1 to 2 do not
+visit 3.
 
 #### Methods not yet available on ports
 
@@ -576,12 +622,12 @@ before, with no added cost per call.
 
 #### Open points
 
-- **Ports without a known node** are rejected at construction, as edges with
-  an unknown endpoint are today; "not connected" is expressed by masking the
-  port. Recommended, not yet decided.
 - **A "touching" relation** (an edge with a port, active or not, at a node of
   a component it is not a member of, such as an open switch at the boundary)
   is not part of this pull request.
+- Every answer that could reasonably go another way is listed in
+  [Multiport edge case behavior](#multiport-edge-case-behavior-up-for-discussion)
+  at the end of this README.
 
 ### Node-masked views (exclude nodes without rebuilding)
 
@@ -1433,3 +1479,42 @@ and is skipped otherwise.
 ```bash
 cd tests && pytest performance_tests/complexity -v   # or instructions, experience
 ```
+
+## Multiport edge case behavior (up for discussion)
+
+These are the answers the library gives today in situations where a
+different answer would also be reasonable. They are decided so that the
+library works now, and they may change once the people who use it have said
+what they need. Each entry is pinned by a test in
+`tests/unit_tests/test_multiport_edge_cases.py` (`test_edge_case_<n>_…`).
+Every test that depends on one of these answers carries the marker
+`multiport_edge_case`:
+
+```bash
+pytest -m multiport_edge_case
+```
+
+To change an answer, change its test first, then the code. "Decided by"
+says whether the user decided the answer or Claude chose it while
+implementing; the D and O numbers refer to `docs/multiport-decisions.md`.
+
+| # | Situation | Current behavior | Alternatives | Decided by |
+|---|-----------|------------------|--------------|------------|
+| 1 | Two-port edge with both nodes masked | Has no active port and belongs to no component (D18). | A component without nodes that holds only the edge, as before this pull request. | user |
+| 2 | Edge with exactly one active port | Connects nothing but belongs to the component of that port's node. It is never critical and never makes its node critical (masking case 3). | The edge belongs to no component. | user (membership), Claude (critical elements) |
+| 3 | Two-port edge with one port masked | Connects nothing, like a masked edge, but still belongs to the component of its active end (masking case 5). | Treated exactly like a masked edge, so it belongs to no component. | user |
+| 4 | Edge with a single port | Allowed on undirected graphs: it connects nothing and belongs to its node's component. A directed edge needs an in-port and an out-port (D12). | Reject single-port edges altogether. | user |
+| 5 | Edge with all ports at one node | Connects nothing and belongs to that node's component. It forms no block and is never critical (masking case 8). | Count it as a loop that puts the node into a block. | Claude |
+| 6 | Two ports of one edge at the same node | The ports stay distinct: masking one keeps the node attached through the other (masking case 7). The edge `(1, 1, 2)` is critical. | Merge ports at the same node into one. | user (ports by index), Claude (critical) |
+| 7 | Port at a node that is not in the graph | Rejected when the graph is built, as for two-port edges; "not connected" is a port mask (O1). | Accept the port and leave it inactive. | Claude (recommended, not confirmed) |
+| 8 | Directed edge with several in-ports | OR: one reached active in-port reaches every active out-port (D5). | AND: the out-ports are reached only once all in-ports are reached. | user |
+| 9 | Directed edge without an active out-port (or in-port) | Transmits nothing, yet for weakly connected components its active ports still connect to each other. | Connects nothing at all, even for weak components. | Claude |
+| 10 | Weights on a graph with a multiport edge | One weight per port for every edge, including the two-port edges of that graph. Crossing a two-port edge costs its two port weights. A graph of only two-port edges takes one weight per edge (D11). | One weight per edge everywhere, or per-port weights also on graphs of two-port edges. | user (per port), Claude (two-port edges in such graphs) |
+| 11 | Path through a multiport edge | Costs the entry port's weight plus the exit port's weight (masking case 10). | A weight per pair of ports, or per edge. | user |
+| 12 | Critical multiport edge | Critical when removing the whole edge splits the nodes of its ports. This holds even inside a block with a cycle: in `(1, 2), (2, 3), (1, 2, 3, 4)` the multiport edge is critical, because node 4 hangs on it alone. | Critical only when it lies on no cycle, as a bridge would be. | Claude |
+| 13 | Biconnected blocks at a multiport edge | Blocks never split at a multiport edge: a tree-shaped edge with k ports is one block of k nodes (D14), and a port node hanging on an edge of a cycle joins the cycle's block. | Split blocks at the edge, as `nodes_on_simple_paths` does. | user (tree-shaped), Claude (cycle) |
+| 14 | Two-edge-connected components | Every critical edge is removed whole, all ports at once: the tree-shaped edge `(1, 2, 3)` leaves three single nodes. | Remove only the ports whose removal splits the component. | Claude |
+| 15 | Simple paths through a multiport edge (`nodes_on_simple_paths`) | A path uses each multiport edge at most once and enters and leaves through one port each, so in the tree-shaped edge `(1, 2, 3)` the paths from 1 to 2 do not visit 3. | Allow a path to pass the same edge twice through different ports. | Claude |
+| 16 | `edge_indices_at(node_ids)` | Returns the edges whose set of port nodes equals the given set. Order, repeats and direction do not matter, and an unknown node matches nothing. | Match with repeats counted (multiset), match edges with a port at all given nodes (superset), or respect direction. | Claude |
+| 17 | Pair methods on a graph with a multiport edge | `bridges()`, `bridges_with_branch_ids()` and `edge_indices(u, v)` raise for the whole graph, even when asked about a two-port edge, and name `critical_edges()` or `edge_indices_at()` instead (D13). | Answer for the two-port edges and leave out the multiport ones. | user |
+| 18 | Methods not yet defined on ports | They raise `NotImplementedError` on a graph with a multiport edge and on any view with a port mask, rather than answering for part of the graph (O3, D19). | Answer on the two-port edges only. | user |

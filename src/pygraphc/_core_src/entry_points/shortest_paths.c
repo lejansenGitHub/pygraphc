@@ -550,7 +550,7 @@ PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     }
 
     WeightList weights;
-    if (parse_weights(weights_obj, &weights, ports ? ports->port_count : edge_count) < 0) { release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL; }
+    if (parse_counted_weights(weights_obj, &weights, ports ? ports->port_count : edge_count, ports ? "port" : "edge") < 0) { release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL; }
     if (!graph->has_adjacency) { free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); PyObject *empty_path = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, empty_path); }
 
     BidirectionalPath bidirectional_path;
@@ -655,7 +655,8 @@ static PyObject *shortest_path_lengths_from(const GraphContext *graph, PyObject 
     if (parse_port_mask(graph, port_mask_obj, edge_mask, &port_mask) < 0) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL; }
     const PortList *ports = graph->ports;
     WeightList weights;
-    if (parse_weights(weights_obj, &weights, ports ? ports->port_count : graph->node_ids.edges.edge_count) < 0) {
+    if (parse_counted_weights(weights_obj, &weights, ports ? ports->port_count : graph->node_ids.edges.edge_count,
+                              ports ? "port" : "edge") < 0) {
         release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL;
     }
     int state_count = node_count + (ports ? (int)graph->node_ids.edges.edge_count : 0);

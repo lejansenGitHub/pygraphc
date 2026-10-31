@@ -150,4 +150,5 @@ testpaths = ["tests"]
 markers = [
     "performance: performance benchmarks (deselect with '-m not performance')",
     "integration: domain integration cases (deselect with '-m not integration')",
+    "multiport_edge_case: multiport edge case behavior up for discussion (README 'Multiport edge case behavior')",
 ]

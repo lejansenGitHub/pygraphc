@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import types
 from collections import deque
-from collections.abc import Collection, Generator, Iterable, Iterator, Sequence
+from collections.abc import Collection, Generator, Hashable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Generic, NewType, TypeVar, overload
 
@@ -43,12 +43,14 @@ from pygraphc._core import neighbors_ctx as _neighbors_ctx
 from pygraphc._core import parse_graph as _parse_graph
 from pygraphc._core import parse_port_graph as _parse_port_graph
 from pygraphc._core import port_graph_shape as _port_graph_shape
+from pygraphc._core import port_nodes as _port_nodes
 from pygraphc._core import port_offsets as _port_offsets
 from pygraphc._core import predecessors_ctx as _predecessors_ctx
 from pygraphc._core import quotient_edges_ctx as _quotient_edges_ctx
 from pygraphc._core import series_parallel_reduce_ctx as _series_parallel_reduce_ctx
 from pygraphc._core import shortest_path_lengths_by_node_id as _shortest_path_lengths_by_node_id
 from pygraphc._core import shortest_path_lengths_ctx as _shortest_path_lengths_ctx
+from pygraphc._core import simple_path_blocks_ctx as _simple_path_blocks_ctx
 from pygraphc._core import sp_apply_batch as _sp_apply_batch
 from pygraphc._core import sp_apply_move as _sp_apply_move
 from pygraphc._core import sp_apply_parallel as _sp_apply_parallel
@@ -152,6 +154,9 @@ NodeIdT = TypeVar("NodeIdT", bound=int)
 
 BranchIdT = TypeVar("BranchIdT", bound=int)
 """Branch id type of a graph, inferred from ``branch_ids``; ``int`` when none are given."""
+
+BlockMemberT = TypeVar("BlockMemberT", bound=Hashable)
+"""A member of a block in the block-cut tree: a node id, or a multiport edge marker."""
 
 EdgeIndex = NewType("EdgeIndex", int)
 """Position of an edge in the sequence passed to ``Graph()``. Not a branch id."""
@@ -439,20 +444,20 @@ def nodes_on_simple_paths(
 
 
 def _build_block_cut_tree(
-    node_ids: Sequence[NodeIdT],
-    blocks: list[set[NodeIdT]],
-) -> tuple[dict[NodeIdT, list[int]], list[list[int]], dict[NodeIdT, int]]:
+    node_ids: Sequence[object],
+    blocks: list[set[BlockMemberT]],
+) -> tuple[dict[BlockMemberT, list[int]], list[list[int]], dict[BlockMemberT, int]]:
     """Build block-cut tree from biconnected components.
 
     Returns (block_indices_by_node_id, tree_neighbors, tree_index_by_articulation_point).
     """
     block_count = len(blocks)
-    block_indices_by_node_id: dict[NodeIdT, list[int]] = {}
+    block_indices_by_node_id: dict[BlockMemberT, list[int]] = {}
     for block_index, block in enumerate(blocks):
         for node_id in block:
             block_indices_by_node_id.setdefault(node_id, []).append(block_index)
 
-    tree_index_by_articulation_point: dict[NodeIdT, int] = {}
+    tree_index_by_articulation_point: dict[BlockMemberT, int] = {}
     next_tree_index = block_count
     for node_id, block_indices in block_indices_by_node_id.items():
         if len(block_indices) > 1:
@@ -469,19 +474,26 @@ def _build_block_cut_tree(
     return block_indices_by_node_id, tree_neighbors, tree_index_by_articulation_point
 
 
+@dataclass(frozen=True, slots=True)
+class _MultiportEdgeMember:
+    """A multiport edge as a member of a simple path block, distinct from every node id."""
+
+    edge_index: int
+
+
 def _collect_path_nodes(
-    node_ids: Sequence[NodeIdT],
-    blocks: list[set[NodeIdT]],
-    tree: tuple[dict[NodeIdT, list[int]], list[list[int]], dict[NodeIdT, int]],
-    source: NodeIdT,
-    targets: set[NodeIdT],
-    result: set[NodeIdT],
-) -> set[NodeIdT]:
+    node_ids: Sequence[object],
+    blocks: list[set[BlockMemberT]],
+    tree: tuple[dict[BlockMemberT, list[int]], list[list[int]], dict[BlockMemberT, int]],
+    source: BlockMemberT,
+    targets: set[BlockMemberT],
+    result: set[BlockMemberT],
+) -> set[BlockMemberT]:
     """BFS on block-cut tree, trace paths, collect nodes."""
     block_indices_by_node_id, tree_neighbors, tree_index_by_articulation_point = tree
     block_count = len(blocks)
 
-    def tree_index_of(node_id: NodeIdT) -> int:
+    def tree_index_of(node_id: BlockMemberT) -> int:
         if node_id in tree_index_by_articulation_point:
             return tree_index_by_articulation_point[node_id]
         block_indices = block_indices_by_node_id.get(node_id)
@@ -815,6 +827,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         "_directed",
         "_has_multiport_edges",
         "_port_offsets",
+        "_edge_indices_by_port_node_indices",
     )
 
     _node_ids: Sequence[NodeIdT]
@@ -826,6 +839,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     _directed: bool
     _has_multiport_edges: bool
     _port_offsets: memoryview | None
+    _edge_indices_by_port_node_indices: dict[frozenset[int], list[EdgeIndex]] | None
 
     @overload
     def __init__(
@@ -867,6 +881,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         self._directed = directed
         self._has_multiport_edges = False
         self._port_offsets = None
+        self._edge_indices_by_port_node_indices = None
         if dst is not None:
             self._graph_capsule = _parse_graph(node_ids, edges_or_src, dst, directed)
         else:
@@ -978,6 +993,31 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         """
         result: list[EdgeIndex] = _edge_indices_ctx(self._graph_capsule, u, v)
         return result
+
+    def edge_indices_at(self, node_ids: Iterable[NodeIdT]) -> list[EdgeIndex]:
+        """Indices of the edges whose ports sit at exactly these nodes, ascending.
+
+        Order and repeats of the node ids do not matter, nor does direction;
+        an unknown node id matches no edge. Works on every graph.
+        """
+        node_index_by_node_id = self._get_node_index_by_node_id()
+        try:
+            port_node_indices = frozenset(node_index_by_node_id[node_id] for node_id in node_ids)
+        except KeyError:
+            return []
+        return list(self._get_edge_indices_by_port_node_indices().get(port_node_indices, ()))
+
+    def _get_edge_indices_by_port_node_indices(self) -> dict[frozenset[int], list[EdgeIndex]]:
+        """Lazily build and cache the set of port node indices → edge indices mapping."""
+        if self._edge_indices_by_port_node_indices is None:
+            port_node_indices = memoryview(_port_nodes(self._graph_capsule)).cast("i")
+            edge_indices_by_port_node_indices: dict[frozenset[int], list[EdgeIndex]] = {}
+            for edge_index in range(self.edge_count):
+                ports = self._ports_of(edge_index)
+                key = frozenset(port_node_indices[ports.start : ports.stop])
+                edge_indices_by_port_node_indices.setdefault(key, []).append(EdgeIndex(edge_index))
+            self._edge_indices_by_port_node_indices = edge_indices_by_port_node_indices
+        return self._edge_indices_by_port_node_indices
 
     def incident_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all edges incident to the given node.
@@ -1466,10 +1506,13 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         source: NodeIdT,
         targets: Sequence[NodeIdT],
     ) -> set[NodeIdT]:
-        """Return all nodes on any simple path from source to any target."""
+        """Return all nodes on any simple path from source to any target.
+
+        A simple path visits each node and each multiport edge at most once,
+        entering and leaving an edge through one port each, so the block-cut
+        tree is built over nodes and multiport edges alike.
+        """
         self._require_undirected("nodes_on_simple_paths")
-        if self._has_multiport_edges:
-            raise NotImplementedError("nodes_on_simple_paths is not available on graphs with multiport edges")
         node_count = len(self._node_ids)
         if node_count == 0:
             return set()
@@ -1482,19 +1525,18 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         if not remaining_targets:
             return result
 
-        blocks = list(self.biconnected_components())
+        blocks: list[set[NodeIdT | _MultiportEdgeMember]]
+        blocks, edge_indices_by_block_index = _simple_path_blocks_ctx(self._graph_capsule)
+        for block_index, edge_indices in edge_indices_by_block_index.items():
+            blocks[block_index].update(map(_MultiportEdgeMember, edge_indices))
         if not blocks:
             return result
 
         tree = _build_block_cut_tree(self._node_ids, blocks)
-        return _collect_path_nodes(
-            self._node_ids,
-            blocks,
-            tree,
-            source,
-            remaining_targets,
-            result,
-        )
+        members = _collect_path_nodes(self._node_ids, blocks, tree, source, set(remaining_targets), set(result))
+        if not self._has_multiport_edges:
+            return members  # type: ignore[return-value]  # without multiport edges every member is a node id
+        return {member for member in members if not isinstance(member, _MultiportEdgeMember)}
 
 
 class GraphView(Generic[NodeIdT, BranchIdT]):

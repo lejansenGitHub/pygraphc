@@ -25,6 +25,9 @@ PYGRAPHC_INTERNAL int node_id_parse_split(PyObject *node_ids_obj, PyObject *firs
 PYGRAPHC_INTERNAL int parse_mask(PyObject *mask_obj, Py_ssize_t expected_length,
                                  const uint8_t **mask_out, Py_buffer *mask_buffer);
 PYGRAPHC_INTERNAL int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_edge_count);
+/* parse_weights for a count of other things than edges, named in the error message. */
+PYGRAPHC_INTERNAL int parse_counted_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_count,
+                                            const char *counted);
 PYGRAPHC_INTERNAL int parse_labels(PyObject *labels_obj, int node_count, const int32_t **labels_out, Py_buffer *labels_buffer);
 
 #endif

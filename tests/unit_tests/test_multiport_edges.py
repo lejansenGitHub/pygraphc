@@ -81,6 +81,7 @@ def test_two_port_edge_errors_are_reported_as_before() -> None:
         Graph([1, 2], [(1, 9)])
 
 
+@pytest.mark.multiport_edge_case
 def test_a_port_with_an_unknown_node_is_rejected() -> None:
     """O1 as recommended: every port needs a known node, as every two-port edge endpoint does."""
     with pytest.raises(ValueError, match="edge references unknown node ID"):
@@ -97,6 +98,7 @@ def test_directed_pair_keeps_its_meaning() -> None:
     assert port_graph_shape(graph._graph_capsule) == (4, 2, 5)
 
 
+@pytest.mark.multiport_edge_case
 def test_directed_multiport_needs_an_in_and_an_out_port() -> None:
     """D4: an edge with no in-nodes or no out-nodes cannot carry anything."""
     with pytest.raises(ValueError, match="at least one port"):
@@ -124,6 +126,7 @@ def test_masking_case_2_remaining_ports_stay_joined() -> None:
     assert _memberships(view)[11] == [3, 4, 5]
 
 
+@pytest.mark.multiport_edge_case
 def test_masking_case_3_one_active_port_joins_nothing() -> None:
     """Case 3: one active port (node 4) joins nothing; the edge belongs to that port's component."""
     view = _three_port_edge_between_two_port_edges().without_ports([(1, 0), (1, 1)])
@@ -142,6 +145,7 @@ def test_masking_case_4_no_active_port_belongs_nowhere() -> None:
     assert 11 not in _memberships(view)
 
 
+@pytest.mark.multiport_edge_case
 def test_masking_case_5_two_port_edge_with_one_port_masked() -> None:
     """Case 5: a two-port edge with port 1 masked joins nothing and belongs to its active end."""
     view = _three_port_edge_between_two_port_edges().without_ports([(0, 1)])
@@ -162,6 +166,7 @@ def test_masking_case_6_masked_node_leaves_and_the_rest_stays_joined() -> None:
         view.connected_component(3)
 
 
+@pytest.mark.multiport_edge_case
 def test_masking_case_7_masked_duplicate_port_keeps_the_node_attached() -> None:
     """Case 7: ports 0 and 1 both sit at node 2; masking one leaves node 2 joined to 3."""
     graph = Graph([1, 2, 3], [(1, 2), (2, 2, 3)], branch_ids=[10, 11])
@@ -173,6 +178,7 @@ def test_masking_case_7_masked_duplicate_port_keeps_the_node_attached() -> None:
     assert _memberships(view)[11] == [1, 2, 3]
 
 
+@pytest.mark.multiport_edge_case
 def test_masking_case_8_all_ports_at_one_node_join_nothing() -> None:
     """Case 8: an edge whose ports all sit at node 2 joins nothing and belongs to node 2's component."""
     graph = Graph([1, 2, 3], [(1, 2), (2, 2, 2)], branch_ids=[10, 11])
@@ -206,6 +212,7 @@ def test_a_port_beyond_the_edge_is_rejected() -> None:
 # ── D12: single-port edges ──
 
 
+@pytest.mark.multiport_edge_case
 def test_single_port_edge_joins_nothing_and_belongs_to_its_node() -> None:
     """D12: an undirected edge with one port, such as a load, joins nothing and belongs to its node's component."""
     graph = Graph([1, 2], [(1,), (1, 2)], branch_ids=[10, 11])
@@ -225,6 +232,7 @@ def test_component_labels_name_the_smallest_node_index() -> None:
     assert list(view.component_labels()) == [0, 0, 2, 3, -1]
 
 
+@pytest.mark.multiport_edge_case
 def test_methods_of_later_stages_say_so() -> None:
     """Until their stage lands, methods not yet on ports raise instead of answering on the two-port structure alone."""
     graph = _three_port_edge_between_two_port_edges()
@@ -238,6 +246,7 @@ def test_methods_of_later_stages_say_so() -> None:
         graph.without_edges([0]).degree(2)
 
 
+@pytest.mark.multiport_edge_case
 def test_methods_of_later_stages_refuse_a_port_mask_on_two_port_edges() -> None:
     """A port mask on a graph of two-port edges is not silently dropped by a method that cannot read it yet."""
     view = Graph([1, 2, 3], [(1, 2), (2, 3)]).without_ports([(0, 1)])
@@ -270,6 +279,7 @@ _METHODS_WITHOUT_PORT_MASKS = {
 }
 
 
+@pytest.mark.multiport_edge_case
 @pytest.mark.parametrize("method_name", list(_METHODS_WITHOUT_PORT_MASKS))
 def test_methods_of_later_stages_refuse_every_port_mask(method_name: str) -> None:
     """D19: each method whose kernel does not read port masks yet raises on a view with one."""
@@ -279,6 +289,7 @@ def test_methods_of_later_stages_refuse_every_port_mask(method_name: str) -> Non
         _METHODS_WITHOUT_PORT_MASKS[method_name](view)
 
 
+@pytest.mark.multiport_edge_case
 def test_pure_python_methods_refuse_multiport_edges() -> None:
     """D19: methods that never reach a C kernel check for multiport edges themselves."""
     graph = _three_port_edge_between_two_port_edges()
@@ -288,8 +299,6 @@ def test_pure_python_methods_refuse_multiport_edges() -> None:
         _ = graph.is_multigraph
     with pytest.raises(NotImplementedError, match="split_node"):
         graph.split_node(2, 9, [0])
-    with pytest.raises(NotImplementedError, match="nodes_on_simple_paths"):
-        graph.nodes_on_simple_paths(1, [5])
 
 
 # ── Critical edges, critical nodes and blocks ──
@@ -299,6 +308,7 @@ def _sorted_blocks(view: object) -> list[list[int]]:
     return sorted(sorted(block) for block in view.biconnected_components())  # type: ignore[attr-defined]
 
 
+@pytest.mark.multiport_edge_case
 def test_tree_of_edges_has_every_edge_critical() -> None:
     """D14 and case 12: in a tree, every edge is critical, its inner port nodes are critical, each edge is one block."""
     graph = _three_port_edge_between_two_port_edges()
@@ -319,6 +329,7 @@ def test_multiport_edge_on_a_cycle_is_not_critical() -> None:
     assert _sorted_blocks(graph) == [[1, 2, 3]]
 
 
+@pytest.mark.multiport_edge_case
 def test_blocks_merge_at_a_multiport_edge() -> None:
     """D14: the edge (1, 2, 4) lies on the cycle 1-2-3 and holds node 4, so all four nodes form one block."""
     graph = Graph([1, 2, 3, 4], [(1, 2), (2, 3), (3, 1), (1, 2, 4)])
@@ -330,6 +341,7 @@ def test_blocks_merge_at_a_multiport_edge() -> None:
     assert sorted(sorted(component) for component in graph.two_edge_connected_components()) == [[1, 2, 3], [4]]
 
 
+@pytest.mark.multiport_edge_case
 def test_masking_case_3_an_edge_with_one_active_port_is_never_critical() -> None:
     """Case 3: the three-port edge keeps only its port at node 2, so neither it nor node 2 is critical through it."""
     view = Graph([1, 2, 3, 4], [(1, 2), (2, 3, 4)]).without_ports([(1, 1), (1, 2)])
@@ -352,8 +364,9 @@ def test_masking_case_11_critical_elements_on_active_ports_only() -> None:
     assert _sorted_blocks(view) == [[1, 2], [2, 3]]
 
 
+@pytest.mark.multiport_edge_case
 def test_pair_methods_raise_on_multiport_graphs() -> None:
-    """D13: a node pair cannot name an edge with more than two ports, so the pair methods point to critical_edges()."""
+    """D13: a node pair cannot name an edge with more than two ports, so the pair methods name their replacement."""
     graph = _three_port_edge_between_two_port_edges()
 
     # --- Assert ---
@@ -361,8 +374,19 @@ def test_pair_methods_raise_on_multiport_graphs() -> None:
         graph.bridges()
     with pytest.raises(NotImplementedError, match=r"critical_edges\(\)"):
         graph.bridges_with_branch_ids()
-    with pytest.raises(NotImplementedError, match="multiport edges"):
+    with pytest.raises(NotImplementedError, match=r"edge_indices_at\(\)"):
         graph.edge_indices(2, 3)
+
+
+@pytest.mark.multiport_edge_case
+def test_edge_indices_at_finds_edges_by_their_port_nodes() -> None:
+    """D13: edge_indices_at replaces the pair lookup and also finds two-port edges."""
+    graph = _three_port_edge_between_two_port_edges()
+
+    # --- Assert ---
+    assert graph.edge_indices_at([4, 3, 2]) == [1]
+    assert graph.edge_indices_at([1, 2]) == [0]
+    assert graph.edge_indices_at([2, 3]) == []
 
 
 def test_port_mask_on_two_port_edges_in_critical_elements() -> None:
@@ -380,6 +404,7 @@ def test_port_mask_on_two_port_edges_in_critical_elements() -> None:
 # ── Graphs of two-port edges follow the same rules ──
 
 
+@pytest.mark.multiport_edge_case
 def test_masking_case_5_on_a_graph_of_two_port_edges() -> None:
     """Case 5 without any multiport edge: the edge with a masked port joins nothing and belongs to its active end."""
     graph = Graph([1, 2, 3], [(1, 2), (2, 3)], branch_ids=[10, 11])
@@ -393,6 +418,7 @@ def test_masking_case_5_on_a_graph_of_two_port_edges() -> None:
     assert view.shortest_path([1.0, 1.0], 1, 3) == []
 
 
+@pytest.mark.multiport_edge_case
 def test_two_port_edge_with_both_ends_masked_belongs_to_no_component() -> None:
     """D8 on a graph of two-port edges: with both endpoints masked, the edge has no active port and no component."""
     view = Graph([1, 2, 3], [(1, 2), (2, 3)], branch_ids=[10, 11]).without_nodes([1, 2])
@@ -412,6 +438,7 @@ def test_bfs_crosses_a_multiport_edge_to_all_of_its_ports() -> None:
     assert graph.bfs(3) == [3, 2, 4, 1, 5]
 
 
+@pytest.mark.multiport_edge_case
 def test_one_active_in_port_reaches_every_out_port() -> None:
     """D5: with the in-port at node 1 masked, the in-port at node 2 alone still feeds both out-ports."""
     graph = Graph([1, 2, 3, 4], [((1, 2), (3, 4))], directed=True)
@@ -425,6 +452,7 @@ def test_one_active_in_port_reaches_every_out_port() -> None:
     assert view.shortest_path([1.0] * 4, 1, 4) == []
 
 
+@pytest.mark.multiport_edge_case
 def test_masking_case_9_directed_edge_without_an_active_in_port_transmits_nothing() -> None:
     """Case 9: with both in-ports masked, nothing reaches the out-port."""
     view = Graph([1, 2, 3], [((1, 2), (3,))], directed=True).without_ports([(0, 0), (0, 1)])
@@ -435,6 +463,7 @@ def test_masking_case_9_directed_edge_without_an_active_in_port_transmits_nothin
 # ── Weighted paths ──
 
 
+@pytest.mark.multiport_edge_case
 def test_path_through_a_multiport_edge_costs_entry_plus_exit() -> None:
     """D11: one weight per port; the three-port edge costs its entry port's weight plus its exit port's weight."""
     graph = _three_port_edge_between_two_port_edges()

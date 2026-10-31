@@ -241,8 +241,14 @@ PyObject *py_incoming_edges_ctx(PyObject *self, PyObject *args) {
 PyObject *py_edge_indices_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *first_node_obj, *second_node_obj, *edge_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OOO|O", &capsule, &first_node_obj, &second_node_obj, &edge_mask_obj)) return NULL;
-    GraphContext *graph = get_two_port_graph_context(capsule);
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
+    if (graph->ports) {
+        PyErr_SetString(PyExc_NotImplementedError,
+                        "edge_indices names edges by node pair, which cannot name an edge with more than two ports; "
+                        "use edge_indices_at()");
+        return NULL;
+    }
 
     int first_found, second_found;
     int first_node = resolve_node(graph, first_node_obj, &first_found);

@@ -426,17 +426,17 @@ int parse_mask(PyObject *mask_obj, Py_ssize_t expected_length,
     return 0;
 }
 
-static int check_weight_count(WeightList *weights, Py_ssize_t expected_edge_count) {
-    if (weights->count == expected_edge_count) return 0;
+static int check_weight_count(WeightList *weights, Py_ssize_t expected_count, const char *counted) {
+    if (weights->count == expected_count) return 0;
     PyErr_Format(PyExc_ValueError,
-                 "weights length %zd does not match edge count %zd",
-                 weights->count, expected_edge_count);
+                 "weights length %zd does not match %s count %zd",
+                 weights->count, counted, expected_count);
     if (weights->owns_memory) free(weights->values);
     weights->values = NULL;
     return -1;
 }
 
-int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_edge_count) {
+int parse_counted_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_count, const char *counted) {
     Py_buffer buffer;
     if (PyObject_GetBuffer(weights_obj, &buffer, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
         if (buffer.format && strcmp(buffer.format, "d") == 0 &&
@@ -445,7 +445,7 @@ int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expecte
             weights->count = buffer.shape[0];
             weights->owns_memory = 0;
             PyBuffer_Release(&buffer);
-            return check_weight_count(weights, expected_edge_count);
+            return check_weight_count(weights, expected_count, counted);
         }
         PyBuffer_Release(&buffer);
     } else {
@@ -456,7 +456,7 @@ int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expecte
     Py_ssize_t weight_count = PySequence_Fast_GET_SIZE(weights_fast);
     weights->count = weight_count;
     weights->owns_memory = 1;
-    if (weight_count == 0) { weights->values = NULL; Py_DECREF(weights_fast); return check_weight_count(weights, expected_edge_count); }
+    if (weight_count == 0) { weights->values = NULL; Py_DECREF(weights_fast); return check_weight_count(weights, expected_count, counted); }
     weights->values = (double *)malloc((size_t)weight_count * sizeof(double));
     if (!weights->values) { Py_DECREF(weights_fast); PyErr_NoMemory(); return -1; }
     PyObject **weight_items = PySequence_Fast_ITEMS(weights_fast);
@@ -465,7 +465,11 @@ int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expecte
         if (PyErr_Occurred()) { free(weights->values); Py_DECREF(weights_fast); return -1; }
     }
     Py_DECREF(weights_fast);
-    return check_weight_count(weights, expected_edge_count);
+    return check_weight_count(weights, expected_count, counted);
+}
+
+int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_edge_count) {
+    return parse_counted_weights(weights_obj, weights, expected_edge_count, "edge");
 }
 
 /*

@@ -81,6 +81,9 @@ static PyMethodDef methods[] = {
      "port_graph_shape(capsule) -> (node_count, edge_count, port_count) as stored in C."},
     {"port_offsets", py_port_offsets, METH_VARARGS,
      "port_offsets(capsule) -> bytes\n\nint32 offsets: the ports of edge e are offsets[e] .. offsets[e + 1] - 1."},
+    {"port_nodes", py_port_nodes, METH_VARARGS,
+     "port_nodes(capsule) -> bytes\n\nint32 node index of every port, in port order; edge e of a graph of "
+     "two-port edges has ports 2e and 2e + 1."},
     {"graph_edge_count", py_graph_edge_count, METH_VARARGS,
      "graph_edge_count(capsule) -> int\n\nReturn edge count from parsed graph."},
     {"graph_node_count", py_graph_node_count, METH_VARARGS,
@@ -141,6 +144,9 @@ static PyMethodDef methods[] = {
     {"critical_edges_ctx", py_critical_edges_ctx, METH_VARARGS,
      "critical_edges_ctx(capsule[, edge_mask, node_mask, port_mask]) -> list[int]\n\n"
      "Indices of the edges whose removal disconnects their component."},
+    {"simple_path_blocks_ctx", py_simple_path_blocks_ctx, METH_VARARGS,
+     "simple_path_blocks_ctx(capsule[, edge_mask, node_mask, port_mask]) -> (list[set], dict[int, set[int]])\n\n"
+     "Blocks of nodes and multiport edges, as a simple path visits each at most once."},
     {"cycle_basis_ctx", py_cycle_basis_ctx, METH_VARARGS,
      "cycle_basis_ctx(capsule[, edge_mask, node_mask]) -> list[list[NodeId]]\n\n"
      "Fundamental cycle basis of an undirected graph."},

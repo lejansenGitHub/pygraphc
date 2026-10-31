@@ -37,6 +37,8 @@ OPERATIONS: dict[str, Operation] = {
     "articulation_points": lambda graph: graph.articulation_points,
     "biconnected_components": lambda graph: lambda: list(graph.biconnected_components()),
     "two_edge_connected_components": lambda graph: lambda: list(graph.two_edge_connected_components()),
+    "nodes_on_simple_paths": lambda graph: lambda: graph.nodes_on_simple_paths(0, [graph.node_count - 1]),
+    "edge_indices_at": lambda graph: _edge_indices_at_first_edge(graph),
 }
 
 
@@ -50,6 +52,17 @@ def _shortest_path_with_unit_weights(graph: Graph[int, int]) -> Callable[[], obj
     """From the first to the last node, with one weight per port built outside the timed call."""
     weights = [1.0] * graph.port_count
     return lambda: graph.shortest_path(weights, 0, graph.node_count - 1)
+
+
+def _edge_indices_at_first_edge(graph: Graph[int, int]) -> Callable[[], object]:
+    """Build the lookup of a fresh graph inside the timed call: one pass over the ports."""
+    node_ids = [0, 1]
+
+    def edge_indices_at() -> object:
+        graph._edge_indices_by_port_node_indices = None
+        return graph.edge_indices_at(node_ids)
+
+    return edge_indices_at
 
 
 def _prepare(operation: Operation, shape: Shape) -> Callable[[int], Callable[[], object]]:
