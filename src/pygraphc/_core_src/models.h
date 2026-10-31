@@ -29,7 +29,7 @@ typedef struct {
 #define EDGE_FIRST_ENDPOINT(edges, edge_index) ((edges)->second_endpoints == NULL ? (edges)->first_endpoints[(edge_index)*2]   : (edges)->first_endpoints[edge_index])
 #define EDGE_SECOND_ENDPOINT(edges, edge_index) ((edges)->second_endpoints == NULL ? (edges)->first_endpoints[(edge_index)*2+1] : (edges)->second_endpoints[edge_index])
 
-PYGRAPHC_INTERNAL void free_edges(EdgeList *el);
+PYGRAPHC_INTERNAL void free_edges(EdgeList *edges);
 
 /* ── Integer hash map (open addressing, power-of-2) ── */
 
@@ -40,24 +40,24 @@ typedef struct {
     int capacity_mask;  /* capacity - 1, a hash bit mask */
 } IntMap;
 
-PYGRAPHC_INTERNAL int intmap_init(IntMap *m, int n);
-PYGRAPHC_INTERNAL void intmap_free(IntMap *m);
+PYGRAPHC_INTERNAL int intmap_init(IntMap *map, int expected_count);
+PYGRAPHC_INTERNAL void intmap_free(IntMap *map);
 
-static inline void intmap_put(IntMap *m, long key, int val) {
-    int i = (int)((unsigned long)key & (unsigned long)m->capacity_mask);
-    while (m->keys[i] != -1) {
-        if (m->keys[i] == key) { m->values[i] = val; return; }
-        i = (i + 1) & m->capacity_mask;
+static inline void intmap_put(IntMap *map, long key, int value) {
+    int slot = (int)((unsigned long)key & (unsigned long)map->capacity_mask);
+    while (map->keys[slot] != -1) {
+        if (map->keys[slot] == key) { map->values[slot] = value; return; }
+        slot = (slot + 1) & map->capacity_mask;
     }
-    m->keys[i] = key;
-    m->values[i] = val;
+    map->keys[slot] = key;
+    map->values[slot] = value;
 }
 
-static inline int intmap_get(IntMap *m, long key) {
-    int i = (int)((unsigned long)key & (unsigned long)m->capacity_mask);
-    while (m->keys[i] != -1) {
-        if (m->keys[i] == key) return m->values[i];
-        i = (i + 1) & m->capacity_mask;
+static inline int intmap_get(IntMap *map, long key) {
+    int slot = (int)((unsigned long)key & (unsigned long)map->capacity_mask);
+    while (map->keys[slot] != -1) {
+        if (map->keys[slot] == key) return map->values[slot];
+        slot = (slot + 1) & map->capacity_mask;
     }
     return -1;  /* not found */
 }
@@ -72,7 +72,7 @@ typedef struct {
     EdgeList edges;
 } NodeIdContext;
 
-PYGRAPHC_INTERNAL void node_id_context_free(NodeIdContext *ctx);
+PYGRAPHC_INTERNAL void node_id_context_free(NodeIdContext *context);
 
 /* ── Helper: run union-find, return component_id array + num_components ── */
 
@@ -92,8 +92,8 @@ typedef struct {
     int *reverse_edge_indices;  /* directed only: size edge_count, original edge indices */
 } AdjacencyList;
 
-PYGRAPHC_INTERNAL int build_adjacency(int n, EdgeList *el, AdjacencyList *al, int directed);
-PYGRAPHC_INTERNAL void free_adjacency(AdjacencyList *al);
+PYGRAPHC_INTERNAL int build_adjacency(int node_count, EdgeList *edges, AdjacencyList *adjacency, int directed);
+PYGRAPHC_INTERNAL void free_adjacency(AdjacencyList *adjacency);
 
 /* ── GraphContext: cached parsed graph for reuse across algorithms ── */
 
@@ -107,9 +107,9 @@ typedef struct {
 PYGRAPHC_INTERNAL void graph_context_destructor(PyObject *capsule);
 
 static inline GraphContext *get_graph_context(PyObject *capsule) {
-    GraphContext *g = (GraphContext *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
-    if (!g) PyErr_SetString(PyExc_TypeError, "expected a parsed Graph capsule");
-    return g;
+    GraphContext *graph = (GraphContext *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
+    if (!graph) PyErr_SetString(PyExc_TypeError, "expected a parsed Graph capsule");
+    return graph;
 }
 
 /* ── Weight parsing: list of floats or numpy float64 array ── */
@@ -120,12 +120,12 @@ typedef struct {
     int owns_memory;
 } WeightList;
 
-PYGRAPHC_INTERNAL void free_weights(WeightList *wl);
+PYGRAPHC_INTERNAL void free_weights(WeightList *weights);
 
 /* ── Edge and node masks: borrowed byte buffers, released after use ── */
 
-static inline void release_mask(Py_buffer *mask_buf) {
-    if (mask_buf->obj) PyBuffer_Release(mask_buf);
+static inline void release_mask(Py_buffer *mask_buffer) {
+    if (mask_buffer->obj) PyBuffer_Release(mask_buffer);
 }
 
 #endif
