@@ -6,7 +6,7 @@ of ``protected``. Both are per-node questions the C loop answers from one byte
 mask each, so the two engines must stay differentially equal under random
 policies, which is what the sweep below checks.
 
-The targeted tests pin the four notions apart: a terminal survives every move,
+The targeted tests pin the four notions apart: a preserved node survives every move,
 a protected node is still deleted as a pendant, a ``keep`` node is still merged
 away in series, and a series-ineligible node still has its parallel edges
 merged. The last two tests are about confluence: a ``keep`` action makes the
@@ -48,10 +48,10 @@ def random_policies(seed: int, nodes: list[int]) -> tuple[PendantPolicy, frozens
     return PendantPolicy(default, exceptions), series_ineligible
 
 
-def reduced_with(graph: MultiGraph[int], terminals: set[int], **arguments: object) -> Reduced[int]:
+def reduced_with(graph: MultiGraph[int], preserved_nodes: set[int], **arguments: object) -> Reduced[int]:
     """One reduction per engine, asserted equal, so every targeted test covers both."""
-    from_c = reduce(graph, terminals, engine="c", **arguments)
-    from_python = reduce(graph, terminals, engine="python", **arguments)
+    from_c = reduce(graph, preserved_nodes, engine="c", **arguments)
+    from_python = reduce(graph, preserved_nodes, engine="python", **arguments)
     assert canonical(from_c) == canonical(from_python)
     return from_c
 
@@ -62,11 +62,11 @@ def reduced_with(graph: MultiGraph[int], terminals: set[int], **arguments: objec
 @pytest.mark.parametrize("seed", range(400))
 def test_the_two_engines_agree_under_random_policies(seed: int) -> None:
     """The Python worklist is the reference semantics, so any difference is a defect of the C masks or the fold."""
-    graph, terminals, protected, _fold_leaves = random_multigraph(seed)
+    graph, preserved_nodes, protected, _fold_leaves = random_multigraph(seed)
     pendant, series_ineligible = random_policies(seed, graph.nodes)
-    from_c = reduce(graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible, engine="c")
+    from_c = reduce(graph, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible, engine="c")
     from_python = reduce(
-        graph, terminals, protected, pendant=pendant, series_ineligible=series_ineligible, engine="python"
+        graph, preserved_nodes, protected, pendant=pendant, series_ineligible=series_ineligible, engine="python"
     )
     assert canonical(from_c) == canonical(from_python)
 
@@ -75,10 +75,10 @@ def test_the_two_engines_agree_on_every_uniform_policy() -> None:
     """Only the default action differs, so a difference cannot come from the graph or from the exceptions."""
     actions: tuple[PendantAction, ...] = ("absorb", "discard", "keep")
     for seed in range(40):
-        graph, terminals, protected, _fold_leaves = random_multigraph(seed)
+        graph, preserved_nodes, protected, _fold_leaves = random_multigraph(seed)
         for action in actions:
-            from_c = reduce(graph, terminals, protected, pendant=PendantPolicy(action), engine="c")
-            from_python = reduce(graph, terminals, protected, pendant=PendantPolicy(action), engine="python")
+            from_c = reduce(graph, preserved_nodes, protected, pendant=PendantPolicy(action), engine="c")
+            from_python = reduce(graph, preserved_nodes, protected, pendant=PendantPolicy(action), engine="python")
             assert canonical(from_c) == canonical(from_python)
 
 
@@ -138,16 +138,16 @@ def test_a_discarding_node_drops_the_material_absorbed_into_it_earlier() -> None
     assert reduced.folded_nodes == {0: []}
 
 
-def test_a_keep_node_is_not_a_terminal_and_is_still_merged_away_in_series() -> None:
-    """``keep`` answers the pendant question only; a node that must survive every move is a terminal."""
+def test_a_keep_node_is_not_a_preserved_node_and_is_still_merged_away_in_series() -> None:
+    """``keep`` answers the pendant question only; a node that must survive every move is a preserved node."""
     graph = MultiGraph([0, 1, 2], {101: (0, 1), 102: (1, 2)})
     reduced = reduced_with(graph, {0, 2}, pendant=PendantPolicy("absorb", {1: "keep"}))
     assert reduced.graph.nodes == [0, 2]
     assert reduced.folded_interior == {1: []}
 
 
-def test_a_keep_policy_does_not_save_a_terminal_free_component() -> None:
-    """Components without a terminal go whole before any move, so no pendant action is ever consulted in them."""
+def test_a_keep_policy_does_not_save_a_component_without_preserved_nodes() -> None:
+    """Components without a preserved node go whole before any move, so no pendant action is ever consulted in them."""
     graph = MultiGraph([0, 1, 2, 3], {101: (0, 1), 102: (2, 3)})
     reduced = reduced_with(graph, {0}, pendant=PendantPolicy("keep"))
     assert reduced.graph.nodes == [0, 1]
@@ -196,7 +196,7 @@ def test_protection_and_series_ineligibility_compose_by_union_on_the_series_ques
 
 
 def test_a_protected_node_is_still_deleted_as_a_pendant() -> None:
-    """``protected`` answers the merge questions only; a node that must stay is a terminal or a ``keep`` node."""
+    """``protected`` answers the merge questions only; a node that must stay is a preserved node or a ``keep`` node."""
     graph = MultiGraph([0, 1], {101: (0, 1)})
     reduced = reduced_with(graph, {0}, protected=frozenset({1}))
     assert reduced.graph.nodes == [0]
@@ -210,19 +210,19 @@ def test_a_protected_node_is_still_deleted_as_a_pendant() -> None:
 def test_the_deprecated_boolean_maps_to_a_uniform_policy(engine: Literal["c", "python"]) -> None:
     """``True`` is a uniform ``absorb``, ``False`` a uniform ``discard``, on every graph of the sweep."""
     for seed in range(60):
-        graph, terminals, protected, _fold_leaves = random_multigraph(seed)
+        graph, preserved_nodes, protected, _fold_leaves = random_multigraph(seed)
         for fold_leaves, action in ((True, "absorb"), (False, "discard")):
-            from_boolean = reduce(graph, terminals, protected, fold_leaves=fold_leaves, engine=engine)
-            from_policy = reduce(graph, terminals, protected, pendant=PendantPolicy(action), engine=engine)
+            from_boolean = reduce(graph, preserved_nodes, protected, fold_leaves=fold_leaves, engine=engine)
+            from_policy = reduce(graph, preserved_nodes, protected, pendant=PendantPolicy(action), engine=engine)
             assert canonical(from_boolean) == canonical(from_policy)
 
 
 @pytest.mark.parametrize("engine", ENGINES)
 def test_the_default_is_still_the_old_default(engine: Literal["c", "python"]) -> None:
     """No pendant argument at all keeps the material, as ``fold_leaves=True`` did."""
-    graph, terminals, protected, _fold_leaves = random_multigraph(3)
-    plain = reduce(graph, terminals, protected, engine=engine)
-    explicit = reduce(graph, terminals, protected, fold_leaves=True, engine=engine)
+    graph, preserved_nodes, protected, _fold_leaves = random_multigraph(3)
+    plain = reduce(graph, preserved_nodes, protected, engine=engine)
+    explicit = reduce(graph, preserved_nodes, protected, fold_leaves=True, engine=engine)
     assert canonical(plain) == canonical(explicit)
 
 
@@ -265,12 +265,12 @@ def test_a_policy_exception_for_a_node_that_never_becomes_a_pendant_is_harmless(
 
 
 def test_a_keep_action_makes_the_residual_order_dependent() -> None:
-    """A triangle with one terminal in which the ``keep`` node's fate is decided by which move reaches it first.
+    """A triangle with one preserved node in which the ``keep`` node's fate is decided by which move reaches it first.
 
     In id order node 1 is merged away in series first, which leaves node 2 a
     pendant whose ``keep`` action saves it. Processing node 2 first merges it
     away in series instead, because ``keep`` blocks no series move, and the
-    residual is the terminal alone. The module answers in id order, so the
+    residual is the preserved node alone. The module answers in id order, so the
     kept node survives; both engines agree because the C work queue is the
     same increasing node index.
     """
@@ -304,12 +304,12 @@ def test_a_series_ineligible_node_alone_leaves_the_residual_order_independent() 
     # --- Assert ---
     rng = random.Random(1234)
     for seed in range(120):
-        graph, terminals, _protected, _fold_leaves = random_multigraph(seed)
+        graph, preserved_nodes, _protected, _fold_leaves = random_multigraph(seed)
         series_ineligible = frozenset(rng.sample(graph.nodes, rng.randint(1, min(4, len(graph.nodes)))))
         answers = set()
         for _attempt in range(8):
             order = sorted(graph.nodes) if not answers else rng.sample(graph.nodes, len(graph.nodes))
-            reduced = reduce(graph, terminals, series_ineligible=series_ineligible, order=order, engine="python")
+            reduced = reduce(graph, preserved_nodes, series_ineligible=series_ineligible, order=order, engine="python")
             answers.add(order_independent_part(reduced))
         assert len(answers) == 1
 
@@ -332,7 +332,7 @@ def order_independent_part(reduced: Reduced[int]) -> str:
 
 
 def test_the_two_new_masks_are_buffers_and_not_lists_of_node_ids() -> None:
-    """Both masks are read as buffers of one byte per node index, like the terminal and protected masks.
+    """Both masks are read as buffers of one byte per node index, like the preserved node and protected masks.
 
     Annotating them as a collection of node ids would type-check the list this
     rejects and leave the TypeError to the C layer, which is the shape the
@@ -346,7 +346,7 @@ def test_the_two_new_masks_are_buffers_and_not_lists_of_node_ids() -> None:
         graph.series_parallel_reduce(bytes(3), bytes(3), pendant_keep_mask=[2])  # type: ignore[arg-type] — the runtime guard is the subject
     with pytest.raises(TypeError, match="bytes-like object is required"):
         graph.series_parallel_reduce(bytes(3), bytes(3), series_blocked_mask=[2])  # type: ignore[arg-type] — same guard
-    with pytest.raises(TypeError, match="requires a terminal mask"):
+    with pytest.raises(TypeError, match="requires a preserved node mask"):
         graph.series_parallel_reduce(None, bytes(3), pendant_keep_mask=bytes(3))  # type: ignore[arg-type] — same guard
 
 

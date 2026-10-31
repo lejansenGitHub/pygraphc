@@ -563,7 +563,7 @@ def _rerouted_branch_ids(
 
 @dataclass(frozen=True)
 class ReductionLog:
-    """Flat operation log of a terminal-preserving series-parallel reduction, as int32 views.
+    """Flat operation log of a node-preserving series-parallel reduction, as int32 views.
 
     The first eight fields hold one entry per operation, in the order the
     moves apply: ``op_kind`` is 0 for a leaf, 1 for a series merge, 2 for a
@@ -605,10 +605,10 @@ class ReductionLog:
 
 
 class ReductionState(Generic[NodeIdT, BranchIdT]):
-    """Opaque handle on the mutable state of one terminal-preserving reduction.
+    """Opaque handle on the mutable state of one node-preserving reduction.
 
     ``Graph.series_parallel_state`` builds the incidence structure of the
-    masked graph once, with the terminal-free components already gone, and
+    masked graph once, with the components without a preserved node already gone, and
     every method below moves it one step without rebuilding anything. The
     caller drives the fixpoint itself and reads the operation log at the end.
 
@@ -1346,42 +1346,42 @@ class Graph(Generic[NodeIdT, BranchIdT]):
 
     def series_parallel_reduce(
         self,
-        terminal_mask: NodeMask,
+        preserved_mask: NodeMask,
         protected_mask: NodeMask,
         *,
         pendant_keep_mask: NodeMask | None = None,
         series_blocked_mask: NodeMask | None = None,
     ) -> ReductionLog:
-        """Terminal-preserving series-parallel reduction as a flat operation log.
+        """Node-preserving series-parallel reduction as a flat operation log.
 
         Pendant deletion, series merge and parallel merge are applied to a
         fixpoint in increasing node index, self-loops take part in no move
-        and leave with their node, and components without a terminal go
+        and leave with their node, and components without a preserved node go
         whole before any move. The four masks hold one byte per node index and
         mark membership by a non-zero byte; they are read as buffers, so a list
         of node ids is not a mask. A node in ``pendant_keep_mask`` takes no
         pendant move, one in ``series_blocked_mask`` no series move (parallel
         merges at it stay allowed, unlike ``protected_mask``). A missing
         ``protected_mask``, ``pendant_keep_mask`` or ``series_blocked_mask`` is
-        the empty set; ``None`` in place of the terminal mask raises
-        ``TypeError``, because a reduction without a terminal deletes every
+        the empty set; ``None`` in place of the preserved node mask raises
+        ``TypeError``, because a reduction without a preserved node deletes every
         component. Undirected graphs only.
         """
         self._require_undirected("series_parallel_reduce")
         buffers: tuple[bytes, ...] = _series_parallel_reduce_ctx(
-            self._graph_capsule, terminal_mask, protected_mask, None, None, pendant_keep_mask, series_blocked_mask
+            self._graph_capsule, preserved_mask, protected_mask, None, None, pendant_keep_mask, series_blocked_mask
         )
         return ReductionLog.from_buffers(buffers)
 
     def series_parallel_state(
         self,
-        terminal_mask: NodeMask,
+        preserved_mask: NodeMask,
         protected_mask: NodeMask,
         *,
         pendant_keep_mask: NodeMask | None = None,
         series_blocked_mask: NodeMask | None = None,
     ) -> ReductionState[NodeIdT, BranchIdT]:
-        """Reduction state of this graph, with the terminal-free components already gone.
+        """Reduction state of this graph, with the components without a preserved node already gone.
 
         The four masks hold one byte per node index and mark membership by a
         non-zero byte, as in ``series_parallel_reduce``: a kept node takes no
@@ -1393,7 +1393,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         return ReductionState(
             self,
             _sp_state_new(
-                self._graph_capsule, terminal_mask, protected_mask, None, None, pendant_keep_mask, series_blocked_mask
+                self._graph_capsule, preserved_mask, protected_mask, None, None, pendant_keep_mask, series_blocked_mask
             ),
         )
 
@@ -2058,7 +2058,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def series_parallel_reduce(
         self,
-        terminal_mask: NodeMask,
+        preserved_mask: NodeMask,
         protected_mask: NodeMask,
         *,
         pendant_keep_mask: NodeMask | None = None,
@@ -2070,7 +2070,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         self._require_undirected("series_parallel_reduce")
         buffers: tuple[bytes, ...] = _series_parallel_reduce_ctx(
             self._graph._graph_capsule,
-            terminal_mask,
+            preserved_mask,
             protected_mask,
             self._excluded_edges,
             self._excluded_nodes,

@@ -346,13 +346,13 @@ int sp_gather_pair(SPState *state, int from_node, int to_node,
  *
  * That follow-up merge is the only parallel merge after the initial sweep.
  */
-int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const uint8_t *protected_mask,
+int sp_move(SPState *state, int node, const uint8_t *preserved_mask, const uint8_t *protected_mask,
             const uint8_t *pendant_keep_mask, const uint8_t *series_blocked_mask) {
     int parts[4];
     int kind = sp_describe_move(state, node, protected_mask, pendant_keep_mask, series_blocked_mask, parts);
     if (kind == SP_OP_PENDANT) {
         if (sp_apply_pendant(state, node, parts[0]) < 0) return -1;
-        if (!terminal_mask[parts[2]]) sp_push(state, parts[2]);
+        if (!preserved_mask[parts[2]]) sp_push(state, parts[2]);
         return 0;
     }
     if (kind != SP_OP_SERIES) return 0;
@@ -363,8 +363,8 @@ int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const uint8_
         int larger = parts[2] < parts[3] ? parts[3] : parts[2];
         if (sp_merge_parallel(state, smaller, larger, state->pair_scratch, count) < 0) return -1;
     }
-    if (!terminal_mask[parts[2]]) sp_push(state, parts[2]);
-    if (!terminal_mask[parts[3]]) sp_push(state, parts[3]);
+    if (!preserved_mask[parts[2]]) sp_push(state, parts[2]);
+    if (!preserved_mask[parts[3]]) sp_push(state, parts[3]);
     return 0;
 }
 
@@ -393,35 +393,35 @@ int sp_load_edges(SPState *state, GraphContext *graph, const uint8_t *edge_mask,
     return 0;
 }
 
-/* A component without a terminal carries no question and goes whole, before
+/* A component without a preserved node carries no question and goes whole, before
  * any move, on the connectivity of the input graph. */
-int sp_drop_terminal_free(SPState *state, GraphContext *graph, int node_count, const uint8_t *edge_mask,
-                          const uint8_t *node_mask, const uint8_t *terminal_mask) {
+int sp_drop_components_without_preserved_nodes(SPState *state, GraphContext *graph, int node_count, const uint8_t *edge_mask,
+                          const uint8_t *node_mask, const uint8_t *preserved_mask) {
     if (node_count == 0) return 0;
     ComponentResult components;
     if (compute_components_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &components) < 0) return -1;
-    uint8_t *has_terminal = (uint8_t *)calloc((size_t)components.component_count, 1);
-    if (!has_terminal) {
+    uint8_t *has_preserved_node = (uint8_t *)calloc((size_t)components.component_count, 1);
+    if (!has_preserved_node) {
         free(components.labels);
         PyErr_NoMemory();
         return -1;
     }
     for (int node = 0; node < node_count; node++)
-        if (state->node_alive[node] && terminal_mask[node]) has_terminal[components.labels[node]] = 1;
+        if (state->node_alive[node] && preserved_mask[node]) has_preserved_node[components.labels[node]] = 1;
     for (int node = 0; node < node_count; node++) {
-        if (!state->node_alive[node] || has_terminal[components.labels[node]]) continue;
+        if (!state->node_alive[node] || has_preserved_node[components.labels[node]]) continue;
         while (state->node_head[node] >= 0) sp_unlink(state, state->node_head[node] >> 1);
         sp_eliminate(state, node);
     }
-    free(has_terminal);
+    free(has_preserved_node);
     free(components.labels);
     return 0;
 }
 
-/* Every surviving non-terminal into the candidate queue, ascending, which is already a valid min-heap. */
-void sp_enqueue_all_candidates(SPState *state, int node_count, const uint8_t *terminal_mask) {
+/* Every surviving non-preserved node into the candidate queue, ascending, which is already a valid min-heap. */
+void sp_enqueue_all_candidates(SPState *state, int node_count, const uint8_t *preserved_mask) {
     for (int node = 0; node < node_count; node++) {
-        if (!state->node_alive[node] || terminal_mask[node]) continue;
+        if (!state->node_alive[node] || preserved_mask[node]) continue;
         state->heap[state->heap_size++] = node;
         state->queued[node] = 1;
     }
@@ -494,51 +494,51 @@ void sp_release_masks(SPMasks *masks) {
     free(masks->no_members);
     release_mask(&masks->node_mask_buffer); release_mask(&masks->edge_mask_buffer);
     release_mask(&masks->blocked_buffer); release_mask(&masks->keep_buffer);
-    release_mask(&masks->protect_buffer); release_mask(&masks->terminal_buffer);
+    release_mask(&masks->protect_buffer); release_mask(&masks->preserved_buffer);
 }
 
 /* An absent protected, edge or node mask becomes a shared all-zero block.
  *
- * An absent terminal mask is refused instead: with no terminal every component
- * is terminal-free, and both callers drop those before applying a single move,
+ * An absent preserved node mask is refused instead: with no preserved node every component
+ * has no preserved node, and both callers drop those before applying a single move,
  * so the neutral reading of None would delete the whole graph. */
-int sp_parse_masks(PyObject *terminal_obj, PyObject *protected_obj, PyObject *edge_mask_obj,
+int sp_parse_masks(PyObject *preserved_obj, PyObject *protected_obj, PyObject *edge_mask_obj,
                    PyObject *node_mask_obj, PyObject *keep_obj, PyObject *blocked_obj,
                    int node_count, Py_ssize_t edge_count, SPMasks *masks) {
     memset(masks, 0, sizeof(*masks));
-    if (terminal_obj == Py_None) {
+    if (preserved_obj == Py_None) {
         PyErr_SetString(PyExc_TypeError,
-                        "series_parallel_reduce requires a terminal mask: with no terminal every "
-                        "component is terminal-free and the whole graph is deleted");
+                        "series_parallel_reduce requires a preserved node mask: with no preserved node every "
+                        "component has no preserved node and the whole graph is deleted");
         return -1;
     }
-    if (parse_mask(terminal_obj, node_count, &masks->terminal, &masks->terminal_buffer) < 0) return -1;
+    if (parse_mask(preserved_obj, node_count, &masks->preserved, &masks->preserved_buffer) < 0) return -1;
     if (parse_mask(protected_obj, node_count, &masks->protect, &masks->protect_buffer) < 0) {
-        release_mask(&masks->terminal_buffer); return -1;
+        release_mask(&masks->preserved_buffer); return -1;
     }
     if (parse_mask(edge_mask_obj, edge_count, &masks->edge_mask, &masks->edge_mask_buffer) < 0) {
-        release_mask(&masks->protect_buffer); release_mask(&masks->terminal_buffer); return -1;
+        release_mask(&masks->protect_buffer); release_mask(&masks->preserved_buffer); return -1;
     }
     if (parse_mask(node_mask_obj, node_count, &masks->node_mask, &masks->node_mask_buffer) < 0) {
         release_mask(&masks->edge_mask_buffer); release_mask(&masks->protect_buffer);
-        release_mask(&masks->terminal_buffer); return -1;
+        release_mask(&masks->preserved_buffer); return -1;
     }
     if (parse_mask(keep_obj, node_count, &masks->keep, &masks->keep_buffer) < 0) {
         release_mask(&masks->node_mask_buffer); release_mask(&masks->edge_mask_buffer);
-        release_mask(&masks->protect_buffer); release_mask(&masks->terminal_buffer); return -1;
+        release_mask(&masks->protect_buffer); release_mask(&masks->preserved_buffer); return -1;
     }
     if (parse_mask(blocked_obj, node_count, &masks->blocked, &masks->blocked_buffer) < 0) {
         release_mask(&masks->keep_buffer); release_mask(&masks->node_mask_buffer); release_mask(&masks->edge_mask_buffer);
-        release_mask(&masks->protect_buffer); release_mask(&masks->terminal_buffer); return -1;
+        release_mask(&masks->protect_buffer); release_mask(&masks->preserved_buffer); return -1;
     }
-    if (masks->terminal && masks->protect && masks->keep && masks->blocked) return 0;
+    if (masks->preserved && masks->protect && masks->keep && masks->blocked) return 0;
     masks->no_members = (uint8_t *)calloc((size_t)(node_count > 0 ? node_count : 1), 1);
     if (!masks->no_members) {
         sp_release_masks(masks);
         PyErr_NoMemory();
         return -1;
     }
-    if (!masks->terminal) masks->terminal = masks->no_members;
+    if (!masks->preserved) masks->preserved = masks->no_members;
     if (!masks->protect) masks->protect = masks->no_members;
     if (!masks->keep) masks->keep = masks->no_members;
     if (!masks->blocked) masks->blocked = masks->no_members;
@@ -549,7 +549,7 @@ void sp_handle_release(SPHandle *handle) {
     if (!handle->live) return;
     handle->live = 0;
     sp_free(&handle->state);
-    free(handle->terminal_mask);
+    free(handle->preserved_mask);
     free(handle->protected_mask);
     free(handle->pendant_keep_mask);
     free(handle->series_blocked_mask);
@@ -611,14 +611,14 @@ int sp_check_distinct_edges(int edge_a, int edge_b) {
     return -1;
 }
 
-/* The node a pendant or series move removes must not be a terminal.
+/* The node a pendant or series move removes must not be a preserved node.
  *
- * Terminals survive the reduction by contract and neither reporting
+ * Preserved nodes survive the reduction by contract and neither reporting
  * primitive ever offers one, so a move naming one comes from the caller.
  */
 int sp_check_node_removable(SPHandle *handle, int node) {
-    if (node >= 0 && node < handle->node_count && !handle->terminal_mask[node]) return 0;
-    PyErr_SetString(PyExc_ValueError, "a pendant or series move must name a live non-terminal node");
+    if (node >= 0 && node < handle->node_count && !handle->preserved_mask[node]) return 0;
+    PyErr_SetString(PyExc_ValueError, "a pendant or series move must name a live non-preserved node");
     return -1;
 }
 
@@ -661,7 +661,7 @@ int sp_collect_independent(SPHandle *handle, int kind, int *count_out) {
     int kept = 0;
     for (int index = 0; index < state->heap_size; index++) {
         int node = state->heap[index];
-        if (state->node_alive[node] && !handle->terminal_mask[node]) handle->candidates[kept++] = node;
+        if (state->node_alive[node] && !handle->preserved_mask[node]) handle->candidates[kept++] = node;
         else state->queued[node] = 0;
     }
     qsort(handle->candidates, (size_t)kept, sizeof(int), sp_compare_ints);

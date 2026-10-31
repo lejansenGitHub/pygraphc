@@ -11,10 +11,10 @@ Known Drugs. 1. Molecular Frameworks", J. Med. Chem. 39 (1996), 2887-2893:
 remove the side chains, keep the ring systems and the linkers between them.
 
 What this case exercises: the pendant move of ``reduce`` with ``fold_leaves``
-and the terminal set as a chemical constraint. Side-chain stripping is the
+and the preserved node set as a chemical constraint. Side-chain stripping is the
 pendant move, and nothing else; the accounting of which side-chain atom sat on
 which ring atom is ``Reduced.folded_nodes``. The ring atoms that become
-terminals are found with the library's own cycle machinery rather than written
+preserved nodes are found with the library's own cycle machinery rather than written
 down, so the test does not smuggle in the answer it checks.
 """
 
@@ -199,7 +199,7 @@ def test_stripping_the_side_chains_leaves_the_purine_scaffold() -> None:
     ``reduce``: an atom with a single bond that is not one of the atoms we
     insisted on keeping is deleted together with its bond, repeatedly, so a
     longer side chain would peel off one atom at a time without any extra code;
-    marking the ring atoms as terminals is what stops the peeling at the ring,
+    marking the ring atoms as preserved nodes is what stops the peeling at the ring,
     and ``fold_leaves`` keeps the record of which ring atom each removed atom
     sat on, which is the substitution pattern a chemist would want back. What
     the framework does not do is decide what counts as a ring atom -- that came
@@ -213,7 +213,7 @@ def test_stripping_the_side_chains_leaves_the_purine_scaffold() -> None:
     # --- Input ---
     molecule = caffeine()
     ring_atoms = ring_atoms_found_by_the_library()
-    scaffold = reduce(molecule, terminals=ring_atoms, fold_leaves=True)
+    scaffold = reduce(molecule, preserved_nodes=ring_atoms, fold_leaves=True)
 
     # --- Assert ---
     # What remains is the purine ring system: nine atoms, ten bonds.
@@ -241,6 +241,6 @@ def test_stripping_the_side_chains_leaves_the_purine_scaffold() -> None:
     # Exactly five atoms were stripped, one per side-chain bond.
     assert sum(len(folded) for folded in scaffold.folded_nodes.values()) == 5
     # Stripping the scaffold again removes nothing: the decomposition is done.
-    again = reduce(scaffold.graph, terminals=ring_atoms, fold_leaves=True)
+    again = reduce(scaffold.graph, preserved_nodes=ring_atoms, fold_leaves=True)
     assert sorted(again.graph.nodes) == sorted(scaffold.graph.nodes)
     assert set(again.graph.endpoints) == set(scaffold.graph.endpoints)

@@ -701,9 +701,9 @@ list(view.without_branches([11]).connected_components())  # [{0, 1}, {2}]
 
 ### Graph reduction kernel
 
-`pygraphc.reduction` implements a terminal-preserving reduction kernel for multigraphs:
+`pygraphc.reduction` implements a node-preserving reduction kernel for multigraphs:
 partition by an edge mask, quotient over the blocks, and reduce to the edges that matter
-between a set of terminals while every input edge keeps its identity in a series-parallel
+between a set of preserved nodes while every input edge keeps its identity in a series-parallel
 provenance tree. The partition step runs in C through
 masked connected components; quotient, lift, reduction, provenance folds and scenario
 application are the Python tier on top. Node ids are non-negative integers (validated
@@ -744,9 +744,9 @@ meta, internal = quotient(after, graph, crossing={"p1", "p2", "e1"})
 meta.endpoints                                          # {"p1": (1, 3), "p2": (1, 3)}
 internal                                                # {1: ["e1"]}
 
-# Terminal-preserving reduction: pendant deletion, series merge, parallel merge until
+# Node-preserving reduction: pendant deletion, series merge, parallel merge until
 # nothing applies. Every residual edge carries a series-parallel provenance tree.
-reduced = reduce(meta, terminals={1, 3})
+reduced = reduce(meta, preserved_nodes={1, 3})
 (tree,) = reduced.provenance.values()
 isinstance(tree, Parallel)                              # True: Parallel({Leaf("p1"), Leaf("p2")})
 paths(tree)                                             # {frozenset({"p1"}), frozenset({"p2"})}
@@ -756,34 +756,34 @@ minimal_toggles(tree, {"p1": True, "p2": True}, target_closed=False)
 # Per-node knobs. A keep action saves a pendant node, a series-ineligible node
 # is not merged away between its two neighbours.
 star = MultiGraph([0, 1, 2], {"a": (0, 1), "b": (0, 2)})
-reduce(star, terminals={0}, pendant=PendantPolicy("absorb", {2: "keep"})).graph.nodes
+reduce(star, preserved_nodes={0}, pendant=PendantPolicy("absorb", {2: "keep"})).graph.nodes
 # [0, 2]: node 1 folds into node 0, node 2 stays with its edge
 path = MultiGraph([0, 1, 2], {"a": (0, 1), "b": (1, 2)})
-reduce(path, terminals={0, 2}).graph.nodes                  # [0, 2]: node 1 merged in series
-reduce(path, terminals={0, 2}, series_ineligible={1}).graph.nodes
+reduce(path, preserved_nodes={0, 2}).graph.nodes                  # [0, 2]: node 1 merged in series
+reduce(path, preserved_nodes={0, 2}, series_ineligible={1}).graph.nodes
 # [0, 1, 2]: both input edges survive, node 1 keeps them apart
 ```
 
-`reduce(graph, terminals, protected=frozenset(), *, pendant=None, series_ineligible=frozenset(), order=None, engine="c")`:
-`reduce(graph, terminals, protected=frozenset(), *, fold_leaves=True, order=None, engine="c")`
+`reduce(graph, preserved_nodes, protected=frozenset(), *, pendant=None, series_ineligible=frozenset(), order=None, engine="c")`:
+`reduce(graph, preserved_nodes, protected=frozenset(), *, fold_leaves=True, order=None, engine="c")`
 (`engine` is one of `"c"`, `"moves"`, `"rounds"` and `"python"`):
 
-- Every node named in `terminals`, `protected`, `series_ineligible` or the pendant
+- Every node named in `preserved_nodes`, `protected`, `series_ineligible` or the pendant
   policy's exceptions must be a node of the graph; unknown ids raise `ValueError`.
-- Components without a terminal are removed whole before any move, whatever the
-  pendant policy says: a component with no terminal carries no question.
+- Components without a preserved node are removed whole before any move, whatever the
+  pendant policy says: a component with no preserved node carries no question.
 - Four per-node notions answer four different questions:
 
   | node is | pendant move at it | series merge at it | parallel merge of its edges |
   | --- | --- | --- | --- |
-  | a terminal | no | no | yes |
+  | a preserved node | no | no | yes |
   | `protected` | yes | no | no |
   | in `series_ineligible` | yes | no | yes |
   | a `keep` node of `pendant` | no | yes | yes |
 
-  So a terminal is the only notion that survives every move; `protected` is
+  So a preserved node is the only notion that survives every move; `protected` is
   `series_ineligible` plus the parallel block, and the two compose by union on
-  the series question; a `keep` node is not a terminal, since it may still be
+  the series question; a `keep` node is not a preserved node, since it may still be
   merged away in series, and a protected node is not preserved, since it may
   still be deleted as a pendant.
 - `pendant=PendantPolicy(default, exceptions)` decides per node what the pendant
@@ -813,7 +813,7 @@ reduce(path, terminals={0, 2}, series_ineligible={1}).graph.nodes
   became pendant (a dead-end cycle returning to one node) stays available.
 - Edges produced by moves get `VirtualEdgeId`s numbered in creation order; they
   sort after every input edge id and start above any virtual id already present in
-  the input, so a residual can be reduced again (with the same terminals it is a fixpoint).
+  the input, so a residual can be reduced again (with the same preserved nodes it is a fixpoint).
 - Deterministic: candidates are processed in increasing node id (or in `order`),
   ties among edges by id order. With no protected node and no `keep` action the
   residual and the folded material are the same for every order. A protected node
@@ -885,7 +885,7 @@ so the payload algebra stays in Python and nothing about `reduce` changes.
 semantics of the moves and what a caller-supplied `order` selects, since the C
 work queue is fixed to increasing node index.
 
-On 20 000 nodes, 25 000 edges and 200 terminals: **0.022 s** for `engine="c"`,
+On 20 000 nodes, 25 000 edges and 200 preserved nodes: **0.022 s** for `engine="c"`,
 0.087 s for `engine="python"` and 0.146 s for a straightforward networkx
 implementation of the same three moves, so 6.7x networkx and 3.9x the Python
 engine. A million nodes with 1.25 million edges reduce in 3.3 s, of which
@@ -893,13 +893,13 @@ engine. A million nodes with 1.25 million edges reduce in 3.3 s, of which
 are the fold, which allocates one tree node per operation because the residual
 provenance trees are the kernel's output.
 
-`Graph.series_parallel_reduce(terminal_mask, protected_mask, *,
+`Graph.series_parallel_reduce(preserved_mask, protected_mask, *,
 pendant_keep_mask=None, series_blocked_mask=None)` exposes the loop on its own and
 returns a `ReductionLog` of twelve int32 `memoryview`s. The four masks hold one byte
 per node index and mark membership by a non-zero byte, and are read as buffers, so a
 list of node ids is not a mask. A missing `protected_mask`, `pendant_keep_mask` or
-`series_blocked_mask` is the empty set, while `None` in place of the terminal mask
-raises `TypeError`, because a reduction without a terminal deletes every component;
+`series_blocked_mask` is the empty set, while `None` in place of the preserved node mask
+raises `TypeError`, because a reduction without a preserved node deletes every component;
 `GraphView` reduces under its own edge and node masks. Only the structural half of
 the pendant policy is a mask: whether a removed pendant's material is absorbed or
 discarded changes no move, so the log reports the absorbing neighbour either way,
@@ -907,7 +907,7 @@ there is no `fold_leaves` here, and `reduce` reads the action off the policy per
 removed node while folding the log.
 #### The same moves as primitives (`engine="moves"`, `engine="rounds"`)
 
-`Graph.series_parallel_state(terminal_mask, protected_mask)` puts that same
+`Graph.series_parallel_state(preserved_mask, protected_mask)` puts that same
 incidence structure behind an opaque `ReductionState` handle and exposes one
 short primitive per step over it, so the fixpoint loop can live in Python
 without rebuilding the graph between moves. `engine="moves"` asks for the next
@@ -931,7 +931,7 @@ state.free()                         # the handle goes inert, not dangling
 The primitives write into raw arrays, so every index handed back is checked
 first: an edge must be live and run between the two distinct live nodes named,
 a series move must name two distinct edges, the members of a parallel merge
-must be live and in increasing slot order, and no move may remove a terminal.
+must be live and in increasing slot order, and no move may remove a preserved node.
 Anything else raises `ValueError` before that move writes anything.
 
 `apply_batch` checks and applies one record at a time, so the guarantee is per
@@ -942,7 +942,7 @@ read the log or rebuild the batch rather than assuming the call was atomic. The
 engines here only ever feed back a batch that `batch_moves` produced, which is
 why this has no caller consequence today.
 
-On 20 000 nodes, 25 000 edges and 200 terminals: 0.022 s for `engine="c"`,
+On 20 000 nodes, 25 000 edges and 200 preserved nodes: 0.022 s for `engine="c"`,
 **0.025 s** for `"moves"` and **0.023 s** for `"rounds"`; at a million nodes
 2.02 s, 2.19 s and 1.92 s. Only a tenth of a call is the structural work and
 four fifths of it is the fold, so 500 000 boundary crossings cost under a
@@ -953,12 +953,12 @@ of every residual edge and the folded payload of every surviving node alone
 but may split `dropped` differently across pendant moves and nest a series
 chain differently.
 
-`Graph.series_parallel_reduce(terminal_mask, protected_mask)`
+`Graph.series_parallel_reduce(preserved_mask, protected_mask)`
 exposes the loop on its own and returns a `ReductionLog` of twelve int32
 `memoryview`s. The two masks hold one byte per node index and mark membership by
 a non-zero byte, and are read as buffers, so a list of node ids is not a mask;
-`None` in place of the terminal mask raises `TypeError`, because a reduction
-without a terminal deletes every component. `GraphView` reduces under its own
+`None` in place of the preserved node mask raises `TypeError`, because a reduction
+without a preserved node deletes every component. `GraphView` reduces under its own
 edge and node masks. There is no `fold_leaves` here: the log records which
 neighbour absorbs a pendant payload either way and `reduce` decides whether to
 apply it.
@@ -969,7 +969,7 @@ log = graph.series_parallel_reduce(bytes([1, 0, 0, 1]), bytes(4))
 
 log.op_kind.tolist()         # [0, 0, 0, 1, 1] — three leaves, then two series merges
 log.interior_node.tolist()   # [-1, -1, -1, 1, 2] — the nodes the series merges eliminated
-log.surviving_nodes.tolist() # [0, 3] — both terminals, joined by one virtual edge
+log.surviving_nodes.tolist() # [0, 3] — both preserved_nodes, joined by one virtual edge
 log.residual_op.tolist()     # [4] — that edge comes from the last operation
 ```
 
@@ -1362,7 +1362,7 @@ against a stored baseline, so no baseline needs regenerating.
 
 `reduce` has four interchangeable engines and the harness has one workflow per
 engine — `reduce_engine_c`, `reduce_engine_moves`, `reduce_engine_rounds`,
-`reduce_engine_python` — identical in the seeded graph, the terminal set, the
+`reduce_engine_python` — identical in the seeded graph, the preserved node set, the
 sizes and the phase names, differing in the engine and in nothing else.
 
 ```bash
@@ -1465,9 +1465,11 @@ and is skipped otherwise.
   exact; a changed C extension moves unchanged work by up to about 1.1%
   through the allocator, so a C change often needs review even when only the
   layout moved. The threshold stays below that noise on purpose, because real
-  code generation changes of 0.5 to 1% matter. Every change is in the table,
-  largest first. A pull request labelled `accept-instruction-change` still gets
-  the table but does not fail.
+  code generation changes of 0.5 to 1% matter. Every count that moved is in
+  one of two aligned tables, more instructions and fewer instructions, each
+  largest change first; counts that round to 0.00% are only counted below
+  them. A pull request labelled
+  `accept-instruction-change` still gets the table but does not fail.
 
   What the counts cannot see: they measure portable work, compiled with GCC.
   The same instructions can run slower on one machine (splitting `_core.c`
@@ -1492,6 +1494,29 @@ and is skipped otherwise.
 ```bash
 cd tests && pytest performance_tests/complexity -v   # or instructions, experience
 ```
+
+### Finding where an instruction count moved
+
+The instruction tier in CI says *that* a count moved; `dev_helpers/compare_profiles.py`
+says *where*. It builds a base revision and your working tree (uncommitted
+changes included) in a Linux container, measures the chosen scenarios with the
+same harness as CI, and reports, for every count beyond 0.5%, the source files
+and functions whose own instructions changed most:
+
+```bash
+python dev_helpers/compare_profiles.py --only bridges,articulation_points            # against origin/main
+python dev_helpers/compare_profiles.py --only bridges --base HEAD~1                   # against any revision
+python dev_helpers/compare_profiles.py --only bridges --platform linux/amd64          # emulated x86-64, slow
+```
+
+`--only` takes the same comma-separated substrings as `compare.py`. The report
+and a per-line annotation of every measurement land in `profiles/comparison/`
+(git ignores `profiles/`). It needs podman or docker, nothing else; it runs on
+macOS too, natively on the machine's architecture unless `--platform` says
+otherwise. Use it as soon as a count or a timing rises, before calling a
+change noise. The counts come from the container's compiler, so they can
+differ from CI's by layout effects of up to a few percent: CI decides whether
+a count moved, this shows why.
 
 ## Multiport edge case behavior (up for discussion)
 

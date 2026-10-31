@@ -2,12 +2,12 @@
 #include "entry_points.h"
 #include "../helpers/series_parallel.h"
 
-/* series_parallel_reduce_ctx(capsule, terminal_mask, protected_mask
+/* series_parallel_reduce_ctx(capsule, preserved_mask, protected_mask
  *                           [, edge_mask, node_mask,
  *                            pendant_keep_mask, series_blocked_mask])
  *     -> twelve int32 byte buffers
  *
- * ``terminal_mask``, ``protected_mask``, ``pendant_keep_mask`` and
+ * ``preserved_mask``, ``protected_mask``, ``pendant_keep_mask`` and
  * ``series_blocked_mask`` hold one byte per node index and mark membership by
  * a non-zero byte; ``edge_mask`` and ``node_mask`` exclude by a non-zero byte
  * like every other context call. A kept node takes no pendant move, a blocked
@@ -17,11 +17,11 @@
  * pendant payload either way and the Python fold decides whether to apply it.
  */
 PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject *keywords) {
-    static char *keyword_names[] = {"capsule", "terminal_mask", "protected_mask", "edge_mask", "node_mask",
+    static char *keyword_names[] = {"capsule", "preserved_mask", "protected_mask", "edge_mask", "node_mask",
                             "pendant_keep_mask", "series_blocked_mask", NULL};
-    PyObject *capsule, *terminal_obj, *protected_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
+    PyObject *capsule, *preserved_obj, *protected_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     PyObject *keep_obj = Py_None, *blocked_obj = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(args, keywords, "OOO|OOOO", keyword_names, &capsule, &terminal_obj,
+    if (!PyArg_ParseTupleAndKeywords(args, keywords, "OOO|OOOO", keyword_names, &capsule, &preserved_obj,
                                      &protected_obj, &edge_mask_obj, &node_mask_obj, &keep_obj, &blocked_obj))
         return NULL;
     GraphContext *graph = get_two_port_graph_context(capsule);
@@ -33,7 +33,7 @@ PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject
     int node_count = graph->node_ids.node_count;
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
     SPMasks masks;
-    if (sp_parse_masks(terminal_obj, protected_obj, edge_mask_obj, node_mask_obj, keep_obj, blocked_obj, node_count, edge_count, &masks) < 0)
+    if (sp_parse_masks(preserved_obj, protected_obj, edge_mask_obj, node_mask_obj, keep_obj, blocked_obj, node_count, edge_count, &masks) < 0)
         return NULL;
 
     /* Every virtual edge consumes at least two live edges and leaves one, so
@@ -47,14 +47,14 @@ PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject
         state.node_alive[node] = !(masks.node_mask && masks.node_mask[node]);
 
     int status = sp_load_edges(&state, graph, masks.edge_mask, masks.node_mask);
-    if (status == 0) status = sp_drop_terminal_free(&state, graph, node_count, masks.edge_mask, masks.node_mask, masks.terminal);
+    if (status == 0) status = sp_drop_components_without_preserved_nodes(&state, graph, node_count, masks.edge_mask, masks.node_mask, masks.preserved);
     if (status == 0) status = sp_merge_all_parallels(&state, node_count, masks.protect);
     if (status == 0) {
-        sp_enqueue_all_candidates(&state, node_count, masks.terminal);
+        sp_enqueue_all_candidates(&state, node_count, masks.preserved);
         while (state.heap_size > 0 && status == 0) {
             int node = sp_pop(&state);
             if (!state.node_alive[node]) continue;
-            status = sp_move(&state, node, masks.terminal, masks.protect, masks.keep, masks.blocked);
+            status = sp_move(&state, node, masks.preserved, masks.protect, masks.keep, masks.blocked);
         }
     }
     sp_release_masks(&masks);
@@ -65,16 +65,16 @@ PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject
     return result;
 }
 
-/* sp_state_new(capsule, terminal_mask, protected_mask[, edge_mask, node_mask]) -> state capsule
+/* sp_state_new(capsule, preserved_mask, protected_mask[, edge_mask, node_mask]) -> state capsule
  *
  * The incidence structure of the masked graph with one leaf operation per
- * included edge, the components without a terminal already gone, and every
- * surviving non-terminal queued as a move candidate. No move is applied.
+ * included edge, the components without a preserved node already gone, and every
+ * surviving non-preserved node queued as a move candidate. No move is applied.
  */
 PyObject *py_sp_state_new(PyObject *self, PyObject *args) {
-    PyObject *capsule, *terminal_obj, *protected_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
+    PyObject *capsule, *preserved_obj, *protected_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     PyObject *keep_obj = Py_None, *blocked_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "OOO|OOOO", &capsule, &terminal_obj, &protected_obj, &edge_mask_obj,
+    if (!PyArg_ParseTuple(args, "OOO|OOOO", &capsule, &preserved_obj, &protected_obj, &edge_mask_obj,
                           &node_mask_obj, &keep_obj, &blocked_obj))
         return NULL;
     GraphContext *graph = get_two_port_graph_context(capsule);
@@ -86,7 +86,7 @@ PyObject *py_sp_state_new(PyObject *self, PyObject *args) {
     int node_count = graph->node_ids.node_count;
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
     SPMasks masks;
-    if (sp_parse_masks(terminal_obj, protected_obj, edge_mask_obj, node_mask_obj, keep_obj, blocked_obj, node_count, edge_count, &masks) < 0)
+    if (sp_parse_masks(preserved_obj, protected_obj, edge_mask_obj, node_mask_obj, keep_obj, blocked_obj, node_count, edge_count, &masks) < 0)
         return NULL;
 
     SPHandle *handle = (SPHandle *)calloc(1, sizeof(SPHandle));
@@ -99,20 +99,20 @@ PyObject *py_sp_state_new(PyObject *self, PyObject *args) {
         return NULL;
     }
     handle->live = 1;
-    handle->terminal_mask = (uint8_t *)malloc(nodes);
+    handle->preserved_mask = (uint8_t *)malloc(nodes);
     handle->protected_mask = (uint8_t *)malloc(nodes);
     handle->pendant_keep_mask = (uint8_t *)malloc(nodes);
     handle->series_blocked_mask = (uint8_t *)malloc(nodes);
     handle->candidates = (int *)malloc(nodes * sizeof(int));
     handle->admitted = (uint8_t *)calloc(nodes, 1);
-    if (!handle->terminal_mask || !handle->protected_mask || !handle->pendant_keep_mask
+    if (!handle->preserved_mask || !handle->protected_mask || !handle->pendant_keep_mask
         || !handle->series_blocked_mask || !handle->candidates || !handle->admitted) {
         sp_handle_release(handle);
         free(handle);
         sp_release_masks(&masks);
         return PyErr_NoMemory();
     }
-    memcpy(handle->terminal_mask, masks.terminal, nodes);
+    memcpy(handle->preserved_mask, masks.preserved, nodes);
     memcpy(handle->protected_mask, masks.protect, nodes);
     memcpy(handle->pendant_keep_mask, masks.keep, nodes);
     memcpy(handle->series_blocked_mask, masks.blocked, nodes);
@@ -121,10 +121,10 @@ PyObject *py_sp_state_new(PyObject *self, PyObject *args) {
 
     int status = sp_load_edges(&handle->state, graph, masks.edge_mask, masks.node_mask);
     if (status == 0)
-        status = sp_drop_terminal_free(&handle->state, graph, node_count, masks.edge_mask, masks.node_mask, handle->terminal_mask);
+        status = sp_drop_components_without_preserved_nodes(&handle->state, graph, node_count, masks.edge_mask, masks.node_mask, handle->preserved_mask);
     sp_release_masks(&masks);
     if (status < 0) { sp_handle_release(handle); free(handle); return NULL; }
-    sp_enqueue_all_candidates(&handle->state, node_count, handle->terminal_mask);
+    sp_enqueue_all_candidates(&handle->state, node_count, handle->preserved_mask);
 
     PyObject *result = PyCapsule_New(handle, "pygraphc.SPHandle", sp_handle_destructor);
     if (!result) { sp_handle_release(handle); free(handle); return NULL; }
@@ -198,7 +198,7 @@ PyObject *py_sp_apply_move(PyObject *self, PyObject *args) {
     if (sp_check_node_removable(handle, node) < 0) return NULL;
     if (kind == SP_OP_PENDANT) {
         if (sp_apply_pendant(state, node, edge_a) < 0) return NULL;
-        if (!handle->terminal_mask[neighbor_a]) sp_push(state, neighbor_a);
+        if (!handle->preserved_mask[neighbor_a]) sp_push(state, neighbor_a);
         return Py_BuildValue("(ii)", -1, 0);
     }
     if (kind != SP_OP_SERIES) {
@@ -207,8 +207,8 @@ PyObject *py_sp_apply_move(PyObject *self, PyObject *args) {
     }
     int created = sp_apply_series(state, node, edge_a, edge_b, neighbor_a, neighbor_b);
     if (created < 0) return NULL;
-    if (!handle->terminal_mask[neighbor_a]) sp_push(state, neighbor_a);
-    if (!handle->terminal_mask[neighbor_b]) sp_push(state, neighbor_b);
+    if (!handle->preserved_mask[neighbor_a]) sp_push(state, neighbor_a);
+    if (!handle->preserved_mask[neighbor_b]) sp_push(state, neighbor_b);
     int count = sp_gather_pair(state, neighbor_a, neighbor_b, handle->protected_mask, state->pair_scratch);
     return Py_BuildValue("(ii)", created, count >= 2 ? 1 : 0);
 }
@@ -354,8 +354,8 @@ PyObject *py_sp_apply_batch(PyObject *self, PyObject *args) {
             status = sp_check_members(handle, values + position, count, from_node, to_node);
             position += count;
             if (status == 0) status = sp_merge_parallel(state, from_node, to_node, state->pair_scratch, (int)count);
-            if (status == 0 && !handle->terminal_mask[from_node]) sp_push(state, from_node);
-            if (status == 0 && !handle->terminal_mask[to_node]) sp_push(state, to_node);
+            if (status == 0 && !handle->preserved_mask[from_node]) sp_push(state, from_node);
+            if (status == 0 && !handle->preserved_mask[to_node]) sp_push(state, to_node);
         }
         if (status == 0 && position != length) {
             PyErr_SetString(PyExc_ValueError, "a parallel batch record holds two endpoints, a count and that many edges");
@@ -376,9 +376,9 @@ PyObject *py_sp_apply_batch(PyObject *self, PyObject *args) {
                 status = sp_apply_pendant(state, node, edge_a);
             } else {
                 status = sp_apply_series(state, node, edge_a, edge_b, neighbor_a, neighbor_b) < 0 ? -1 : 0;
-                if (!handle->terminal_mask[neighbor_b]) sp_push(state, neighbor_b);
+                if (!handle->preserved_mask[neighbor_b]) sp_push(state, neighbor_b);
             }
-            if (!handle->terminal_mask[neighbor_a]) sp_push(state, neighbor_a);
+            if (!handle->preserved_mask[neighbor_a]) sp_push(state, neighbor_a);
         }
         if (status == 0 && position != length) {
             PyErr_SetString(PyExc_ValueError, "a pendant or series batch holds five int32 per move");

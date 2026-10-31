@@ -184,7 +184,7 @@ def test_eccentricity_matches_networkx() -> None:
 # ── Reduction ──
 
 
-def _networkx_reduce(graph: MultiGraph[int], terminals: set[int]) -> set[int]:
+def _networkx_reduce(graph: MultiGraph[int], preserved_nodes: set[int]) -> set[int]:
     """The three moves as a networkx caller writes them: full sweeps to a fixpoint; returns the surviving nodes."""
     nx_graph = networkx.MultiGraph()
     nx_graph.add_nodes_from(graph.nodes)
@@ -192,13 +192,13 @@ def _networkx_reduce(graph: MultiGraph[int], terminals: set[int]) -> set[int]:
         if from_node != to_node:
             nx_graph.add_edge(from_node, to_node, key=edge_id)
     for component in list(networkx.connected_components(nx_graph)):
-        if not component & terminals:
+        if not component & preserved_nodes:
             nx_graph.remove_nodes_from(component)
     changed = True
     while changed:
         changed = False
         for node_id in list(nx_graph.nodes):
-            if node_id in terminals or node_id not in nx_graph:
+            if node_id in preserved_nodes or node_id not in nx_graph:
                 continue
             degree = nx_graph.degree(node_id)
             if degree == 1:
@@ -225,13 +225,13 @@ def _sparse_multigraph(node_count: int, edge_count: int, seed: int) -> MultiGrap
 def test_reduction_residual_matches_networkx_sweeps() -> None:
     """The closure of the three moves is unique without protected nodes, so any correct sweep reaches the same nodes."""
     graph = _sparse_multigraph(2_000, edge_count=2_500, seed=42)
-    terminals = set(random.Random(7).sample(graph.nodes, 20))
+    preserved_nodes = set(random.Random(7).sample(graph.nodes, 20))
 
-    residual_nodes = set(reduce(graph, terminals).graph.nodes)
+    residual_nodes = set(reduce(graph, preserved_nodes).graph.nodes)
 
     # --- Assert ---
-    assert terminals <= residual_nodes
-    assert residual_nodes == _networkx_reduce(graph, terminals)
+    assert preserved_nodes <= residual_nodes
+    assert residual_nodes == _networkx_reduce(graph, preserved_nodes)
 
 
 def test_label_partition_equals_the_set_partition() -> None:

@@ -168,9 +168,9 @@ static PyMethodDef methods[] = {
      "int32 biconnected component id per edge index; bridges are singleton components,\n"
      "masked edges, edges at excluded nodes and self-loops get -1."},
     {"sp_state_new", py_sp_state_new, METH_VARARGS,
-     "sp_state_new(capsule, terminal_mask, protected_mask[, edge_mask, node_mask,\n"
+     "sp_state_new(capsule, preserved_mask, protected_mask[, edge_mask, node_mask,\n"
      "             pendant_keep_mask, series_blocked_mask]) -> state capsule\n\n"
-     "Reduction state of the masked graph with the terminal-free components already gone."},
+     "Reduction state of the masked graph with the components without a preserved node already gone."},
     {"sp_state_free", py_sp_state_free, METH_VARARGS,
      "sp_state_free(state) -> None. Release the state and make the handle inert."},
     {"sp_state_graph", py_sp_state_graph, METH_VARARGS,
@@ -190,12 +190,12 @@ static PyMethodDef methods[] = {
     {"sp_state_log", py_sp_state_log, METH_VARARGS,
      "sp_state_log(state) -> twelve int32 byte buffers, as series_parallel_reduce_ctx returns."},
     {"series_parallel_reduce_ctx", (PyCFunction)py_series_parallel_reduce_ctx, METH_VARARGS | METH_KEYWORDS,
-     "series_parallel_reduce_ctx(capsule, terminal_mask, protected_mask[, edge_mask, node_mask])\n"
+     "series_parallel_reduce_ctx(capsule, preserved_mask, protected_mask[, edge_mask, node_mask])\n"
      "    -> twelve int32 byte buffers\n\n"
-     "Terminal-preserving series-parallel reduction as a flat operation log: op_kind, left, right,\n"
+     "Node-preserving series-parallel reduction as a flat operation log: op_kind, left, right,\n"
      "endpoint_u, endpoint_v, interior_node, leaf_edge_index and pendant_absorber per operation, then\n"
      "the residual as operation id and both endpoint node indices per surviving edge, then the\n"
-     "surviving node indices. terminal_mask and protected_mask mark membership by a non-zero byte."},
+     "surviving node indices. preserved_mask and protected_mask mark membership by a non-zero byte."},
     {NULL, NULL, 0, NULL},
 };
 
