@@ -13,9 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `instructions/` counts instructions with callgrind, compares every scenario
   against the merge base in CI and checks the design claims as instruction
   ratios; `experience/` runs one million-node input per workflow against a
-  generous budget. An instruction count that moves by more than 0.5% (the
-  allocator's layout noise after a C change) fails CI on x86-64 or arm64
-  until the pull request is labelled `accept-instruction-change`.
+  generous budget. An instruction count that moves by more than 0.5% fails
+  CI on x86-64 or arm64 until the pull request is labelled
+  `accept-instruction-change`; layout noise after a C change reaches about
+  1.1%, so such a change is reviewed even when only the layout moved.
 - The workflow phase guard counts instructions per phase instead of comparing
   walltime shares against `benchmarks/baseline.json`; the baseline,
   `tests/unit_tests/test_workflow_profiles.py` and `--write-baseline` are

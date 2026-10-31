@@ -3,11 +3,12 @@
 Both interpreters run the scenarios and workflow phases of this checkout, each
 importing its own installed pygraphc. Within one binary the counts are exact,
 but a changed C extension shifts memory addresses, and CPython's allocator
-then takes slightly different paths: Python work that did not change moves by
-up to about 0.5%. A count that moves by more than ``DEFAULT_THRESHOLD`` fails
-the run, in either direction, because an unexpected drop can mean skipped
-work as much as a rise can mean added work; every other change still appears
-in the table, which is sorted by the size of the change. The reviewer accepts
+then takes slightly different paths: work that did not change moves by up to
+about 1.1% (measured on a pure rename with identical machine code). A count
+that moves by more than ``DEFAULT_THRESHOLD`` fails the run, in either
+direction, because an unexpected drop can mean skipped work as much as a rise
+can mean added work, so a C change often needs a reviewer's label even when
+nothing but layout moved; every change appears in the table, sorted by size. The reviewer accepts
 a change by labelling the pull request; the table goes to stdout and, in CI,
 to the job summary. Both builds run at the same time: an instruction count does
 not depend on the load next to it.
@@ -26,7 +27,7 @@ from performance_tests.instructions.scenarios import SCENARIOS
 from performance_tests.instructions.workflows import workflow_scenario_names
 
 DEFAULT_THRESHOLD = 0.005
-"""The layout noise floor: Python-only phases moved by up to 0.46% when only C code changed."""
+"""Below the layout noise of up to 1.1% on purpose: real code generation changes of 0.5 to 1% matter, and a label is cheap."""
 
 
 def comparison_table(base: dict[str, int], head: dict[str, int], threshold: float) -> tuple[str, list[str]]:
