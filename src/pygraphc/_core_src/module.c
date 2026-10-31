@@ -72,8 +72,18 @@ static PyMethodDef methods[] = {
      "multi_source_dijkstra_by_node_id(node_ids, node_id_edges, weights, source_node_ids, cutoff) -> dict[NodeId, float]\n\n"
      "Multi-source Dijkstra with node-ID-based edges."},
     {"parse_graph", py_parse_graph, METH_VARARGS,
-     "parse_graph(node_ids, edges[, dst]) -> capsule\n\n"
-     "Parse graph once, return opaque capsule for reuse across algorithms."},
+     "parse_graph(node_ids, edges[, dst, directed]) -> capsule\n\n"
+     "Parse a graph once, return an opaque capsule for reuse across algorithms. An edge is a tuple of node ids, one "
+     "per terminal; directed edges are (u, v) or (in_nodes, out_nodes)."},
+    {"graph_shape", py_graph_shape, METH_VARARGS,
+     "graph_shape(capsule) -> (node_count, edge_count, terminal_count) as stored in C."},
+    {"has_multi_terminal_edges", py_has_multi_terminal_edges, METH_VARARGS,
+     "has_multi_terminal_edges(capsule) -> bool: whether the graph has an edge of other than two terminals."},
+    {"terminal_offsets", py_terminal_offsets, METH_VARARGS,
+     "terminal_offsets(capsule) -> bytes\n\nint32 offsets: the terminals of edge e are offsets[e] .. offsets[e + 1] - 1."},
+    {"terminal_nodes", py_terminal_nodes, METH_VARARGS,
+     "terminal_nodes(capsule) -> bytes\n\nint32 node index of every terminal, in terminal order; edge e of a graph of "
+     "two-terminal edges has terminals 2e and 2e + 1."},
     {"graph_edge_count", py_graph_edge_count, METH_VARARGS,
      "graph_edge_count(capsule) -> int\n\nReturn edge count from parsed graph."},
     {"graph_node_count", py_graph_node_count, METH_VARARGS,
@@ -131,9 +141,12 @@ static PyMethodDef methods[] = {
     {"edge_indices_ctx", py_edge_indices_ctx, METH_VARARGS,
      "edge_indices_ctx(capsule, u, v[, edge_mask]) -> list[int]\n\n"
      "Edge indices between u and v via CSR."},
-    {"bridges_as_edge_indices_ctx", py_bridges_as_edge_indices_ctx, METH_VARARGS,
-     "bridges_as_edge_indices_ctx(capsule[, edge_mask, node_mask]) -> list[int]\n\n"
-     "Bridge edge indices (for masked two_edge_connected_components)."},
+    {"critical_edges_ctx", py_critical_edges_ctx, METH_VARARGS,
+     "critical_edges_ctx(capsule[, edge_mask, node_mask, terminal_mask]) -> list[int]\n\n"
+     "Indices of the edges whose removal disconnects their component."},
+    {"simple_path_blocks_ctx", py_simple_path_blocks_ctx, METH_VARARGS,
+     "simple_path_blocks_ctx(capsule[, edge_mask, node_mask, terminal_mask]) -> (list[set], dict[int, set[int]])\n\n"
+     "Blocks of nodes and multi-terminal edges, as a simple path visits each at most once."},
     {"cycle_basis_ctx", py_cycle_basis_ctx, METH_VARARGS,
      "cycle_basis_ctx(capsule[, edge_mask, node_mask]) -> list[list[NodeId]]\n\n"
      "Fundamental cycle basis of an undirected graph."},

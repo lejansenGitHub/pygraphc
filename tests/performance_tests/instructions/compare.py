@@ -15,7 +15,11 @@ a change by labelling the pull request; the table goes to stdout and, in CI,
 to the job summary. Both builds run at the same time: an instruction count does
 not depend on the load next to it.
 
-    python -m performance_tests.instructions.compare --base-python BASE --head-python HEAD
+    python -m performance_tests.instructions.compare --base-python BASE --head-python HEAD [--only bfs,terminal_]
+
+``--only`` takes comma-separated substrings and measures just the scenario and
+workflow names containing one of them, for a quick check of the scenarios a
+change touches; without it everything is measured.
 """
 
 import argparse
@@ -100,14 +104,23 @@ def _largest_first(rows: list[tuple[float, tuple[str, ...]]]) -> list[tuple[str,
     return [row for _size, row in sorted(rows, key=lambda size_and_row: -size_and_row[0])]
 
 
+def selected_names(names: list[str], only: str) -> list[str]:
+    """The names containing one of the comma-separated substrings of ``only``; all names when it is empty."""
+    substrings = [substring for substring in only.split(",") if substring]
+    if not substrings:
+        return names
+    return [name for name in names if any(substring in name for substring in substrings)]
+
+
 def main() -> int:
     """Run both builds, print the table and return 1 when a count moved beyond the threshold."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-python", required=True)
     parser.add_argument("--head-python", required=True)
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
+    parser.add_argument("--only", default="", help="comma-separated substrings; measure only names containing one")
     arguments = parser.parse_args()
-    names = [*SCENARIOS, *workflow_scenario_names()]
+    names = selected_names([*SCENARIOS, *workflow_scenario_names()], arguments.only)
     with ThreadPoolExecutor(max_workers=2) as executor:
         base_counts = executor.submit(count_instructions, names, arguments.base_python)
         head_counts = executor.submit(count_instructions, names, arguments.head_python)

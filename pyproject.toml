@@ -150,4 +150,5 @@ testpaths = ["tests"]
 markers = [
     "performance: performance benchmarks (deselect with '-m not performance')",
     "integration: domain integration cases (deselect with '-m not integration')",
+    "multi_terminal_edge_case: multi-terminal edge case behavior up for discussion (README 'Multi-terminal edge case behavior')",
 ]

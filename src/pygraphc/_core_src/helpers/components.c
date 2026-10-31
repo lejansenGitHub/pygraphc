@@ -1,22 +1,37 @@
 #include "components.h"
+#include "terminals.h"
 #include "union_find.h"
 
 /*
- * Core routine: parse edges, run union-find, assign sequential component IDs.
- * edge_mask: if non-NULL, skip edges where edge_mask[edge_index] != 0.
- * Caller must free result.labels.
- * Returns 0 on success, -1 on error.
+ * Union-find over the edges and sequential component ids per node. Two-terminal
+ * edges are unioned from the edge list under two_terminal_edge_mask; with
+ * has_multi_terminal_edges, every edge with other than two terminals also joins its
+ * active terminals (terminal_is_active). The function is instantiated for both values
+ * of has_multi_terminal_edges, so graphs of two-terminal edges run the loop as before.
  */
-int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *edge_mask,
-                              const uint8_t *node_mask,
-                              ComponentResult *components) {
+static inline __attribute__((always_inline)) int components_of(
+    int node_count, EdgeList *edges, const uint8_t *two_terminal_edge_mask, const uint8_t *node_mask,
+    const TerminalList *terminals, const uint8_t *edge_mask, const uint8_t *terminal_mask, ComponentResult *components,
+    const int has_multi_terminal_edges) {
     UnionFind union_find;
     if (union_find_init(&union_find, node_count) < 0) { PyErr_NoMemory(); return -1; }
     for (Py_ssize_t edge_index = 0; edge_index < edges->edge_count; edge_index++) {
-        if (edge_mask && edge_mask[edge_index]) continue;
+        if (two_terminal_edge_mask && two_terminal_edge_mask[edge_index]) continue;
         int first_node = EDGE_FIRST_ENDPOINT(edges, edge_index), second_node = EDGE_SECOND_ENDPOINT(edges, edge_index);
         if (node_mask && (node_mask[first_node] || node_mask[second_node])) continue;
         union_find_union(&union_find, first_node, second_node);
+    }
+    if (has_multi_terminal_edges) {
+        for (Py_ssize_t edge = 0; edge < edges->edge_count; edge++) {
+            int first_terminal = terminals->terminal_offsets[edge], end_terminal = terminals->terminal_offsets[edge + 1];
+            if (end_terminal - first_terminal == 2) continue;
+            int first_active_node = -1;
+            for (int terminal = first_terminal; terminal < end_terminal; terminal++) {
+                if (!terminal_is_active(terminals, (int)edge, terminal, edge_mask, terminal_mask, node_mask)) continue;
+                if (first_active_node < 0) first_active_node = terminals->terminal_nodes[terminal];
+                else union_find_union(&union_find, first_active_node, terminals->terminal_nodes[terminal]);
+            }
+        }
     }
 
     /* labels + component_id_by_root in one allocation */
@@ -41,6 +56,29 @@ int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *ed
 
     union_find_free(&union_find);
     return 0;
+}
+
+/*
+ * Core routine: union-find over the edge list, sequential component IDs.
+ * edge_mask: if non-NULL, skip edges where edge_mask[edge_index] != 0.
+ * Caller must free result.labels.
+ * Returns 0 on success, -1 on error.
+ */
+int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *edge_mask,
+                              const uint8_t *node_mask,
+                              ComponentResult *components) {
+    return components_of(node_count, edges, edge_mask, node_mask, NULL, NULL, NULL, components, 0);
+}
+
+int compute_graph_components(GraphContext *graph, const uint8_t *edge_mask, const TerminalMask *terminal_mask,
+                             const uint8_t *node_mask, ComponentResult *components) {
+    int node_count = graph->node_ids.node_count;
+    EdgeList *edges = &graph->node_ids.edges;
+    const uint8_t *traversal_edge_mask = two_terminal_edge_mask(terminal_mask, edge_mask);
+    return graph->terminals
+        ? components_of(node_count, edges, traversal_edge_mask, node_mask, graph->terminals, edge_mask, terminal_mask->terminals,
+                        components, 1)
+        : components_of(node_count, edges, traversal_edge_mask, node_mask, NULL, NULL, NULL, components, 0);
 }
 
 /* ── Strongly connected components (iterative Tarjan's, directed CSR) ── */

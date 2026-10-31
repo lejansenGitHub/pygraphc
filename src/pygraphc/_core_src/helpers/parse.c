@@ -1,5 +1,6 @@
 /* Parsing helpers: Python objects and buffers into the data models. */
 #include "parse.h"
+#include "terminals.h"
 
 /*
  * Try the buffer protocol first (numpy int32 array with shape (edge_count, 2)).
@@ -95,7 +96,7 @@ int parse_edges(PyObject *edges_obj, EdgeList *edges) {
 
 /* ── Edge parsing with node-ID translation via C hash map ── */
 
-static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj, EdgeList *edges) {
+int parse_edge_pair_buffer(IntMap *node_index_by_node_id, PyObject *edges_obj, EdgeList *edges) {
     /* Fast path: buffer protocol (numpy int32/int64 array with shape (edge_count, 2)) */
     Py_buffer buffer;
     if (PyObject_GetBuffer(edges_obj, &buffer, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
@@ -109,12 +110,13 @@ static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj
             if (edge_count == 0) {
                 edges->first_endpoints = NULL; edges->second_endpoints = NULL;
                 PyBuffer_Release(&buffer);
-                return 0;
+                return 1;
             }
             edges->first_endpoints = (int *)malloc((size_t)edge_count * sizeof(int));
             edges->second_endpoints = (int *)malloc((size_t)edge_count * sizeof(int));
             if (!edges->first_endpoints || !edges->second_endpoints) {
                 free(edges->first_endpoints); free(edges->second_endpoints);
+                        edges->first_endpoints = edges->second_endpoints = NULL; edges->edge_count = 0;
                 PyBuffer_Release(&buffer);
                 PyErr_NoMemory();
                 return -1;
@@ -126,6 +128,7 @@ static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj
                     int second_index = intmap_get(node_index_by_node_id, (long)pairs[edge_index * 2 + 1]);
                     if (first_index < 0 || second_index < 0) {
                         free(edges->first_endpoints); free(edges->second_endpoints);
+                        edges->first_endpoints = edges->second_endpoints = NULL; edges->edge_count = 0;
                         PyBuffer_Release(&buffer);
                         PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
                         return -1;
@@ -140,6 +143,7 @@ static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj
                     int second_index = intmap_get(node_index_by_node_id, (long)pairs[edge_index * 2 + 1]);
                     if (first_index < 0 || second_index < 0) {
                         free(edges->first_endpoints); free(edges->second_endpoints);
+                        edges->first_endpoints = edges->second_endpoints = NULL; edges->edge_count = 0;
                         PyBuffer_Release(&buffer);
                         PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
                         return -1;
@@ -149,70 +153,15 @@ static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj
                 }
             }
             PyBuffer_Release(&buffer);
-            return 0;
+            return 1;
         }
         PyBuffer_Release(&buffer);
-        /* Fall through to slow path */
     } else {
         PyErr_Clear();
     }
-
-    /* Slow path: list of tuples */
-    PyObject *edges_fast = PySequence_Fast(edges_obj, "edges must be a sequence or numpy array");
-    if (!edges_fast) return -1;
-
-    Py_ssize_t edge_count = PySequence_Fast_GET_SIZE(edges_fast);
-    edges->edge_count = edge_count;
-    edges->owns_memory = 1;
-    if (edge_count == 0) {
-        edges->first_endpoints = NULL; edges->second_endpoints = NULL;
-        Py_DECREF(edges_fast);
-        return 0;
-    }
-
-    edges->first_endpoints = (int *)malloc((size_t)edge_count * sizeof(int));
-    edges->second_endpoints = (int *)malloc((size_t)edge_count * sizeof(int));
-    if (!edges->first_endpoints || !edges->second_endpoints) {
-        free(edges->first_endpoints); free(edges->second_endpoints);
-        Py_DECREF(edges_fast);
-        PyErr_NoMemory();
-        return -1;
-    }
-
-    PyObject **edge_items = PySequence_Fast_ITEMS(edges_fast);
-    for (Py_ssize_t edge_index = 0; edge_index < edge_count; edge_index++) {
-        PyObject *edge = edge_items[edge_index];
-        PyObject *edge_fast = PySequence_Fast(edge, "each edge must be a 2-tuple");
-        if (!edge_fast || PySequence_Fast_GET_SIZE(edge_fast) != 2) {
-            Py_XDECREF(edge_fast);
-            free(edges->first_endpoints); free(edges->second_endpoints);
-            Py_DECREF(edges_fast);
-            PyErr_SetString(PyExc_ValueError, "each edge must be a 2-tuple");
-            return -1;
-        }
-        PyObject **endpoint_items = PySequence_Fast_ITEMS(edge_fast);
-        long first_node_id = PyLong_AsLong(endpoint_items[0]);
-        long second_node_id = PyLong_AsLong(endpoint_items[1]);
-        Py_DECREF(edge_fast);
-        if (PyErr_Occurred()) {
-            free(edges->first_endpoints); free(edges->second_endpoints);
-            Py_DECREF(edges_fast);
-            return -1;
-        }
-        int first_index = intmap_get(node_index_by_node_id, first_node_id);
-        int second_index = intmap_get(node_index_by_node_id, second_node_id);
-        if (first_index < 0 || second_index < 0) {
-            free(edges->first_endpoints); free(edges->second_endpoints);
-            Py_DECREF(edges_fast);
-            PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
-            return -1;
-        }
-        edges->first_endpoints[edge_index] = first_index;
-        edges->second_endpoints[edge_index] = second_index;
-    }
-    Py_DECREF(edges_fast);
     return 0;
 }
+
 
 /* ── Edge parsing from two separate first/second endpoint sequences or 1D arrays ── */
 
@@ -325,7 +274,7 @@ static int parse_edges_mapped_split(IntMap *node_index_by_node_id, PyObject *fir
     return 0;
 }
 
-int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *context) {
+int node_id_parse_nodes(PyObject *node_ids_obj, NodeIdContext *context) {
     context->node_ids_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
     if (!context->node_ids_fast) return -1;
     context->node_count = (int)PySequence_Fast_GET_SIZE(context->node_ids_fast);
@@ -356,12 +305,28 @@ int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *co
         }
         intmap_put(&context->node_index_by_node_id, node_id, node);
     }
+    return 0;
+}
 
-    if (parse_edges_mapped(&context->node_index_by_node_id, edges_obj, &context->edges) < 0) {
-        intmap_free(&context->node_index_by_node_id);
+int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *context) {
+    if (node_id_parse_nodes(node_ids_obj, context) < 0) return -1;
+    GraphContext graph;
+    memset(&graph, 0, sizeof graph);
+    graph.node_ids = *context;
+    int status = parse_terminal_edges(&graph, edges_obj);
+    if (status == 0 && graph.terminals) {
+        free_terminal_list(graph.terminals);
+        free(graph.terminals);
+        free_edges(&graph.node_ids.edges);
+        PyErr_SetString(PyExc_ValueError, "each edge must be a pair of node ids");
+        status = -1;
+    }
+    if (status < 0) {
+        if (context->node_index_by_node_id.keys) intmap_free(&context->node_index_by_node_id);
         Py_DECREF(context->node_ids_fast);
         return -1;
     }
+    context->edges = graph.node_ids.edges;
     return 0;
 }
 
@@ -426,18 +391,49 @@ int parse_mask(PyObject *mask_obj, Py_ssize_t expected_length,
     return 0;
 }
 
-static int check_weight_count(WeightList *weights, Py_ssize_t expected_edge_count) {
-    if (weights->count == expected_edge_count) return 0;
+static int check_weight_count(WeightList *weights, Py_ssize_t expected_count, const char *counted) {
+    if (weights->count == expected_count) return 0;
     PyErr_Format(PyExc_ValueError,
-                 "weights length %zd does not match edge count %zd",
-                 weights->count, expected_edge_count);
+                 "weights length %zd does not match %s count %zd",
+                 weights->count, counted, expected_count);
     if (weights->owns_memory) free(weights->values);
     weights->values = NULL;
     return -1;
 }
 
-int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_edge_count) {
+/* Whether any value has its sign bit set: an OR over the bit patterns, which needs no floating point comparison. */
+static int any_sign_bit(const double *values, Py_ssize_t count) {
+    uint64_t sign_bits = 0;
+    for (Py_ssize_t index = 0; index < count; index++) {
+        uint64_t bits;
+        memcpy(&bits, &values[index], sizeof bits);
+        sign_bits |= bits;
+    }
+    return (int)(sign_bits >> 63);
+}
+
+/* Convert a sequence's items to doubles, with tracks_sign also noting whether any has its sign bit set. */
+static inline __attribute__((always_inline)) int convert_weights(PyObject **items, Py_ssize_t count, WeightList *weights,
+                                                                 const int tracks_sign) {
+    uint64_t sign_bits = 0;
+    for (Py_ssize_t index = 0; index < count; index++) {
+        double value = PyFloat_AsDouble(items[index]);
+        weights->values[index] = value;
+        if (tracks_sign) {
+            uint64_t bits;
+            memcpy(&bits, &value, sizeof bits);
+            sign_bits |= bits;
+        }
+        if (PyErr_Occurred()) return -1;
+    }
+    weights->has_sign_bit = (int)(sign_bits >> 63);
+    return 0;
+}
+
+int parse_counted_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_count, const char *counted,
+                          int tracks_sign) {
     Py_buffer buffer;
+    weights->has_sign_bit = 0;
     if (PyObject_GetBuffer(weights_obj, &buffer, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
         if (buffer.format && strcmp(buffer.format, "d") == 0 &&
             buffer.ndim == 1 && buffer.itemsize == 8) {
@@ -445,7 +441,8 @@ int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expecte
             weights->count = buffer.shape[0];
             weights->owns_memory = 0;
             PyBuffer_Release(&buffer);
-            return check_weight_count(weights, expected_edge_count);
+            if (tracks_sign) weights->has_sign_bit = any_sign_bit(weights->values, weights->count);
+            return check_weight_count(weights, expected_count, counted);
         }
         PyBuffer_Release(&buffer);
     } else {
@@ -456,16 +453,19 @@ int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expecte
     Py_ssize_t weight_count = PySequence_Fast_GET_SIZE(weights_fast);
     weights->count = weight_count;
     weights->owns_memory = 1;
-    if (weight_count == 0) { weights->values = NULL; Py_DECREF(weights_fast); return check_weight_count(weights, expected_edge_count); }
+    if (weight_count == 0) { weights->values = NULL; Py_DECREF(weights_fast); return check_weight_count(weights, expected_count, counted); }
     weights->values = (double *)malloc((size_t)weight_count * sizeof(double));
     if (!weights->values) { Py_DECREF(weights_fast); PyErr_NoMemory(); return -1; }
     PyObject **weight_items = PySequence_Fast_ITEMS(weights_fast);
-    for (Py_ssize_t weight_index = 0; weight_index < weight_count; weight_index++) {
-        weights->values[weight_index] = PyFloat_AsDouble(weight_items[weight_index]);
-        if (PyErr_Occurred()) { free(weights->values); Py_DECREF(weights_fast); return -1; }
-    }
+    int status = tracks_sign ? convert_weights(weight_items, weight_count, weights, 1)
+                             : convert_weights(weight_items, weight_count, weights, 0);
+    if (status < 0) { free(weights->values); Py_DECREF(weights_fast); return -1; }
     Py_DECREF(weights_fast);
-    return check_weight_count(weights, expected_edge_count);
+    return check_weight_count(weights, expected_count, counted);
+}
+
+int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_edge_count) {
+    return parse_counted_weights(weights_obj, weights, expected_edge_count, "edge", 0);
 }
 
 /*

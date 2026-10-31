@@ -34,6 +34,8 @@ KNOWN_SUPERLINEAR: dict[str, tuple[float, str]] = {
     "two_edge_connected_components/path": (GC_LIMIT, GC_BOUND),
     "two_edge_connected_components/star": (GC_LIMIT, GC_BOUND),
     "two_edge_connected_components/singletons": (GC_LIMIT, GC_BOUND),
+    "terminals/two_edge_connected_components/wide_edge": (GC_LIMIT, GC_BOUND),
+    "terminals/two_edge_connected_components/terminal_chain": (GC_LIMIT, GC_BOUND),
     "cycle_basis/singletons": (GC_LIMIT, GC_BOUND),
     "cycle_basis/sparse_random": (GC_LIMIT, GC_BOUND),
     "nodes_on_simple_paths/path": (GC_LIMIT, GC_BOUND),

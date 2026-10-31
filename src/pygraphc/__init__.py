@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import types
 from collections import deque
-from collections.abc import Collection, Generator, Iterable, Iterator, Sequence
+from collections.abc import Collection, Generator, Hashable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Generic, NewType, TypeVar, overload
 
@@ -16,7 +16,6 @@ from pygraphc._core import bfs_ctx as _bfs_ctx
 from pygraphc._core import biconnected_component_edge_labels_ctx as _biconnected_component_edge_labels_ctx
 from pygraphc._core import biconnected_components_by_node_id as _biconnected_components_by_node_id
 from pygraphc._core import biconnected_components_ctx as _biconnected_components_ctx
-from pygraphc._core import bridges_as_edge_indices_ctx as _bridges_as_edge_indices_ctx
 from pygraphc._core import bridges_by_node_id as _bridges_by_node_id
 from pygraphc._core import bridges_ctx as _bridges_ctx
 from pygraphc._core import component_labels_ctx as _component_labels_ctx
@@ -25,6 +24,7 @@ from pygraphc._core import connected_components_by_node_id_split as _connected_c
 from pygraphc._core import connected_components_ctx as _connected_components_ctx
 from pygraphc._core import connected_components_with_branches_ctx as _connected_components_with_branches_ctx
 from pygraphc._core import connected_components_with_branches_remapped as _connected_components_with_branches_remapped
+from pygraphc._core import critical_edges_ctx as _critical_edges_ctx
 from pygraphc._core import cycle_basis_ctx as _cycle_basis_ctx
 from pygraphc._core import dag_longest_path_ctx as _dag_longest_path_ctx
 from pygraphc._core import degree_ctx as _degree_ctx
@@ -34,6 +34,8 @@ from pygraphc._core import dijkstra_ctx as _dijkstra_ctx
 from pygraphc._core import edge_indices_ctx as _edge_indices_ctx
 from pygraphc._core import graph_edge_count as _graph_edge_count
 from pygraphc._core import graph_node_count as _graph_node_count
+from pygraphc._core import graph_shape as _graph_shape
+from pygraphc._core import has_multi_terminal_edges as _has_multi_terminal_edges
 from pygraphc._core import in_degree_ctx as _in_degree_ctx
 from pygraphc._core import incident_edges_ctx as _incident_edges_ctx
 from pygraphc._core import incoming_edges_ctx as _incoming_edges_ctx
@@ -46,6 +48,7 @@ from pygraphc._core import quotient_edges_ctx as _quotient_edges_ctx
 from pygraphc._core import series_parallel_reduce_ctx as _series_parallel_reduce_ctx
 from pygraphc._core import shortest_path_lengths_by_node_id as _shortest_path_lengths_by_node_id
 from pygraphc._core import shortest_path_lengths_ctx as _shortest_path_lengths_ctx
+from pygraphc._core import simple_path_blocks_ctx as _simple_path_blocks_ctx
 from pygraphc._core import sp_apply_batch as _sp_apply_batch
 from pygraphc._core import sp_apply_move as _sp_apply_move
 from pygraphc._core import sp_apply_parallel as _sp_apply_parallel
@@ -56,6 +59,8 @@ from pygraphc._core import sp_state_free as _sp_state_free
 from pygraphc._core import sp_state_log as _sp_state_log
 from pygraphc._core import sp_state_new as _sp_state_new
 from pygraphc._core import strongly_connected_components_ctx as _strongly_connected_components_ctx
+from pygraphc._core import terminal_nodes as _terminal_nodes
+from pygraphc._core import terminal_offsets as _terminal_offsets
 from pygraphc._core import topological_sort_by_node_id as _topological_sort_by_node_id
 from pygraphc._core import topological_sort_ctx as _topological_sort_ctx
 from pygraphc._dag_learn import estimate_cpds as _estimate_cpds
@@ -149,6 +154,9 @@ NodeIdT = TypeVar("NodeIdT", bound=int)
 
 BranchIdT = TypeVar("BranchIdT", bound=int)
 """Branch id type of a graph, inferred from ``branch_ids``; ``int`` when none are given."""
+
+BlockMemberT = TypeVar("BlockMemberT", bound=Hashable)
+"""A member of a block in the block-cut tree: a node id, or a multi-terminal edge marker."""
 
 EdgeIndex = NewType("EdgeIndex", int)
 """Position of an edge in the sequence passed to ``Graph()``. Not a branch id."""
@@ -436,20 +444,20 @@ def nodes_on_simple_paths(
 
 
 def _build_block_cut_tree(
-    node_ids: Sequence[NodeIdT],
-    blocks: list[set[NodeIdT]],
-) -> tuple[dict[NodeIdT, list[int]], list[list[int]], dict[NodeIdT, int]]:
+    node_ids: Sequence[object],
+    blocks: list[set[BlockMemberT]],
+) -> tuple[dict[BlockMemberT, list[int]], list[list[int]], dict[BlockMemberT, int]]:
     """Build block-cut tree from biconnected components.
 
     Returns (block_indices_by_node_id, tree_neighbors, tree_index_by_articulation_point).
     """
     block_count = len(blocks)
-    block_indices_by_node_id: dict[NodeIdT, list[int]] = {}
+    block_indices_by_node_id: dict[BlockMemberT, list[int]] = {}
     for block_index, block in enumerate(blocks):
         for node_id in block:
             block_indices_by_node_id.setdefault(node_id, []).append(block_index)
 
-    tree_index_by_articulation_point: dict[NodeIdT, int] = {}
+    tree_index_by_articulation_point: dict[BlockMemberT, int] = {}
     next_tree_index = block_count
     for node_id, block_indices in block_indices_by_node_id.items():
         if len(block_indices) > 1:
@@ -466,19 +474,26 @@ def _build_block_cut_tree(
     return block_indices_by_node_id, tree_neighbors, tree_index_by_articulation_point
 
 
+@dataclass(frozen=True, slots=True)
+class _Multi_terminalEdgeMember:
+    """A multi-terminal edge as a member of a simple path block, distinct from every node id."""
+
+    edge_index: int
+
+
 def _collect_path_nodes(
-    node_ids: Sequence[NodeIdT],
-    blocks: list[set[NodeIdT]],
-    tree: tuple[dict[NodeIdT, list[int]], list[list[int]], dict[NodeIdT, int]],
-    source: NodeIdT,
-    targets: set[NodeIdT],
-    result: set[NodeIdT],
-) -> set[NodeIdT]:
+    node_ids: Sequence[object],
+    blocks: list[set[BlockMemberT]],
+    tree: tuple[dict[BlockMemberT, list[int]], list[list[int]], dict[BlockMemberT, int]],
+    source: BlockMemberT,
+    targets: set[BlockMemberT],
+    result: set[BlockMemberT],
+) -> set[BlockMemberT]:
     """BFS on block-cut tree, trace paths, collect nodes."""
     block_indices_by_node_id, tree_neighbors, tree_index_by_articulation_point = tree
     block_count = len(blocks)
 
-    def tree_index_of(node_id: NodeIdT) -> int:
+    def tree_index_of(node_id: BlockMemberT) -> int:
         if node_id in tree_index_by_articulation_point:
             return tree_index_by_articulation_point[node_id]
         block_indices = block_indices_by_node_id.get(node_id)
@@ -726,6 +741,7 @@ def _connected_component_of(
     node_id: NodeIdT,
     excluded_edges: bytearray | None,
     excluded_nodes: bytearray | None,
+    excluded_terminals: bytearray | None = None,
 ) -> set[NodeIdT]:
     """The connected component containing one node, without building any other component.
 
@@ -745,9 +761,14 @@ def _connected_component_of(
     off a boundary, so it can only hold a straddling hit and no member is ever
     passed over.
     """
+    labels: bytes = _component_labels_ctx(graph._graph_capsule, excluded_edges, excluded_nodes, excluded_terminals)
+    return _component_of_labels(graph, node_id, labels)
+
+
+def _component_of_labels(graph: Graph[NodeIdT, BranchIdT], node_id: NodeIdT, labels: bytes) -> set[NodeIdT]:
+    """Members of ``node_id``'s component from one int32 label per node index, see ``_connected_component_of``."""
     node_ids = graph._node_ids
     node_index = _node_index_of(graph, node_id)
-    labels: bytes = _component_labels_ctx(graph._graph_capsule, excluded_edges, excluded_nodes)
     label_values = memoryview(labels).cast("i")
     label_value = label_values[node_index]
     if label_value == _EXCLUDED_LABEL:
@@ -762,6 +783,11 @@ def _connected_component_of(
             component.add(node_ids[position // 4])
         position = labels.find(label_bytes, position + 4 - position % 4)
     return component
+
+
+def _terminal_mask_unsupported(method_name: str) -> NotImplementedError:
+    """The error of a method whose kernel does not read terminal masks yet (``docs/multi_terminal-decisions.md``)."""
+    return NotImplementedError(f"{method_name} does not read terminal masks yet")
 
 
 class Graph(Generic[NodeIdT, BranchIdT]):
@@ -780,6 +806,14 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     to ``int``. Every result hands back the id objects that were passed in, so
     ``Graph[NodeId, BranchId]`` built from ``NewType`` ids returns those types.
     Without ``branch_ids`` the branch type parameter is ``int``.
+
+    An edge is a tuple of node ids, one per terminal, and the position in the
+    tuple is the terminal index; a pair is a two-terminal edge, and a directed edge is
+    ``(u, v)`` or ``(in_nodes, out_nodes)``. The C core stores an edge with
+    more than two terminals as its list of terminals, with no auxiliary nodes or edges.
+    A terminal is active when its edge, the terminal and its node are unmasked, and an
+    edge joins its active terminals; see the README section *Edges with terminals* and
+    ``docs/multi_terminal-decisions.md`` for the full contract.
     """
 
     __slots__ = (
@@ -791,6 +825,9 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         "_further_edge_indices_by_branch_id",
         "_node_index_by_node_id",
         "_directed",
+        "_has_multi_terminal_edges",
+        "_terminal_offsets",
+        "_edge_indices_by_terminal_node_indices",
     )
 
     _node_ids: Sequence[NodeIdT]
@@ -800,6 +837,9 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     _further_edge_indices_by_branch_id: dict[BranchIdT, list[int]] | None
     _node_index_by_node_id: dict[NodeIdT, int] | None
     _directed: bool
+    _has_multi_terminal_edges: bool
+    _terminal_offsets: memoryview | None
+    _edge_indices_by_terminal_node_indices: dict[frozenset[int], list[EdgeIndex]] | None
 
     @overload
     def __init__(
@@ -839,10 +879,10 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         self._further_edge_indices_by_branch_id = None
         self._node_index_by_node_id = None
         self._directed = directed
-        if dst is not None:
-            self._graph_capsule = _parse_graph(node_ids, edges_or_src, dst, directed)
-        else:
-            self._graph_capsule = _parse_graph(node_ids, edges_or_src, None, directed)
+        self._terminal_offsets = None
+        self._edge_indices_by_terminal_node_indices = None
+        self._graph_capsule = _parse_graph(node_ids, edges_or_src, dst, directed)
+        self._has_multi_terminal_edges = _has_multi_terminal_edges(self._graph_capsule)
         if branch_ids is not None and len(branch_ids) != self.edge_count:
             raise ValueError(  # noqa: TRY003 — the two counts are the whole message
                 f"branch_ids length {len(branch_ids)} does not match edge count {self.edge_count}"
@@ -904,8 +944,23 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         return result
 
     @property
+    def terminal_count(self) -> int:
+        """Number of terminals over all edges; a two-terminal edge has two."""
+        return int(_graph_shape(self._graph_capsule)[2])
+
+    def _terminals_of(self, edge_index: int) -> range:
+        """The flat indices of an edge's terminals, as terminal masks and per-terminal weights number them."""
+        if not self._has_multi_terminal_edges:
+            return range(2 * edge_index, 2 * edge_index + 2)
+        if self._terminal_offsets is None:
+            self._terminal_offsets = memoryview(_terminal_offsets(self._graph_capsule)).cast("i")
+        return range(self._terminal_offsets[edge_index], self._terminal_offsets[edge_index + 1])
+
+    @property
     def is_multigraph(self) -> bool:
         """True if any node pair has more than one edge (parallel edges)."""
+        if self._has_multi_terminal_edges:
+            raise NotImplementedError("is_multigraph is not available on graphs with multi-terminal edges")
         edges = self._edges
         if edges is None:
             return False
@@ -928,6 +983,31 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         """
         result: list[EdgeIndex] = _edge_indices_ctx(self._graph_capsule, u, v)
         return result
+
+    def edge_indices_at(self, node_ids: Iterable[NodeIdT]) -> list[EdgeIndex]:
+        """Indices of the edges whose terminals sit at exactly these nodes, ascending.
+
+        Order and repeats of the node ids do not matter, nor does direction;
+        an unknown node id matches no edge. Works on every graph.
+        """
+        node_index_by_node_id = self._get_node_index_by_node_id()
+        try:
+            terminal_node_indices = frozenset(node_index_by_node_id[node_id] for node_id in node_ids)
+        except KeyError:
+            return []
+        return list(self._get_edge_indices_by_terminal_node_indices().get(terminal_node_indices, ()))
+
+    def _get_edge_indices_by_terminal_node_indices(self) -> dict[frozenset[int], list[EdgeIndex]]:
+        """Lazily build and cache the set of terminal node indices → edge indices mapping."""
+        if self._edge_indices_by_terminal_node_indices is None:
+            terminal_node_indices = memoryview(_terminal_nodes(self._graph_capsule)).cast("i")
+            edge_indices_by_terminal_node_indices: dict[frozenset[int], list[EdgeIndex]] = {}
+            for edge_index in range(self.edge_count):
+                terminals = self._terminals_of(edge_index)
+                key = frozenset(terminal_node_indices[terminals.start : terminals.stop])
+                edge_indices_by_terminal_node_indices.setdefault(key, []).append(EdgeIndex(edge_index))
+            self._edge_indices_by_terminal_node_indices = edge_indices_by_terminal_node_indices
+        return self._edge_indices_by_terminal_node_indices
 
     def incident_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all edges incident to the given node.
@@ -996,6 +1076,11 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         """Create a lightweight view with the given edges excluded."""
         return GraphView(self, edge_indices)
 
+    def without_terminals(self, terminals: Collection[tuple[int, int]]) -> GraphView[NodeIdT, BranchIdT]:
+        """View with the given ``(edge_index, terminal_index)`` terminals masked; the other terminals of their edges
+        stay joined."""
+        return GraphView(self, ()).without_terminals(terminals)
+
     def with_edges(
         self,
         added_edges: Sequence[tuple[NodeIdT, NodeIdT]],
@@ -1057,6 +1142,8 @@ class Graph(Generic[NodeIdT, BranchIdT]):
 
         where *rerouted* replaces ``node_id`` with ``new_node_id`` in each edge.
         """
+        if self._has_multi_terminal_edges:
+            raise NotImplementedError("split_node is not available on graphs with multi-terminal edges")
         edges = self._edges
         base_branch_ids = self._branch_ids
         if edges is None:
@@ -1178,9 +1265,21 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         return result
 
     def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
-        """Return bridge edges as (node_id, node_id) pairs."""
+        """Return bridge edges as (node_id, node_id) pairs; on a graph with multi-terminal edges, see
+        ``critical_edges``."""
         self._require_undirected("bridges")
         result: list[tuple[NodeIdT, NodeIdT]] = _bridges_ctx(self._graph_capsule)
+        return result
+
+    def critical_edges(self) -> list[EdgeIndex]:
+        """Indices of the edges whose removal disconnects some of their active terminals.
+
+        On graphs of two-terminal edges these are the bridges. A multi-terminal edge is
+        critical when removing it separates nodes of its terminals; an edge with at
+        most one active terminal never is.
+        """
+        self._require_undirected("critical_edges")
+        result: list[EdgeIndex] = _critical_edges_ctx(self._graph_capsule)
         return result
 
     def bridges_with_branch_ids(self) -> list[tuple[NodeIdT, NodeIdT, BranchIdT]]:
@@ -1336,9 +1435,12 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         """Return the shortest weighted path from source to target.
 
         Runs a bidirectional Dijkstra, so only a small part of a large graph is
-        settled. Pass ``weights`` as a float64 buffer (a numpy ``float64`` array
-        or ``array.array("d", ...)``) to hand it to C as is; a list of floats is
-        converted element by element first, which costs more than the search.
+        settled. One weight per edge, or one per terminal once an edge has more
+        than two terminals; an edge then costs its entry terminal's weight plus its
+        exit terminal's weight. Pass ``weights`` as a float64 buffer (a numpy
+        ``float64`` array or ``array.array("d", ...)``) to hand it to C as is; a
+        list of floats is converted element by element first, which costs more
+        than the search.
         """
         _distance, path = _dijkstra_ctx(self._graph_capsule, weights, source, target)
         result: list[NodeIdT] = path
@@ -1350,7 +1452,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         source: NodeIdT,
         cutoff: float | None = None,
     ) -> dict[NodeIdT, float]:
-        """Return {node_id: distance} for all nodes reachable from source."""
+        """Return {node_id: distance} for all nodes reachable from source. Weights as in ``shortest_path``."""
         cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
         result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(
             self._graph_capsule, weights, source, cutoff_or_unbounded
@@ -1363,7 +1465,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         sources: Sequence[NodeIdT],
         cutoff: float | None = None,
     ) -> dict[NodeIdT, float]:
-        """Return {node_id: distance} from nearest source to each reachable node."""
+        """Return {node_id: distance} from nearest source to each reachable node. Weights as in ``shortest_path``."""
         cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
         result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(
             self._graph_capsule, weights, sources, cutoff_or_unbounded
@@ -1380,23 +1482,76 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     def two_edge_connected_components(
         self,
     ) -> Generator[set[NodeIdT], None, None]:
-        """Yield 2-edge-connected components (bridges removed, then CC)."""
+        """Yield 2-edge-connected components: nodes that no single edge removal separates.
+
+        Without multi-terminal edges these are the components left once every
+        bridge is removed. A critical multi-terminal edge can lie on a cycle, so it
+        is not removed whole; see ``_two_edge_connected_components_with_multi_terminal_edges``.
+        """
         self._require_undirected("two_edge_connected_components")
-        bridge_edge_indices: list[int] = _bridges_as_edge_indices_ctx(self._graph_capsule)
-        if not bridge_edge_indices:
+        if self._has_multi_terminal_edges:
+            yield from self._two_edge_connected_components_with_multi_terminal_edges()
+            return
+        critical_edge_indices: list[int] = _critical_edges_ctx(self._graph_capsule)
+        if not critical_edge_indices:
             yield from self.connected_components()
             return
         excluded_edges = bytearray(self.edge_count)
-        for idx in bridge_edge_indices:
-            excluded_edges[idx] = 1
+        for edge_index in critical_edge_indices:
+            excluded_edges[edge_index] = 1
         yield from _connected_components_ctx(self._graph_capsule, excluded_edges)
+
+    def _two_edge_connected_components_with_multi_terminal_edges(self) -> Generator[set[NodeIdT], None, None]:
+        """Join the nodes of every block of nodes and multi-terminal edges that holds a cycle, and the ends of every
+        two-terminal edge that is not critical.
+
+        A block with at least three members gives any two of its nodes two
+        paths through different edges; blocks are joined at shared nodes, never
+        at a shared multi-terminal edge, whose removal separates them.
+        """
+        blocks, edge_indices_by_block_index = _simple_path_blocks_ctx(self._graph_capsule)
+        representative_by_node_id: dict[NodeIdT, NodeIdT] = {node_id: node_id for node_id in self._node_ids}
+
+        def representative_of(node_id: NodeIdT) -> NodeIdT:
+            while representative_by_node_id[node_id] != node_id:
+                representative_by_node_id[node_id] = representative_by_node_id[representative_by_node_id[node_id]]
+                node_id = representative_by_node_id[node_id]
+            return node_id
+
+        def join(first_node_id: NodeIdT, second_node_id: NodeIdT) -> None:
+            representative_by_node_id[representative_of(first_node_id)] = representative_of(second_node_id)
+
+        for block_index, block in enumerate(blocks):
+            if len(block) + len(edge_indices_by_block_index.get(block_index, ())) < 3:
+                continue
+            first_node_id, *other_node_ids = block
+            for node_id in other_node_ids:
+                join(first_node_id, node_id)
+        critical_edge_indices = set(_critical_edges_ctx(self._graph_capsule))
+        terminal_node_indices = memoryview(_terminal_nodes(self._graph_capsule)).cast("i")
+        for edge_index in range(self.edge_count):
+            terminals = self._terminals_of(edge_index)
+            if len(terminals) == 2 and edge_index not in critical_edge_indices:
+                join(
+                    self._node_ids[terminal_node_indices[terminals.start]],
+                    self._node_ids[terminal_node_indices[terminals.start + 1]],
+                )
+        components: dict[NodeIdT, set[NodeIdT]] = {}
+        for node_id in self._node_ids:
+            components.setdefault(representative_of(node_id), set()).add(node_id)
+        yield from components.values()
 
     def nodes_on_simple_paths(
         self,
         source: NodeIdT,
         targets: Sequence[NodeIdT],
     ) -> set[NodeIdT]:
-        """Return all nodes on any simple path from source to any target."""
+        """Return all nodes on any simple path from source to any target.
+
+        A simple path visits each node and each multi-terminal edge at most once,
+        entering and leaving an edge through one terminal each, so the block-cut
+        tree is built over nodes and multi-terminal edges alike.
+        """
         self._require_undirected("nodes_on_simple_paths")
         node_count = len(self._node_ids)
         if node_count == 0:
@@ -1410,26 +1565,26 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         if not remaining_targets:
             return result
 
-        blocks = list(self.biconnected_components())
+        blocks: list[set[NodeIdT | _Multi_terminalEdgeMember]]
+        blocks, edge_indices_by_block_index = _simple_path_blocks_ctx(self._graph_capsule)
+        for block_index, edge_indices in edge_indices_by_block_index.items():
+            blocks[block_index].update(map(_Multi_terminalEdgeMember, edge_indices))
         if not blocks:
             return result
 
         tree = _build_block_cut_tree(self._node_ids, blocks)
-        return _collect_path_nodes(
-            self._node_ids,
-            blocks,
-            tree,
-            source,
-            remaining_targets,
-            result,
-        )
+        members = _collect_path_nodes(self._node_ids, blocks, tree, source, set(remaining_targets), set(result))
+        if not self._has_multi_terminal_edges:
+            return members  # type: ignore[return-value]  # without multi-terminal edges every member is a node id
+        return {member for member in members if not isinstance(member, _Multi_terminalEdgeMember)}
 
 
 class GraphView(Generic[NodeIdT, BranchIdT]):
     """Lightweight view of a Graph with excluded edges and/or nodes.
 
     Shares the base graph's parsed data (IntMap, CSR). Holds a
-    bytearray of excluded edges and an optional bytearray of excluded nodes.
+    bytearray of excluded edges and optional bytearrays of excluded nodes and
+    excluded terminals (one byte per terminal, see ``Graph.terminal_count``).
 
     Edges are identified by their index in the original edge list
     (the order in which they were passed to ``Graph()``). A rebuild through
@@ -1438,7 +1593,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     nodes, so indices and branch ids stay valid across rebuilds.
     """
 
-    __slots__ = ("_graph", "_excluded_edges", "_rebuilt_graph", "_excluded_nodes")
+    __slots__ = ("_graph", "_excluded_edges", "_rebuilt_graph", "_excluded_nodes", "_excluded_terminals")
 
     def __init__(
         self,
@@ -1451,6 +1606,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             self._excluded_edges[idx] = 1
         self._rebuilt_graph: Graph[NodeIdT, BranchIdT] | None = None
         self._excluded_nodes: bytearray | None = None
+        self._excluded_terminals: bytearray | None = None
 
     @classmethod
     def _from_excluded_edges(
@@ -1462,6 +1618,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         view._excluded_edges = excluded_edges
         view._rebuilt_graph = None
         view._excluded_nodes = None
+        view._excluded_terminals = None
         return view
 
     @classmethod
@@ -1482,6 +1639,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         view._excluded_edges = bytearray(graph.edge_count)
         view._rebuilt_graph = None
         view._excluded_nodes = excluded_nodes
+        view._excluded_terminals = None
         return view
 
     @classmethod
@@ -1500,6 +1658,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         compacted away, which keeps edge indices, node indices and branch ids
         of the base graph valid on the rebuilt view.
         """
+        if base._has_multi_terminal_edges:
+            raise NotImplementedError("with_edges is not available on graphs with multi-terminal edges")
         base_edges = base._edges
         if base_edges is None:
             raise ValueError("with_edges requires edge-pair construction")  # noqa: TRY003 — one clear sentence
@@ -1526,6 +1686,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             if excluded_nodes is not None
             else None
         )
+        view._excluded_terminals = None
         return view
 
     def with_edges(
@@ -1538,6 +1699,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         The exclusions of this view are kept. Base edges keep their indices
         and the added edges are appended, see ``Graph.with_edges``.
         """
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("with_edges")
         return GraphView._with_additions(
             self._graph,
             excluded_edges=self._excluded_edges,
@@ -1562,6 +1725,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         view._excluded_edges = bytearray(self._excluded_edges)
         view._rebuilt_graph = self._rebuilt_graph
         view._excluded_nodes = excluded_nodes
+        view._excluded_terminals = bytearray(self._excluded_terminals) if self._excluded_terminals is not None else None
         return view
 
     def without_branches(
@@ -1588,7 +1752,36 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         view._excluded_edges = new_excluded_edges
         view._rebuilt_graph = self._rebuilt_graph
         view._excluded_nodes = bytearray(self._excluded_nodes) if self._excluded_nodes else None
+        view._excluded_terminals = bytearray(self._excluded_terminals) if self._excluded_terminals is not None else None
         return view
+
+    def without_terminals(self, terminals: Collection[tuple[int, int]]) -> GraphView[NodeIdT, BranchIdT]:
+        """Create a new view also excluding the given ``(edge_index, terminal_index)`` terminals.
+
+        A masked terminal detaches only its node from its edge; the other terminals
+        stay joined, and a two-terminal edge left with one active terminal joins nothing.
+        """
+        view = self.without_edges(())
+        excluded_terminals = (
+            view._excluded_terminals if view._excluded_terminals is not None else bytearray(self._graph.terminal_count)
+        )
+        for edge_index, terminal_index in terminals:
+            edge_terminals = self._graph._terminals_of(edge_index)
+            if not 0 <= terminal_index < len(edge_terminals):
+                raise IndexError(f"edge {edge_index} has no terminal {terminal_index}")  # noqa: TRY003 — the indices are the message
+            excluded_terminals[edge_terminals[terminal_index]] = 1
+        view._excluded_terminals = excluded_terminals
+        return view
+
+    def _has_masked_terminal(self, edge_index: int) -> bool:
+        excluded_terminals = self._excluded_terminals
+        return excluded_terminals is not None and any(
+            excluded_terminals[terminal] for terminal in self._graph._terminals_of(edge_index)
+        )
+
+    def _masks(self) -> tuple[bytearray, bytearray | None, bytearray | None]:
+        """Edge, node and terminal masks, in the order the _core kernels take them."""
+        return self._excluded_edges, self._excluded_nodes, self._excluded_terminals
 
     def _require_undirected(self, method_name: str) -> None:
         if self._graph._directed:
@@ -1603,6 +1796,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         For directed graphs, returns only outgoing edges (src=node_id).
         """
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("incident_edge_indices")
         result: list[EdgeIndex] = _incident_edges_ctx(
             self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes
         )
@@ -1610,11 +1805,15 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def outgoing_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all non-excluded outgoing edges. Directed graphs only."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("outgoing_edge_indices")
         self._require_directed("outgoing_edge_indices")
         return self.incident_edge_indices(node_id)
 
     def incoming_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all non-excluded incoming edges. Directed graphs only."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("incoming_edge_indices")
         result: list[EdgeIndex] = _incoming_edges_ctx(
             self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes
         )
@@ -1625,6 +1824,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         For directed graphs, returns successors (outgoing neighbors).
         """
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("neighbors")
         result: set[NodeIdT] = _neighbors_ctx(
             self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes
         )
@@ -1632,11 +1833,15 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def successors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of successor node IDs. Directed graphs only."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("successors")
         self._require_directed("successors")
         return self.neighbors(node_id)
 
     def predecessors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of predecessor node IDs. Directed graphs only."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("predecessors")
         result: set[NodeIdT] = _predecessors_ctx(
             self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes
         )
@@ -1648,16 +1853,22 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         For undirected graphs, self-loops are counted twice (via CSR).
         For directed graphs, returns out-degree.
         """
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("degree")
         result: int = _degree_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
         return result
 
     def out_degree(self, node_id: NodeIdT) -> int:
         """Return the out-degree of the node. Directed graphs only."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("out_degree")
         self._require_directed("out_degree")
         return self.degree(node_id)
 
     def in_degree(self, node_id: NodeIdT) -> int:
         """Return the in-degree of the node. Directed graphs only."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("in_degree")
         result: int = _in_degree_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
         return result
 
@@ -1675,7 +1886,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             result.extend(
                 (first_node_id, second_node_id, self._graph._branch_ids[edge_idx])
                 for edge_idx in self._graph.edge_indices(first_node_id, second_node_id)
-                if not self._excluded_edges[edge_idx]
+                if not self._excluded_edges[edge_idx] and not self._has_masked_terminal(edge_idx)
             )
         return result
 
@@ -1691,6 +1902,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         are detached from ``node_id`` and reattached to ``new_node_id``.
         The remaining edges of ``node_id`` stay in place.
         """
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("split_node")
         edges = self._graph._edges
         base_branch_ids = self._graph._branch_ids
         if edges is None:
@@ -1731,6 +1944,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         node_simple: if True, each node may be visited at most once per path.
         ignore_self_loops: if True, self-loops are never traversed.
         """
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("all_edge_paths")
         target_node_ids = [targets] if isinstance(targets, int) else list(targets)
         cutoff_or_unbounded = cutoff if cutoff is not None else -1
         result: list[list[EdgeIndex]] = _all_edge_paths_ctx(
@@ -1748,7 +1963,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     def connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each connected component as a set of original node IDs."""
         self._require_undirected("connected_components")
-        yield from _connected_components_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        yield from _connected_components_ctx(self._graph._graph_capsule, *self._masks())
 
     def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the connected component containing ``node_id``, see ``Graph.connected_component``.
@@ -1757,29 +1972,29 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         to no component and raises ``ValueError``, as does an unknown node.
         """
         self._require_undirected("connected_component")
-        return _connected_component_of(self._graph, node_id, self._excluded_edges, self._excluded_nodes)
+        return _connected_component_of(self._graph, node_id, *self._masks())
 
     def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
         """Yield (node_id_set, branch_id_set) for each connected component.
 
         Requires the base Graph to have been constructed with branch_ids.
 
-        Excluded edges are removed from connectivity and their branch IDs
-        are dropped. Excluded nodes are removed from the output node sets
-        but their edges still contribute to connectivity and branch ID sets.
+        An edge joins its active terminals and belongs to the component of its
+        active terminals: an excluded edge, or one whose terminals are all masked or
+        at excluded nodes, belongs to no component. Excluded nodes leave the
+        node sets.
         """
         self._require_undirected("connected_components_with_branch_ids")
         if self._graph._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
         yield from _connected_components_with_branches_ctx(
-            self._graph._graph_capsule,
-            self._graph._branch_ids,
-            self._excluded_edges,
-            self._excluded_nodes,
+            self._graph._graph_capsule, self._graph._branch_ids, *self._masks()
         )
 
     def strongly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each strongly connected component as a set of node IDs."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("strongly_connected_components")
         self._require_directed("strongly_connected_components")
         yield from _strongly_connected_components_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1788,13 +2003,15 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each weakly connected component as a set of node IDs."""
         self._require_directed("weakly_connected_components")
-        yield from _connected_components_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        yield from _connected_components_ctx(self._graph._graph_capsule, *self._masks())
 
     def topological_sort(self) -> list[NodeIdT]:
         """Return nodes in topological order (Kahn's algorithm).
 
         Raises ValueError if the graph contains a cycle.
         """
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("topological_sort")
         self._require_directed("topological_sort")
         result: list[NodeIdT] = _topological_sort_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1804,34 +2021,39 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
         """Return bridge edges as (node_id, node_id) pairs."""
         self._require_undirected("bridges")
-        result: list[tuple[NodeIdT, NodeIdT]] = _bridges_ctx(
-            self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
-        )
+        result: list[tuple[NodeIdT, NodeIdT]] = _bridges_ctx(self._graph._graph_capsule, *self._masks())
+        return result
+
+    def critical_edges(self) -> list[EdgeIndex]:
+        """Indices of the edges whose removal disconnects some of their active terminals, see
+        ``Graph.critical_edges``."""
+        self._require_undirected("critical_edges")
+        result: list[EdgeIndex] = _critical_edges_ctx(self._graph._graph_capsule, *self._masks())
         return result
 
     def articulation_points(self) -> set[NodeIdT]:
         """Return the set of articulation points."""
         self._require_undirected("articulation_points")
-        result: set[NodeIdT] = _articulation_points_ctx(
-            self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
-        )
+        result: set[NodeIdT] = _articulation_points_ctx(self._graph._graph_capsule, *self._masks())
         return result
 
     def biconnected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each biconnected component as a set of node IDs."""
         self._require_undirected("biconnected_components")
-        yield from _biconnected_components_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        yield from _biconnected_components_ctx(self._graph._graph_capsule, *self._masks())
 
     def component_labels(self) -> memoryview:
         """Connected component label per node index as an int32 view, see ``Graph.component_labels``.
 
         Excluded edges do not connect and excluded nodes are labelled -1.
         """
-        result: bytes = _component_labels_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        result: bytes = _component_labels_ctx(self._graph._graph_capsule, *self._masks())
         return memoryview(result).cast("i")
 
     def quotient_edges(self, labels: memoryview) -> tuple[memoryview, memoryview, memoryview, memoryview]:
         """Split the unmasked edges by endpoint label, see ``Graph.quotient_edges``; excluded edges are skipped."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("quotient_edges")
         return _quotient_edge_views(_quotient_edges_ctx(self._graph._graph_capsule, labels, self._excluded_edges))
 
     def series_parallel_reduce(
@@ -1843,6 +2065,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         series_blocked_mask: NodeMask | None = None,
     ) -> ReductionLog:
         """Reduce under the view's masks, see ``Graph.series_parallel_reduce``; excluded nodes and edges never move."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("series_parallel_reduce")
         self._require_undirected("series_parallel_reduce")
         buffers: tuple[bytes, ...] = _series_parallel_reduce_ctx(
             self._graph._graph_capsule,
@@ -1857,6 +2081,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def degrees(self) -> memoryview:
         """Degree per node index as an int32 view under the masks, see ``Graph.degrees``; excluded nodes get 0."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("degrees")
         result: bytes = _degrees_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
         return memoryview(result).cast("i")
 
@@ -1865,6 +2091,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         Excluded edges and edges at an excluded node get -1.
         """
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("bcc_edge_labels")
         self._require_undirected("bcc_edge_labels")
         result: bytes = _biconnected_component_edge_labels_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1873,6 +2101,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def cycle_basis(self) -> list[list[NodeIdT]]:
         """Return a fundamental cycle basis as a list of cycles."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("cycle_basis")
         self._require_undirected("cycle_basis")
         result: list[list[NodeIdT]] = _cycle_basis_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1881,6 +2111,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeIdT]:
         """Return the longest path in the DAG as a list of node IDs."""
+        if self._excluded_terminals is not None:
+            raise _terminal_mask_unsupported("dag_longest_path")
         self._require_directed("dag_longest_path")
         result: list[NodeIdT] = _dag_longest_path_ctx(
             self._graph._graph_capsule, weights, self._excluded_edges, self._excluded_nodes
@@ -1889,7 +2121,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def bfs(self, source: NodeIdT) -> list[NodeIdT]:
         """Return nodes visited in BFS order from source."""
-        result: list[NodeIdT] = _bfs_ctx(self._graph._graph_capsule, source, self._excluded_edges, self._excluded_nodes)
+        result: list[NodeIdT] = _bfs_ctx(self._graph._graph_capsule, source, *self._masks())
         return result
 
     def shortest_path(
@@ -1901,18 +2133,14 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         """Return the shortest weighted path from source to target.
 
         Runs a bidirectional Dijkstra, so only a small part of a large graph is
-        settled. Pass ``weights`` as a float64 buffer (a numpy ``float64`` array
-        or ``array.array("d", ...)``) to hand it to C as is; a list of floats is
-        converted element by element first, which costs more than the search.
+        settled. One weight per edge, or one per terminal once an edge has more
+        than two terminals; an edge then costs its entry terminal's weight plus its
+        exit terminal's weight. Pass ``weights`` as a float64 buffer (a numpy
+        ``float64`` array or ``array.array("d", ...)``) to hand it to C as is; a
+        list of floats is converted element by element first, which costs more
+        than the search.
         """
-        _distance, path = _dijkstra_ctx(
-            self._graph._graph_capsule,
-            weights,
-            source,
-            target,
-            self._excluded_edges,
-            self._excluded_nodes,
-        )
+        _distance, path = _dijkstra_ctx(self._graph._graph_capsule, weights, source, target, *self._masks())
         result: list[NodeIdT] = path
         return result
 
@@ -1922,15 +2150,10 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         source: NodeIdT,
         cutoff: float | None = None,
     ) -> dict[NodeIdT, float]:
-        """Return {node_id: distance} for all nodes reachable from source."""
+        """Return {node_id: distance} for all nodes reachable from source. Weights as in ``shortest_path``."""
         cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
         result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(
-            self._graph._graph_capsule,
-            weights,
-            source,
-            cutoff_or_unbounded,
-            self._excluded_edges,
-            self._excluded_nodes,
+            self._graph._graph_capsule, weights, source, cutoff_or_unbounded, *self._masks()
         )
         return result
 
@@ -1940,15 +2163,10 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         sources: Sequence[NodeIdT],
         cutoff: float | None = None,
     ) -> dict[NodeIdT, float]:
-        """Return {node_id: distance} from nearest source to each reachable node."""
+        """Return {node_id: distance} from nearest source to each reachable node. Weights as in ``shortest_path``."""
         cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
         result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(
-            self._graph._graph_capsule,
-            weights,
-            sources,
-            cutoff_or_unbounded,
-            self._excluded_edges,
-            self._excluded_nodes,
+            self._graph._graph_capsule, weights, sources, cutoff_or_unbounded, *self._masks()
         )
         return result
 

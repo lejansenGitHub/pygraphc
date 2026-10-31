@@ -763,11 +763,11 @@ def test_view_cc_with_branch_ids_exclude_one_node():
     assert branches == {100}
 
 
+@pytest.mark.multi_terminal_edge_case
 def test_view_cc_with_branch_ids_exclude_both_nodes():
-    """Excluding all nodes leaves a component with only the branch ID.
+    """Excluding both endpoints leaves the edge without an active terminal, so it belongs to no component (D8).
 
     Graph: A(1)--B(2) with branch_id 100.
-    Excluding both nodes: component has nodes={}, branches={100}.
     """
     # --- Input ---
     graph = Graph([1, 2], [(1, 2)], branch_ids=[100])
@@ -777,10 +777,7 @@ def test_view_cc_with_branch_ids_exclude_both_nodes():
     result = list(view.connected_components_with_branch_ids())
 
     # --- Assert ---
-    assert len(result) == 1
-    nodes, branches = result[0]
-    assert nodes == set()
-    assert branches == {100}
+    assert result == []
 
 
 def test_view_cc_with_branch_ids_exclude_branch_and_node():
