@@ -498,7 +498,8 @@ PyObject *py_biconnected_components_by_node_id(PyObject *self, PyObject *args) {
  *   two nodes joins nothing and is not reported;
  * - simple path blocks: the blocks of the search states themselves, closed
  *   below every state, reported as (list of node sets, block index -> its
- *   multiport edges), so a multiport edge can separate them as a node does. A simple path visits
+ *   multiport edges), so a multiport edge can separate them as a node does;
+ *   without multiport edges they are the blocks, collected the same way. A simple path visits
  *   each node and each multiport edge at most once, so the block-cut tree of
  *   these blocks gives the nodes on simple paths.
  */
@@ -666,7 +667,7 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 if (!parent_is_edge_state && parent_link[parent] != -1 && subtree_holds_node &&
                     low_link[state] >= discovery_time[parent] &&
                     PySet_Add(result, graph->node_ids.node_id_items[parent]) < 0) goto failed;
-            } else if (mode == REPORT_SIMPLE_PATH_BLOCKS) {
+            } else if (mode == REPORT_SIMPLE_PATH_BLOCKS && has_multiport_edges) {
                 if (low_link[state] >= discovery_time[parent] &&
                     report_simple_path_block(graph, link_from, link_to, &link_top, parent, state, result) < 0) goto failed;
             } else if (!parent_is_edge_state && low_link[state] >= discovery_time[parent]) {
@@ -680,7 +681,8 @@ static inline __attribute__((always_inline)) int tarjan_search(
                     if (!has_multiport_edges || to < node_count) PySet_Add(block, node_id_items[to]);
                     if (from == parent && to == state) break;
                 }
-                int append_status = (!has_multiport_edges || PySet_GET_SIZE(block) >= 2) ? PyList_Append(result, block) : 0;
+                PyObject *blocks = mode == REPORT_SIMPLE_PATH_BLOCKS ? PyTuple_GET_ITEM(result, 0) : result;
+                int append_status = (!has_multiport_edges || PySet_GET_SIZE(block) >= 2) ? PyList_Append(blocks, block) : 0;
                 Py_DECREF(block);
                 if (append_status < 0) goto failed;
             }
