@@ -24,7 +24,7 @@ int port_component_labels(int node_count, const PortList *ports, const uint8_t *
     for (int edge = 0; edge < ports->edge_count; edge++) {
         int first_active_node = -1;
         for (int port = ports->port_offsets[edge]; port < ports->port_offsets[edge + 1]; port++) {
-            if (!port_is_active(ports, port, edge_mask, port_mask, node_mask)) continue;
+            if (!stage_one_port_is_active(ports, port, edge_mask, port_mask, node_mask)) continue;
             int node = ports->port_nodes[port];
             if (first_active_node < 0) first_active_node = node;
             else union_find_union(&union_find, first_active_node, node);

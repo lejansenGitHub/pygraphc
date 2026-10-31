@@ -139,12 +139,40 @@ PyObject *py_parse_port_graph(PyObject *self, PyObject *args) {
     return PyCapsule_New(graph, "pygraphc.GraphCtx", graph_context_destructor);
 }
 
+/*
+ * A graph parsed by _core.parse_port_graph carries the port list of _core;
+ * the stage-1 kernels here also read the edge of each port, the direction of
+ * each port and the node incidence, filled in on first use.
+ */
+static int fill_stage_one_fields(GraphContext *graph) {
+    PortList *ports = graph->ports;
+    if (ports->incidence_offsets) return 0;
+    ports->edge_count = (int)graph->node_ids.edges.edge_count;
+    size_t port_slots = (size_t)(ports->port_count > 0 ? ports->port_count : 1);
+    ports->port_edges = (int *)malloc(port_slots * sizeof(int));
+    if (!ports->port_edges) { PyErr_NoMemory(); return -1; }
+    if (ports->out_port_offsets) {
+        ports->port_is_out = (uint8_t *)malloc(port_slots);
+        if (!ports->port_is_out) { PyErr_NoMemory(); return -1; }
+    }
+    for (int edge = 0; edge < ports->edge_count; edge++)
+        for (int port = ports->port_offsets[edge]; port < ports->port_offsets[edge + 1]; port++) {
+            ports->port_edges[port] = edge;
+            if (ports->port_is_out) ports->port_is_out[port] = (uint8_t)(port >= ports->out_port_offsets[edge]);
+        }
+    if (build_port_incidence(graph->node_ids.node_count, ports) == 0) return 0;
+    free(ports->incidence_offsets);
+    ports->incidence_offsets = NULL;
+    return -1;
+}
+
 static GraphContext *port_graph_of(PyObject *capsule) {
     GraphContext *graph = get_graph_context(capsule);
     if (graph && !graph->ports) {
         PyErr_SetString(PyExc_TypeError, "expected a parsed graph with multiport edges");
         return NULL;
     }
+    if (graph && fill_stage_one_fields(graph) < 0) return NULL;
     return graph;
 }
 
@@ -273,7 +301,7 @@ static PyObject *components_of(GraphContext *graph, PortMasks *masks, PyObject *
         PyObject **branch_ids = PySequence_Fast_ITEMS(branch_ids_fast);
         for (int edge = 0; edge < ports->edge_count; edge++) {
             for (int port = ports->port_offsets[edge]; port < ports->port_offsets[edge + 1]; port++) {
-                if (!port_is_active(ports, port, masks->edges, masks->ports, masks->nodes)) continue;
+                if (!stage_one_port_is_active(ports, port, masks->edges, masks->ports, masks->nodes)) continue;
                 if (PySet_Add(branch_sets[labels[ports->port_nodes[port]]], branch_ids[edge]) < 0) goto failure;
                 break;
             }

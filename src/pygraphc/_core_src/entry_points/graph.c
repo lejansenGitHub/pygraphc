@@ -1,6 +1,7 @@
 /* Graph construction: the parsed graph capsule, its counters, and edge translation. */
 #include "entry_points.h"
 #include "../helpers/parse.h"
+#include "../helpers/ports.h"
 
 PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_or_src, *dst_obj = Py_None;
@@ -31,6 +32,66 @@ PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     }
 
     return PyCapsule_New(graph, "pygraphc.GraphCtx", graph_context_destructor);
+}
+
+static void free_port_graph(GraphContext *graph) {
+    if (graph->ports) { free_port_list(graph->ports); free(graph->ports); }
+    node_id_context_free(&graph->node_ids);
+    free(graph);
+}
+
+PyObject *py_parse_port_graph(PyObject *self, PyObject *args) {
+    PyObject *node_ids_obj, *edges_obj;
+    int directed = 0;
+    if (!PyArg_ParseTuple(args, "OO|p", &node_ids_obj, &edges_obj, &directed)) return NULL;
+
+    GraphContext *graph = (GraphContext *)calloc(1, sizeof(GraphContext));
+    if (!graph) { PyErr_NoMemory(); return NULL; }
+    graph->directed = directed;
+    PyObject *no_two_port_edges = PyTuple_New(0);
+    if (!no_two_port_edges) { free(graph); return NULL; }
+    int status = node_id_parse(node_ids_obj, no_two_port_edges, &graph->node_ids);
+    Py_DECREF(no_two_port_edges);
+    if (status < 0) { free(graph); return NULL; }
+
+    if (parse_port_edges(graph, edges_obj) < 0) { free_port_graph(graph); return NULL; }
+    if (graph->node_ids.node_count > 0 && graph->node_ids.edges.edge_count > 0) {
+        if (build_port_adjacency(graph->node_ids.node_count, &graph->node_ids.edges, graph->ports, directed,
+                                 &graph->adjacency) < 0) {
+            free_port_graph(graph);
+            return NULL;
+        }
+        graph->has_adjacency = 1;
+    }
+    return PyCapsule_New(graph, "pygraphc.GraphCtx", graph_context_destructor);
+}
+
+/* The parsed graph of a call that needs port numbering. */
+static GraphContext *port_graph_of(PyObject *capsule) {
+    GraphContext *graph = get_graph_context(capsule);
+    if (graph && !graph->ports) {
+        PyErr_SetString(PyExc_TypeError, "expected a parsed graph with multiport edges");
+        return NULL;
+    }
+    return graph;
+}
+
+PyObject *py_port_graph_shape(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphContext *graph = port_graph_of(capsule);
+    if (!graph) return NULL;
+    return Py_BuildValue("(inn)", graph->node_ids.node_count, graph->node_ids.edges.edge_count,
+                         (Py_ssize_t)graph->ports->port_count);
+}
+
+PyObject *py_port_offsets(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphContext *graph = port_graph_of(capsule);
+    if (!graph) return NULL;
+    return PyBytes_FromStringAndSize((const char *)graph->ports->port_offsets,
+                                     (graph->node_ids.edges.edge_count + 1) * (Py_ssize_t)sizeof(int));
 }
 
 PyObject *py_graph_is_directed(PyObject *self, PyObject *args) {

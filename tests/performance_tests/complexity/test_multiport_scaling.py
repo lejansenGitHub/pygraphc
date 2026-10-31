@@ -2,7 +2,8 @@
 
 One edge with a port at every node grows the number of ports of a single
 edge, a chain of three-port edges grows the depth, and random edges with two
-to four ports grow the plain size.
+to four ports grow the plain size. BFS expands each multiport edge once, so it
+may not pay per pair of ports.
 """
 
 from collections.abc import Callable
@@ -29,6 +30,7 @@ OPERATIONS: dict[str, Operation] = {
     "connected_components_with_branch_ids": lambda graph: lambda: list(graph.connected_components_with_branch_ids()),
     "component_labels": lambda graph: graph.component_labels,
     "masked_ports_view": lambda graph: lambda: list(graph.without_ports([(0, 0)]).connected_components()),
+    "bfs": lambda graph: lambda: graph.bfs(0),
 }
 
 

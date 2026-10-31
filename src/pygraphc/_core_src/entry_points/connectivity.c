@@ -551,7 +551,7 @@ cleanup:
 PyObject *py_strongly_connected_components_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
     if (node_count == 0) return PyList_New(0);

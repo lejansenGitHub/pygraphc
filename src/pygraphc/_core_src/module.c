@@ -74,6 +74,13 @@ static PyMethodDef methods[] = {
     {"parse_graph", py_parse_graph, METH_VARARGS,
      "parse_graph(node_ids, edges[, dst]) -> capsule\n\n"
      "Parse graph once, return opaque capsule for reuse across algorithms."},
+    {"parse_port_graph", py_parse_port_graph, METH_VARARGS,
+     "parse_port_graph(node_ids, edges[, directed]) -> capsule\n\n"
+     "Parse a graph whose edges are tuples of ports; directed edges are (u, v) or (in_nodes, out_nodes)."},
+    {"port_graph_shape", py_port_graph_shape, METH_VARARGS,
+     "port_graph_shape(capsule) -> (node_count, edge_count, port_count) as stored in C."},
+    {"port_offsets", py_port_offsets, METH_VARARGS,
+     "port_offsets(capsule) -> bytes\n\nint32 offsets: the ports of edge e are offsets[e] .. offsets[e + 1] - 1."},
     {"graph_edge_count", py_graph_edge_count, METH_VARARGS,
      "graph_edge_count(capsule) -> int\n\nReturn edge count from parsed graph."},
     {"graph_node_count", py_graph_node_count, METH_VARARGS,

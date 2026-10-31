@@ -24,7 +24,7 @@ PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject
     if (!PyArg_ParseTupleAndKeywords(args, keywords, "OOO|OOOO", keyword_names, &capsule, &terminal_obj,
                                      &protected_obj, &edge_mask_obj, &node_mask_obj, &keep_obj, &blocked_obj))
         return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     if (graph->directed) {
         PyErr_SetString(PyExc_TypeError, "series_parallel_reduce requires an undirected graph");
@@ -77,7 +77,7 @@ PyObject *py_sp_state_new(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "OOO|OOOO", &capsule, &terminal_obj, &protected_obj, &edge_mask_obj,
                           &node_mask_obj, &keep_obj, &blocked_obj))
         return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     if (graph->directed) {
         PyErr_SetString(PyExc_TypeError, "series_parallel_reduce requires an undirected graph");

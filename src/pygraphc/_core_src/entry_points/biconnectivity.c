@@ -477,7 +477,7 @@ PyObject *py_biconnected_components_by_node_id(PyObject *self, PyObject *args) {
 PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
 
@@ -541,7 +541,7 @@ PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
 PyObject *py_articulation_points_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
 
@@ -601,7 +601,7 @@ PyObject *py_articulation_points_ctx(PyObject *self, PyObject *args) {
 PyObject *py_biconnected_components_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
 
@@ -677,7 +677,7 @@ PyObject *py_biconnected_components_ctx(PyObject *self, PyObject *args) {
 PyObject *py_bridges_as_edge_indices_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
 

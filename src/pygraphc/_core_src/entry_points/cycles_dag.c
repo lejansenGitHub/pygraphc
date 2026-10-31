@@ -43,7 +43,7 @@ PyObject *py_topological_sort_by_node_id(PyObject *self, PyObject *args) {
 PyObject *py_topological_sort_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
 
@@ -98,7 +98,7 @@ PyObject *py_topological_sort_ctx(PyObject *self, PyObject *args) {
 PyObject *py_cycle_basis_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
 
@@ -247,7 +247,7 @@ PyObject *py_cycle_basis_ctx(PyObject *self, PyObject *args) {
 PyObject *py_dag_longest_path_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *weights_obj = Py_None, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &weights_obj, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
 

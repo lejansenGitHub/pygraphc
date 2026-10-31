@@ -41,6 +41,9 @@ from pygraphc._core import multi_source_dijkstra_by_node_id as _multi_source_dij
 from pygraphc._core import multi_source_dijkstra_ctx as _multi_source_dijkstra_ctx
 from pygraphc._core import neighbors_ctx as _neighbors_ctx
 from pygraphc._core import parse_graph as _parse_graph
+from pygraphc._core import parse_port_graph as _parse_port_graph
+from pygraphc._core import port_graph_shape as _port_graph_shape
+from pygraphc._core import port_offsets as _port_offsets
 from pygraphc._core import predecessors_ctx as _predecessors_ctx
 from pygraphc._core import quotient_edges_ctx as _quotient_edges_ctx
 from pygraphc._core import series_parallel_reduce_ctx as _series_parallel_reduce_ctx
@@ -61,12 +64,9 @@ from pygraphc._core import topological_sort_ctx as _topological_sort_ctx
 from pygraphc._dag_learn import estimate_cpds as _estimate_cpds
 from pygraphc._dag_learn import hill_climb_k2 as _hill_climb_k2
 from pygraphc._dag_learn import k2_local_score as _k2_local_score
-from pygraphc._ports import parse_port_graph as _parse_port_graph
 from pygraphc._ports import port_component_labels as _port_component_labels
 from pygraphc._ports import port_connected_components as _port_connected_components
 from pygraphc._ports import port_connected_components_with_branch_ids as _port_connected_components_with_branch_ids
-from pygraphc._ports import port_graph_shape as _port_graph_shape
-from pygraphc._ports import port_offsets as _port_offsets
 from pygraphc.reduction import (
     Leaf,
     MultiGraph,
@@ -860,7 +860,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
             try:
                 self._graph_capsule = _parse_graph(node_ids, edges_or_src, None, directed)
             except (TypeError, ValueError):
-                # The port parser shares the node id parser, so a line error raises again with its own message.
+                # The port parser shares the node id parser, so a two-port edge error raises again with its own message.
                 self._graph_capsule = _parse_port_graph(node_ids, edges_or_src, directed)
                 self.__class__ = PortGraph
                 self._port_offsets = None
@@ -1996,11 +1996,6 @@ class PortGraph(Graph[NodeIdT, BranchIdT]):
     __slots__ = ()
 
     @property
-    def edge_count(self) -> int:
-        """Number of edges, as given."""
-        return int(_port_graph_shape(self._graph_capsule)[1])
-
-    @property
     def port_count(self) -> int:
         """Number of ports over all edges."""
         return int(_port_graph_shape(self._graph_capsule)[2])
@@ -2055,6 +2050,11 @@ class PortGraph(Graph[NodeIdT, BranchIdT]):
     def component_labels(self) -> memoryview:
         """The smallest node index of its component per node index, as an int32 view; direction ignored."""
         return memoryview(_port_component_labels(self._graph_capsule)).cast("i")
+
+    def bfs(self, source: NodeIdT) -> list[NodeIdT]:
+        """Nodes in breadth-first order from ``source``; an edge leads from active (in-)ports to active (out-)ports."""
+        result: list[NodeIdT] = _bfs_ctx(self._graph_capsule, source)
+        return result
 
 
 class PortGraphView(Generic[NodeIdT, BranchIdT]):
@@ -2147,9 +2147,15 @@ class PortGraphView(Generic[NodeIdT, BranchIdT]):
         """The smallest node index of its component per node index; masked nodes are labelled -1."""
         return memoryview(_port_component_labels(self._graph._graph_capsule, *self._masks())).cast("i")
 
+    def bfs(self, source: NodeIdT) -> list[NodeIdT]:
+        """Nodes in breadth-first order from ``source``; an edge leads from active (in-)ports to active (out-)ports."""
+        result: list[NodeIdT] = _bfs_ctx(
+            self._graph._graph_capsule, source, self._excluded_edges, self._excluded_nodes, self._excluded_ports
+        )
+        return result
+
 
 _PORT_GRAPH_PLANNED = {
-    "bfs": "the traversal stage",
     "shortest_path": "the traversal stage",
     "shortest_path_lengths": "the traversal stage",
     "multi_source_shortest_path_lengths": "the traversal stage",

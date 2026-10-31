@@ -81,12 +81,18 @@ typedef struct {
     int component_count;
 } ComponentResult;
 
-/* ── Adjacency list (CSR format) for graph traversal ── */
+/* ── Adjacency list (CSR format) for graph traversal ──
+ *
+ * In a graph with multiport edges, an edge e with three or more ports appears
+ * as neighbors[slot] = -1 - e at the node of each of its ports (directed: of
+ * each in-port in the forward lists, of each out-port in the reverse lists),
+ * and edge_indices[slot] then holds the port that slot stands for.
+ */
 
 typedef struct {
     int *offset;                /* size node_count+1, CSR row pointers */
     int *neighbors;             /* size 2*edge_count (undirected) or edge_count (directed), neighbor indices */
-    int *edge_indices;          /* same size, original edge index */
+    int *edge_indices;          /* same size, original edge index (the port, where neighbors is negative) */
     int *reverse_offset;        /* directed only: size node_count+1, reverse CSR (NULL if undirected) */
     int *reverse_neighbors;     /* directed only: size edge_count, predecessor indices */
     int *reverse_edge_indices;  /* directed only: size edge_count, original edge indices */
@@ -95,20 +101,45 @@ typedef struct {
 PYGRAPHC_INTERNAL int build_adjacency(int node_count, EdgeList *edges, AdjacencyList *adjacency, int directed);
 PYGRAPHC_INTERNAL void free_adjacency(AdjacencyList *adjacency);
 
-/* ── Edges with ports: an edge is its list of ports, every port sits at a node ── */
+/* ── Edges with ports: an edge is its list of ports, every port sits at a node ──
+ *
+ * Kept for graphs with an edge of other than two ports. Ports are numbered over
+ * all edges in edge order, a two-port edge included (port 0 at its first
+ * endpoint, port 1 at its second), so that a port mask has one entry per port.
+ */
 
 typedef struct {
-    int edge_count;
     int port_count;
-    int *port_offsets;       /* edge_count + 1: the ports of edge e are port_offsets[e] .. port_offsets[e + 1] - 1 */
-    int *port_nodes;         /* port_count: the node index each port sits at */
-    int *port_edges;         /* port_count: the edge each port belongs to */
-    uint8_t *port_is_out;    /* port_count, directed only (NULL otherwise): 1 for an out-port, 0 for an in-port */
-    int *incidence_offsets;  /* node_count + 1: the ports at node v are incidence_ports[incidence_offsets[v] ..] */
-    int *incidence_ports;    /* port_count: port indices grouped by node */
+    int *port_offsets;      /* edge_count + 1: the ports of edge e are port_offsets[e] .. port_offsets[e + 1] - 1 */
+    int *port_nodes;        /* port_count: the node index each port sits at */
+    int *out_port_offsets;  /* edge_count, directed only (NULL otherwise): out-ports of e start here, in-ports before */
+    /* Read only by the stage-1 extension pygraphc._ports, removed together with it. */
+    int edge_count;
+    int *port_edges;
+    uint8_t *port_is_out;
+    int *incidence_offsets;
+    int *incidence_ports;
 } PortList;
 
 PYGRAPHC_INTERNAL void free_port_list(PortList *ports);
+
+/* Whether edge e has three or more ports and so appears as -1 - e in the adjacency list. */
+static inline int is_multiport_edge(const PortList *ports, int edge) {
+    return ports->port_offsets[edge + 1] - ports->port_offsets[edge] > 2;
+}
+
+/*
+ * The one rule every algorithm on edges with ports asks: a port is active iff
+ * its edge, the port itself and its node are all unmasked. A NULL mask masks
+ * nothing.
+ */
+static inline int port_is_active(const PortList *ports, int edge, int port, const uint8_t *edge_mask,
+                                 const uint8_t *port_mask, const uint8_t *node_mask) {
+    if (edge_mask && edge_mask[edge]) return 0;
+    if (port_mask && port_mask[port]) return 0;
+    if (node_mask && node_mask[ports->port_nodes[port]]) return 0;
+    return 1;
+}
 
 /* ── GraphContext: cached parsed graph for reuse across algorithms ── */
 
@@ -117,7 +148,7 @@ typedef struct {
     AdjacencyList adjacency;
     int           has_adjacency;
     int           directed;  /* 0 = undirected, 1 = directed */
-    PortList     *ports;     /* NULL for a graph of lines; set when an edge has other than two ports */
+    PortList     *ports;     /* NULL for a graph of two-port edges; set when an edge has other than two ports */
 } GraphContext;
 
 PYGRAPHC_INTERNAL void graph_context_destructor(PyObject *capsule);
@@ -125,6 +156,16 @@ PYGRAPHC_INTERNAL void graph_context_destructor(PyObject *capsule);
 static inline GraphContext *get_graph_context(PyObject *capsule) {
     GraphContext *graph = (GraphContext *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
     if (!graph) PyErr_SetString(PyExc_TypeError, "expected a parsed Graph capsule");
+    return graph;
+}
+
+/* The parsed graph of a kernel that reads only two-port edges; a graph with multiport edges raises. */
+static inline GraphContext *get_two_port_graph_context(PyObject *capsule) {
+    GraphContext *graph = get_graph_context(capsule);
+    if (graph && graph->ports) {
+        PyErr_SetString(PyExc_NotImplementedError, "not available on graphs with multiport edges");
+        return NULL;
+    }
     return graph;
 }
 

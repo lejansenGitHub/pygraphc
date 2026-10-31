@@ -9,7 +9,7 @@
  * its edge, the port itself and its node are all unmasked. A NULL mask masks
  * nothing.
  */
-static inline int port_is_active(const PortList *ports, int port, const uint8_t *edge_mask,
+static inline int stage_one_port_is_active(const PortList *ports, int port, const uint8_t *edge_mask,
                                  const uint8_t *port_mask, const uint8_t *node_mask) {
     if (edge_mask && edge_mask[ports->port_edges[port]]) return 0;
     if (port_mask && port_mask[port]) return 0;

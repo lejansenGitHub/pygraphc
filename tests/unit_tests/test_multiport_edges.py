@@ -1,18 +1,18 @@
-"""Edges with ports, stage 1: storage, connectivity, masks and membership.
+"""Edges with ports: storage, connectivity, masks, membership, traversal and weighted paths.
 
 Each test names the decision of ``docs/multiport-decisions.md`` or the masking
 case of the README table it checks. Throughout, a three-port edge joins nodes
-2, 3 and 4 between two lines, unless a test builds its own graph.
+2, 3 and 4 between two two-port edges, unless a test builds its own graph.
 """
 
 import pytest
-from pygraphc._ports import port_graph_shape  # noqa: PLC2701 — D1 checks what the C core stores
+from pygraphc._core import port_graph_shape  # noqa: PLC2701 — D1 checks what the C core stores
 
 from pygraphc import Graph, PortGraph
 
 
-def _transformer_between_lines() -> PortGraph[int, int]:
-    """1 -line- 2, the three-port edge (2, 3, 4), 4 -line- 5; branch ids 10, 11, 12."""
+def _three_port_edge_between_two_port_edges() -> PortGraph[int, int]:
+    """1 - 2, the three-port edge (2, 3, 4), 4 - 5; branch ids 10, 11, 12."""
     graph = Graph([1, 2, 3, 4, 5], [(1, 2), (2, 3, 4), (4, 5)], branch_ids=[10, 11, 12])
     assert isinstance(graph, PortGraph)
     return graph
@@ -36,7 +36,7 @@ def _memberships(view: object) -> dict[int, list[int]]:
 
 def test_multiport_graph_holds_exactly_the_given_nodes_and_edges() -> None:
     """D1: the C core stores an edge as its ports; a star expansion would add a node and replace the edge."""
-    graph = _transformer_between_lines()
+    graph = _three_port_edge_between_two_port_edges()
 
     nodes_in_c, edges_in_c, ports_in_c = port_graph_shape(graph._graph_capsule)
 
@@ -50,7 +50,7 @@ def test_multiport_graph_holds_exactly_the_given_nodes_and_edges() -> None:
 
 def test_port_index_is_the_position_in_the_tuple() -> None:
     """D2: port 1 of (2, 3, 4) is at node 3, so masking it detaches node 3 only."""
-    view = _transformer_between_lines().without_ports([(1, 1)])
+    view = _three_port_edge_between_two_port_edges().without_ports([(1, 1)])
 
     assert _components(view) == [[1, 2, 4, 5], [3]]
 
@@ -64,22 +64,22 @@ def test_two_ports_at_one_node_stay_distinguishable() -> None:
     assert _components(view) == [[2, 3]]
 
 
-# ── D3: graphs of lines are unchanged ──
+# ── D3: graphs of two-port edges are unchanged ──
 
 
-def test_a_graph_of_lines_stays_a_plain_graph() -> None:
-    """D3: pairs take the unchanged line path; only a non-pair edge makes a PortGraph."""
+def test_a_graph_of_two_port_edges_stays_a_plain_graph() -> None:
+    """D3: pairs take the unchanged two-port parser; only a non-pair edge makes a PortGraph."""
     assert type(Graph([1, 2, 3], [(1, 2), (2, 3)])) is Graph
 
 
-def test_line_errors_are_reported_as_before() -> None:
-    """D3: an unknown endpoint in a graph of lines raises the line parser's own error."""
+def test_two_port_edge_errors_are_reported_as_before() -> None:
+    """D3: an unknown endpoint in a graph of two-port edges raises the two-port parser's own error."""
     with pytest.raises(ValueError, match="edge references unknown node ID"):
         Graph([1, 2], [(1, 9)])
 
 
 def test_a_port_with_an_unknown_node_is_rejected() -> None:
-    """O1 as recommended: every port needs a known node, as every line endpoint does."""
+    """O1 as recommended: every port needs a known node, as every two-port edge endpoint does."""
     with pytest.raises(ValueError, match="edge references unknown node ID"):
         Graph([1, 2], [(1, 2, 9)])
 
@@ -104,8 +104,8 @@ def test_directed_multiport_needs_an_in_and_an_out_port() -> None:
 
 
 def test_masking_case_1_masked_edge_joins_nothing() -> None:
-    """Case 1: the masked edge joins nothing and belongs to no component; its nodes keep their lines."""
-    view = _transformer_between_lines().without_edges([1])
+    """Case 1: the masked edge joins nothing and belongs to no component; its nodes keep their two-port edges."""
+    view = _three_port_edge_between_two_port_edges().without_edges([1])
 
     # --- Assert ---
     assert _components(view) == [[1, 2], [3], [4, 5]]
@@ -114,7 +114,7 @@ def test_masking_case_1_masked_edge_joins_nothing() -> None:
 
 def test_masking_case_2_remaining_ports_stay_joined() -> None:
     """Case 2: with port 0 (node 2) masked, ports at 3 and 4 still join, and the edge belongs there."""
-    view = _transformer_between_lines().without_ports([(1, 0)])
+    view = _three_port_edge_between_two_port_edges().without_ports([(1, 0)])
 
     # --- Assert ---
     assert _components(view) == [[1, 2], [3, 4, 5]]
@@ -123,7 +123,7 @@ def test_masking_case_2_remaining_ports_stay_joined() -> None:
 
 def test_masking_case_3_one_active_port_joins_nothing() -> None:
     """Case 3: one active port (node 4) joins nothing; the edge belongs to that port's component."""
-    view = _transformer_between_lines().without_ports([(1, 0), (1, 1)])
+    view = _three_port_edge_between_two_port_edges().without_ports([(1, 0), (1, 1)])
 
     # --- Assert ---
     assert _components(view) == [[1, 2], [3], [4, 5]]
@@ -132,16 +132,16 @@ def test_masking_case_3_one_active_port_joins_nothing() -> None:
 
 def test_masking_case_4_no_active_port_belongs_nowhere() -> None:
     """Case 4: every port masked is the masked edge of case 1."""
-    view = _transformer_between_lines().without_ports([(1, 0), (1, 1), (1, 2)])
+    view = _three_port_edge_between_two_port_edges().without_ports([(1, 0), (1, 1), (1, 2)])
 
     # --- Assert ---
     assert _components(view) == [[1, 2], [3], [4, 5]]
     assert 11 not in _memberships(view)
 
 
-def test_masking_case_5_line_with_one_port_masked() -> None:
-    """Case 5: a line with port 1 masked joins nothing and belongs to its active end."""
-    view = _transformer_between_lines().without_ports([(0, 1)])
+def test_masking_case_5_two_port_edge_with_one_port_masked() -> None:
+    """Case 5: a two-port edge with port 1 masked joins nothing and belongs to its active end."""
+    view = _three_port_edge_between_two_port_edges().without_ports([(0, 1)])
 
     # --- Assert ---
     assert _components(view) == [[1], [2, 3, 4, 5]]
@@ -150,7 +150,7 @@ def test_masking_case_5_line_with_one_port_masked() -> None:
 
 def test_masking_case_6_masked_node_leaves_and_the_rest_stays_joined() -> None:
     """Case 6: node 3 leaves every result; the edge's ports at 2 and 4 stay joined."""
-    view = _transformer_between_lines().without_nodes([3])
+    view = _three_port_edge_between_two_port_edges().without_nodes([3])
 
     # --- Assert ---
     assert _components(view) == [[1, 2, 4, 5]]
@@ -183,8 +183,8 @@ def test_masking_case_8_all_ports_at_one_node_join_nothing() -> None:
 
 
 def test_masks_combine_as_a_union_in_any_order() -> None:
-    """D10: an edge, a port and a node mask give the same view in any order; the line 4-5 stays."""
-    graph = _transformer_between_lines()
+    """D10: an edge, a port and a node mask give the same view in any order; the two-port edge 4-5 stays."""
+    graph = _three_port_edge_between_two_port_edges()
 
     first = graph.without_edges([0]).without_ports([(1, 2)]).without_nodes([3])
     second = graph.without_nodes([3]).without_edges([0]).without_ports([(1, 2)])
@@ -197,7 +197,7 @@ def test_masks_combine_as_a_union_in_any_order() -> None:
 def test_a_port_beyond_the_edge_is_rejected() -> None:
     """Port indices are per edge, so a three-port edge has no port 3."""
     with pytest.raises(IndexError, match="edge 1 has no port 3"):
-        _transformer_between_lines().without_ports([(1, 3)])
+        _three_port_edge_between_two_port_edges().without_ports([(1, 3)])
 
 
 # ── D12: single-port edges ──
@@ -216,13 +216,188 @@ def test_single_port_edge_joins_nothing_and_belongs_to_its_node() -> None:
 
 
 def test_component_labels_name_the_smallest_node_index() -> None:
-    """Labels follow the line graph's contract: smallest node index per component, -1 for a masked node."""
-    view = _transformer_between_lines().without_edges([1]).without_nodes([5])
+    """As on a graph of two-port edges: the smallest node index per component, -1 for a masked node."""
+    view = _three_port_edge_between_two_port_edges().without_edges([1]).without_nodes([5])
 
     assert list(view.component_labels()) == [0, 0, 2, 3, -1]
 
 
 def test_methods_of_later_stages_say_so() -> None:
-    """Until their stage lands, methods not yet on ports raise instead of answering on an empty line structure."""
-    with pytest.raises(NotImplementedError, match="traversal stage"):
-        _transformer_between_lines().bfs(1)
+    """Until their stage lands, methods not yet on ports raise instead of answering on the two-port structure alone."""
+    with pytest.raises(NotImplementedError, match="critical-elements stage"):
+        _three_port_edge_between_two_port_edges().articulation_points()
+
+
+# ── Traversal ──
+
+
+def test_bfs_crosses_a_multiport_edge_to_all_of_its_ports() -> None:
+    """D7: reaching one port of the three-port edge reaches the nodes of all of its ports, in port order."""
+    graph = _three_port_edge_between_two_port_edges()
+
+    # --- Assert ---
+    assert graph.bfs(1) == [1, 2, 3, 4, 5]
+    assert graph.bfs(3) == [3, 2, 4, 1, 5]
+
+
+def test_one_active_in_port_reaches_every_out_port() -> None:
+    """D5: with the in-port at node 1 masked, the in-port at node 2 alone still feeds both out-ports."""
+    graph = Graph([1, 2, 3, 4], [((1, 2), (3, 4))], directed=True)
+
+    view = graph.without_ports([(0, 0)])
+
+    # --- Assert ---
+    assert view.bfs(2) == [2, 3, 4]
+    assert view.bfs(1) == [1]
+
+
+def test_masking_case_9_directed_edge_without_an_active_in_port_transmits_nothing() -> None:
+    """Case 9: with both in-ports masked, nothing reaches the out-port."""
+    view = Graph([1, 2, 3], [((1, 2), (3,))], directed=True).without_ports([(0, 0), (0, 1)])
+
+    assert view.bfs(1) == [1]
+
+
+def test_bfs_under_an_edge_mask() -> None:
+    """Case 1: a masked three-port edge carries nothing, so node 2 is as far as 1 gets."""
+    view = _three_port_edge_between_two_port_edges().without_edges([1])
+
+    assert view.bfs(1) == [1, 2]
+
+
+def test_bfs_under_a_port_mask() -> None:
+    """Cases 2 and 5: a masked port detaches only its node; a two-port edge with a masked port carries nothing."""
+    graph = _three_port_edge_between_two_port_edges()
+
+    three_port_edge_port_masked = graph.without_ports([(1, 1)])
+    two_port_edge_port_masked = graph.without_ports([(0, 1)])
+
+    # --- Assert ---
+    assert three_port_edge_port_masked.bfs(1) == [1, 2, 4, 5]
+    assert three_port_edge_port_masked.bfs(3) == [3]
+    assert two_port_edge_port_masked.bfs(1) == [1]
+    assert two_port_edge_port_masked.bfs(2) == [2, 3, 4, 5]
+
+
+def test_bfs_under_a_node_mask() -> None:
+    """Case 6: a masked node is never reached while the other ports of its edge stay joined."""
+    view = _three_port_edge_between_two_port_edges().without_nodes([3])
+
+    assert view.bfs(1) == [1, 2, 4, 5]
+
+
+def test_bfs_enters_through_the_active_one_of_two_ports_at_a_node() -> None:
+    """Case 7: with port 0 at node 2 masked, the edge (2, 2, 3) is entered through port 1."""
+    view = Graph([2, 3], [(2, 2, 3)]).without_ports([(0, 0)])
+
+    assert view.bfs(2) == [2, 3]
+
+
+def test_bfs_never_steps_through_a_single_port_edge() -> None:
+    """D12: a single-port edge joins nothing, so it adds no step."""
+    graph = Graph([1, 2, 3], [(1,), (1, 2), (3,)])
+
+    # --- Assert ---
+    assert graph.bfs(2) == [2, 1]
+    assert graph.bfs(3) == [3]
+
+
+def test_directed_bfs_follows_in_ports_to_out_ports() -> None:
+    """D4 and D5: from 1 the search runs through the in-port at 2 to both out-ports, and nothing runs back."""
+    graph = Graph([1, 2, 3, 4, 5, 6], [(1, 2), ((2,), (3, 4)), ((4, 5), (6,))], directed=True)
+
+    # --- Assert ---
+    assert graph.bfs(1) == [1, 2, 3, 4, 6]
+    assert graph.bfs(5) == [5, 6]
+    assert graph.bfs(6) == [6]
+
+
+def test_bfs_over_a_wide_edge_reaches_every_port_once() -> None:
+    """One edge with a port at each of 50 nodes is expanded once, in port order."""
+    node_ids = list(range(50))
+
+    assert Graph(node_ids, [tuple(node_ids)]).bfs(7) == [7, *range(7), *range(8, 50)]
+
+
+def test_bfs_contracts_match_graphs_of_two_port_edges() -> None:
+    """Unknown and masked sources raise as on a graph of two-port edges."""
+    two_port_view = Graph([1, 2, 3], [(1, 2), (2, 3)]).without_nodes([1])
+    multiport_view = Graph([1, 2, 3], [(1, 2, 3)]).without_nodes([1])
+
+    # --- Assert ---
+    for view in (two_port_view, multiport_view):
+        with pytest.raises(ValueError, match="source not in node_ids"):
+            view.bfs(9)
+        with pytest.raises(ValueError, match="source node is excluded"):
+            view.bfs(1)
+        assert view.bfs(2) == [2, 3]
+
+
+# ── Differential check against a brute-force reading of the rules ──
+
+REFERENCE_EDGES = [(0, 1), (1, 2, 3), (3, 4), (2, 5, 5, 6), (6,), (4, 6), (6, 7, 0)]
+REFERENCE_DIRECTED_EDGES = [(0, 1), ((1,), (2, 3)), (3, 4), ((2, 5), (5, 6)), ((4,), (6,)), ((6, 7), (0,))]
+REFERENCE_MASKS = [
+    {},
+    {"ports": [(3, 1)]},
+    {"edges": [2]},
+    {"nodes": [3]},
+    {"ports": [(1, 0), (3, 3)], "edges": [5], "nodes": [7]},
+]
+
+
+def _ports_of(edge: tuple[object, ...], *, directed: bool) -> list[tuple[int, bool, bool]]:
+    """``(node, can enter, can leave)`` per port, in port order."""
+    if not directed:
+        return [(node, True, True) for node in edge]  # type: ignore[misc]
+    in_nodes, out_nodes = ((edge[0],), (edge[1],)) if isinstance(edge[0], int) else edge
+    return [(node, True, False) for node in in_nodes] + [(node, False, True) for node in out_nodes]  # type: ignore[union-attr]
+
+
+def _reference_steps(
+    edges: list[tuple[object, ...]], masks: dict[str, list[object]], *, directed: bool
+) -> set[tuple[int, int]]:
+    """Every (from node, to node) step over an (entry port, exit port) pair of one edge: O(ports²) per edge."""
+    steps: set[tuple[int, int]] = set()
+    for edge_index, edge in enumerate(edges):
+        active = [
+            (position, node, can_enter, can_leave)
+            for position, (node, can_enter, can_leave) in enumerate(_ports_of(edge, directed=directed))
+            if edge_index not in masks.get("edges", [])
+            and (edge_index, position) not in masks.get("ports", [])
+            and node not in masks.get("nodes", [])
+        ]
+        steps |= {
+            (entry_node, exit_node)
+            for entry, entry_node, can_enter, _ in active
+            for exit_port, exit_node, _, can_leave in active
+            if entry != exit_port and can_enter and can_leave
+        }
+    return steps
+
+
+def _reference_reach(steps: set[tuple[int, int]], source: int) -> set[int]:
+    """Closure of the steps from source, by repeated sweeps rather than a queue."""
+    reached = {source}
+    for _round in range(len(steps) + 1):
+        reached |= {to_node for from_node, to_node in steps if from_node in reached}
+    return reached
+
+
+@pytest.mark.parametrize(
+    ("direction", "masks"),
+    [(direction, masks) for direction in ("undirected", "directed") for masks in REFERENCE_MASKS],
+)
+def test_bfs_agrees_with_a_brute_force_reference(direction: str, masks: dict[str, list[object]]) -> None:
+    """From every unmasked node, BFS reaches exactly the nodes of the pairwise reading of D5 to D9."""
+    directed = direction == "directed"
+    edges: list[tuple[object, ...]] = REFERENCE_DIRECTED_EDGES if directed else REFERENCE_EDGES  # type: ignore[assignment]
+    view = Graph(list(range(8)), edges, directed=directed).without_edges(masks.get("edges", []))
+    view = view.without_ports(masks.get("ports", [])).without_nodes(masks.get("nodes", []))
+    steps = _reference_steps(edges, masks, directed=directed)
+
+    # --- Assert ---
+    for source in (node for node in range(8) if node not in masks.get("nodes", [])):
+        order = view.bfs(source)
+        assert len(order) == len(set(order))
+        assert set(order) == _reference_reach(steps, source)

@@ -65,7 +65,7 @@ PyObject *py_component_labels_ctx(PyObject *self, PyObject *args) {
 PyObject *py_quotient_edges_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *labels_obj, *edge_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|O", &capsule, &labels_obj, &edge_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
@@ -115,7 +115,7 @@ PyObject *py_quotient_edges_ctx(PyObject *self, PyObject *args) {
 PyObject *py_degrees_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
@@ -151,7 +151,7 @@ PyObject *py_degrees_ctx(PyObject *self, PyObject *args) {
 PyObject *py_biconnected_component_edge_labels_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = get_graph_context(capsule);
+    GraphContext *graph = get_two_port_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;

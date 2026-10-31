@@ -502,6 +502,12 @@ def _port_connected_components_masked_ports() -> Measured:
     return lambda: list(graph.without_ports(masked).connected_components())
 
 
+@register("port_bfs/random_ports_20k")
+def _port_bfs() -> Measured:
+    graph = _port_graph()
+    return lambda: graph.bfs(0)
+
+
 # ── Structure learning ──
 
 
