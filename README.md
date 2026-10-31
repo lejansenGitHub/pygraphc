@@ -1247,9 +1247,10 @@ and is skipped otherwise.
   exact; a changed C extension moves unchanged work by up to about 1.1%
   through the allocator, so a C change often needs review even when only the
   layout moved. The threshold stays below that noise on purpose, because real
-  code generation changes of 0.5 to 1% matter. Every change is in the table,
-  largest first. A pull request labelled `accept-instruction-change` still gets
-  the table but does not fail.
+  code generation changes of 0.5 to 1% matter. Every count that moved is in
+  the table, largest change first, with aligned columns; counts that round to
+  0.00% are only counted below it. A pull request labelled
+  `accept-instruction-change` still gets the table but does not fail.
 
   What the counts cannot see: they measure portable work, compiled with GCC.
   The same instructions can run slower on one machine (splitting `_core.c`
