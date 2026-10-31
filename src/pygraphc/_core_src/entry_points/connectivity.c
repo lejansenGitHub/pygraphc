@@ -378,10 +378,7 @@ PyObject *py_connected_components_ctx(PyObject *self, PyObject *args) {
     if (parse_port_mask(graph, port_mask_obj, edge_mask, &port_mask) < 0) {
         release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;
     }
-    int status = graph->ports
-        ? compute_components_with_ports(node_count, &graph->node_ids.edges, graph->ports, edge_mask, &port_mask,
-                                        node_mask, &components)
-        : compute_components_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &components);
+    int status = compute_graph_components(graph, edge_mask, &port_mask, node_mask, &components);
     release_port_mask(&port_mask);
     if (status < 0) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL; }
     release_mask(&edge_mask_buffer);
@@ -461,10 +458,7 @@ PyObject *py_connected_components_with_branches_ctx(PyObject *self, PyObject *ar
         release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(branch_ids_fast);
         return NULL;
     }
-    int status = graph->ports
-        ? compute_components_with_ports(node_count, &graph->node_ids.edges, graph->ports, edge_mask, &port_mask,
-                                        node_mask, &components)
-        : compute_components_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &components);
+    int status = compute_graph_components(graph, edge_mask, &port_mask, node_mask, &components);
     if (status < 0) {
         release_port_mask(&port_mask);
         release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(branch_ids_fast);
@@ -523,26 +517,9 @@ PyObject *py_connected_components_with_branches_ctx(PyObject *self, PyObject *ar
     Py_ssize_t edge_branch_count = edges->edge_count < branch_id_count ? edges->edge_count : branch_id_count;
     PyObject **branch_id_items = PySequence_Fast_ITEMS(branch_ids_fast);
 
-    if (graph->ports) {
-        /* Membership: an edge belongs to the component of its active ports, and to none without one. */
-        const PortList *ports = graph->ports;
-        for (Py_ssize_t edge_index = 0; edge_index < edge_branch_count; edge_index++) {
-            for (int port = ports->port_offsets[edge_index]; port < ports->port_offsets[edge_index + 1]; port++) {
-                if (!port_is_active(ports, (int)edge_index, port, edge_mask, port_mask.ports, node_mask)) continue;
-                PySet_Add(branch_sets[components.labels[ports->port_nodes[port]]], branch_id_items[edge_index]);
-                break;
-            }
-        }
-    } else {
-        for (Py_ssize_t edge_index = 0; edge_index < edge_branch_count; edge_index++) {
-            if (edge_mask && edge_mask[edge_index]) continue;
-            int first_node = EDGE_FIRST_ENDPOINT(edges, edge_index);
-            /* Anchor branch_id to a non-excluded endpoint when possible.
-             * When node_mask is NULL, this is just `first_node` (zero overhead). */
-            int anchor = (node_mask && node_mask[first_node]) ? EDGE_SECOND_ENDPOINT(edges, edge_index) : first_node;
-            int component = components.labels[anchor];
-            PySet_Add(branch_sets[component], branch_id_items[edge_index]);
-        }
+    for (Py_ssize_t edge_index = 0; edge_index < edge_branch_count; edge_index++) {
+        int member_node = first_active_port_node(graph, (int)edge_index, edge_mask, port_mask.ports, node_mask);
+        if (member_node >= 0) PySet_Add(branch_sets[components.labels[member_node]], branch_id_items[edge_index]);
     }
     release_port_mask(&port_mask);
     release_mask(&edge_mask_buffer);
@@ -559,8 +536,8 @@ PyObject *py_connected_components_with_branches_ctx(PyObject *self, PyObject *ar
             if (node_mask && node_mask[idx]) continue;
             PySet_Add(node_set, graph->node_ids.node_id_items[idx]);
         }
-        /* Include component if it has any nodes or any branches */
-        if (PySet_GET_SIZE(node_set) > 0 || PySet_GET_SIZE(branch_sets[component]) > 0) {
+        /* A component without an unmasked node holds no edge either: an edge belongs to the component of an active port. */
+        if (PySet_GET_SIZE(node_set) > 0) {
             PyObject *pair = PyTuple_Pack(2, node_set, branch_sets[component]);
             PyList_Append(result, pair);
             Py_DECREF(pair);

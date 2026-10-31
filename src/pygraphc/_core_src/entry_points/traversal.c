@@ -202,7 +202,7 @@ PyObject *py_bfs_ctx(PyObject *self, PyObject *args) {
     const uint8_t *traversal_edge_mask = two_port_edge_mask(&port_mask, edge_mask);
     int tail = graph->ports
         ? breadth_first_order(graph, source, traversal_edge_mask, port_mask.ports, node_mask, visited, queue, expanded, 1)
-        : breadth_first_order(graph, source, edge_mask, NULL, node_mask, visited, queue, NULL, 0);
+        : breadth_first_order(graph, source, traversal_edge_mask, NULL, node_mask, visited, queue, NULL, 0);
 
     PyObject *result = PyList_New(tail);
     if (result) {

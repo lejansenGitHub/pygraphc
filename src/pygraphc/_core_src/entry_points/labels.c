@@ -37,10 +37,7 @@ PyObject *py_component_labels_ctx(PyObject *self, PyObject *args) {
     if (parse_port_mask(graph, port_mask_obj, edge_mask, &port_mask) < 0) {
         Py_DECREF(result); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;
     }
-    int status = graph->ports
-        ? compute_components_with_ports(node_count, &graph->node_ids.edges, graph->ports, edge_mask, &port_mask,
-                                        node_mask, &components)
-        : compute_components_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &components);
+    int status = compute_graph_components(graph, edge_mask, &port_mask, node_mask, &components);
     release_port_mask(&port_mask);
     if (status < 0) {
         Py_DECREF(result); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;

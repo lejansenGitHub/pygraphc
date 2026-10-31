@@ -105,8 +105,6 @@ __all__ = [
     "Partition",
     "PendantAction",
     "PendantPolicy",
-    "PortGraph",
-    "PortGraphView",
     "Reduced",
     "ReductionLog",
     "ReductionState",
@@ -731,6 +729,7 @@ def _connected_component_of(
     node_id: NodeIdT,
     excluded_edges: bytearray | None,
     excluded_nodes: bytearray | None,
+    excluded_ports: bytearray | None = None,
 ) -> set[NodeIdT]:
     """The connected component containing one node, without building any other component.
 
@@ -750,7 +749,7 @@ def _connected_component_of(
     off a boundary, so it can only hold a straddling hit and no member is ever
     passed over.
     """
-    labels: bytes = _component_labels_ctx(graph._graph_capsule, excluded_edges, excluded_nodes)
+    labels: bytes = _component_labels_ctx(graph._graph_capsule, excluded_edges, excluded_nodes, excluded_ports)
     return _component_of_labels(graph, node_id, labels)
 
 
@@ -774,6 +773,11 @@ def _component_of_labels(graph: Graph[NodeIdT, BranchIdT], node_id: NodeIdT, lab
     return component
 
 
+def _port_mask_unsupported(method_name: str) -> NotImplementedError:
+    """The error of a method whose kernel does not read port masks yet (``docs/multiport-decisions.md``)."""
+    return NotImplementedError(f"{method_name} does not read port masks yet")
+
+
 class Graph(Generic[NodeIdT, BranchIdT]):
     """Parsed graph that supports multiple algorithm calls without re-parsing.
 
@@ -790,6 +794,14 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     to ``int``. Every result hands back the id objects that were passed in, so
     ``Graph[NodeId, BranchId]`` built from ``NewType`` ids returns those types.
     Without ``branch_ids`` the branch type parameter is ``int``.
+
+    An edge is a tuple of node ids, one per port, and the position in the
+    tuple is the port index; a pair is a two-port edge, and a directed edge is
+    ``(u, v)`` or ``(in_nodes, out_nodes)``. The C core stores an edge with
+    more than two ports as its list of ports, with no auxiliary nodes or edges.
+    A port is active when its edge, the port and its node are unmasked, and an
+    edge joins its active ports; see the README section *Edges with ports* and
+    ``docs/multiport-decisions.md`` for the full contract.
     """
 
     __slots__ = (
@@ -801,6 +813,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         "_further_edge_indices_by_branch_id",
         "_node_index_by_node_id",
         "_directed",
+        "_has_multiport_edges",
         "_port_offsets",
     )
 
@@ -811,6 +824,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     _further_edge_indices_by_branch_id: dict[BranchIdT, list[int]] | None
     _node_index_by_node_id: dict[NodeIdT, int] | None
     _directed: bool
+    _has_multiport_edges: bool
     _port_offsets: memoryview | None
 
     @overload
@@ -851,6 +865,8 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         self._further_edge_indices_by_branch_id = None
         self._node_index_by_node_id = None
         self._directed = directed
+        self._has_multiport_edges = False
+        self._port_offsets = None
         if dst is not None:
             self._graph_capsule = _parse_graph(node_ids, edges_or_src, dst, directed)
         else:
@@ -859,8 +875,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
             except (TypeError, ValueError):
                 # The port parser shares the node id parser, so a two-port edge error raises again with its own message.
                 self._graph_capsule = _parse_port_graph(node_ids, edges_or_src, directed)
-                self.__class__ = PortGraph
-                self._port_offsets = None
+                self._has_multiport_edges = True
         if branch_ids is not None and len(branch_ids) != self.edge_count:
             raise ValueError(  # noqa: TRY003 — the two counts are the whole message
                 f"branch_ids length {len(branch_ids)} does not match edge count {self.edge_count}"
@@ -922,8 +937,25 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         return result
 
     @property
+    def port_count(self) -> int:
+        """Number of ports over all edges; a two-port edge has two."""
+        if not self._has_multiport_edges:
+            return 2 * self.edge_count
+        return int(_port_graph_shape(self._graph_capsule)[2])
+
+    def _ports_of(self, edge_index: int) -> range:
+        """The flat indices of an edge's ports, as port masks and per-port weights number them."""
+        if not self._has_multiport_edges:
+            return range(2 * edge_index, 2 * edge_index + 2)
+        if self._port_offsets is None:
+            self._port_offsets = memoryview(_port_offsets(self._graph_capsule)).cast("i")
+        return range(self._port_offsets[edge_index], self._port_offsets[edge_index + 1])
+
+    @property
     def is_multigraph(self) -> bool:
         """True if any node pair has more than one edge (parallel edges)."""
+        if self._has_multiport_edges:
+            raise NotImplementedError("is_multigraph is not available on graphs with multiport edges")
         edges = self._edges
         if edges is None:
             return False
@@ -1014,6 +1046,10 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         """Create a lightweight view with the given edges excluded."""
         return GraphView(self, edge_indices)
 
+    def without_ports(self, ports: Collection[tuple[int, int]]) -> GraphView[NodeIdT, BranchIdT]:
+        """View with the given ``(edge_index, port_index)`` ports masked; the other ports of their edges stay joined."""
+        return GraphView(self, ()).without_ports(ports)
+
     def with_edges(
         self,
         added_edges: Sequence[tuple[NodeIdT, NodeIdT]],
@@ -1075,6 +1111,8 @@ class Graph(Generic[NodeIdT, BranchIdT]):
 
         where *rerouted* replaces ``node_id`` with ``new_node_id`` in each edge.
         """
+        if self._has_multiport_edges:
+            raise NotImplementedError("split_node is not available on graphs with multiport edges")
         edges = self._edges
         base_branch_ids = self._branch_ids
         if edges is None:
@@ -1354,9 +1392,12 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         """Return the shortest weighted path from source to target.
 
         Runs a bidirectional Dijkstra, so only a small part of a large graph is
-        settled. Pass ``weights`` as a float64 buffer (a numpy ``float64`` array
-        or ``array.array("d", ...)``) to hand it to C as is; a list of floats is
-        converted element by element first, which costs more than the search.
+        settled. One weight per edge, or one per port once an edge has more
+        than two ports; an edge then costs its entry port's weight plus its
+        exit port's weight. Pass ``weights`` as a float64 buffer (a numpy
+        ``float64`` array or ``array.array("d", ...)``) to hand it to C as is; a
+        list of floats is converted element by element first, which costs more
+        than the search.
         """
         _distance, path = _dijkstra_ctx(self._graph_capsule, weights, source, target)
         result: list[NodeIdT] = path
@@ -1368,7 +1409,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         source: NodeIdT,
         cutoff: float | None = None,
     ) -> dict[NodeIdT, float]:
-        """Return {node_id: distance} for all nodes reachable from source."""
+        """Return {node_id: distance} for all nodes reachable from source. Weights as in ``shortest_path``."""
         cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
         result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(
             self._graph_capsule, weights, source, cutoff_or_unbounded
@@ -1381,7 +1422,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         sources: Sequence[NodeIdT],
         cutoff: float | None = None,
     ) -> dict[NodeIdT, float]:
-        """Return {node_id: distance} from nearest source to each reachable node."""
+        """Return {node_id: distance} from nearest source to each reachable node. Weights as in ``shortest_path``."""
         cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
         result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(
             self._graph_capsule, weights, sources, cutoff_or_unbounded
@@ -1447,7 +1488,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     """Lightweight view of a Graph with excluded edges and/or nodes.
 
     Shares the base graph's parsed data (IntMap, CSR). Holds a
-    bytearray of excluded edges and an optional bytearray of excluded nodes.
+    bytearray of excluded edges and optional bytearrays of excluded nodes and
+    excluded ports (one byte per port, see ``Graph.port_count``).
 
     Edges are identified by their index in the original edge list
     (the order in which they were passed to ``Graph()``). A rebuild through
@@ -1456,7 +1498,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     nodes, so indices and branch ids stay valid across rebuilds.
     """
 
-    __slots__ = ("_graph", "_excluded_edges", "_rebuilt_graph", "_excluded_nodes")
+    __slots__ = ("_graph", "_excluded_edges", "_rebuilt_graph", "_excluded_nodes", "_excluded_ports")
 
     def __init__(
         self,
@@ -1469,6 +1511,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             self._excluded_edges[idx] = 1
         self._rebuilt_graph: Graph[NodeIdT, BranchIdT] | None = None
         self._excluded_nodes: bytearray | None = None
+        self._excluded_ports: bytearray | None = None
 
     @classmethod
     def _from_excluded_edges(
@@ -1480,6 +1523,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         view._excluded_edges = excluded_edges
         view._rebuilt_graph = None
         view._excluded_nodes = None
+        view._excluded_ports = None
         return view
 
     @classmethod
@@ -1500,6 +1544,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         view._excluded_edges = bytearray(graph.edge_count)
         view._rebuilt_graph = None
         view._excluded_nodes = excluded_nodes
+        view._excluded_ports = None
         return view
 
     @classmethod
@@ -1518,6 +1563,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         compacted away, which keeps edge indices, node indices and branch ids
         of the base graph valid on the rebuilt view.
         """
+        if base._has_multiport_edges:
+            raise NotImplementedError("with_edges is not available on graphs with multiport edges")
         base_edges = base._edges
         if base_edges is None:
             raise ValueError("with_edges requires edge-pair construction")  # noqa: TRY003 — one clear sentence
@@ -1544,6 +1591,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             if excluded_nodes is not None
             else None
         )
+        view._excluded_ports = None
         return view
 
     def with_edges(
@@ -1556,6 +1604,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         The exclusions of this view are kept. Base edges keep their indices
         and the added edges are appended, see ``Graph.with_edges``.
         """
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("with_edges")
         return GraphView._with_additions(
             self._graph,
             excluded_edges=self._excluded_edges,
@@ -1580,6 +1630,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         view._excluded_edges = bytearray(self._excluded_edges)
         view._rebuilt_graph = self._rebuilt_graph
         view._excluded_nodes = excluded_nodes
+        view._excluded_ports = bytearray(self._excluded_ports) if self._excluded_ports is not None else None
         return view
 
     def without_branches(
@@ -1606,7 +1657,28 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         view._excluded_edges = new_excluded_edges
         view._rebuilt_graph = self._rebuilt_graph
         view._excluded_nodes = bytearray(self._excluded_nodes) if self._excluded_nodes else None
+        view._excluded_ports = bytearray(self._excluded_ports) if self._excluded_ports is not None else None
         return view
+
+    def without_ports(self, ports: Collection[tuple[int, int]]) -> GraphView[NodeIdT, BranchIdT]:
+        """Create a new view also excluding the given ``(edge_index, port_index)`` ports.
+
+        A masked port detaches only its node from its edge; the other ports
+        stay joined, and a two-port edge left with one active port joins nothing.
+        """
+        view = self.without_edges(())
+        excluded_ports = view._excluded_ports if view._excluded_ports is not None else bytearray(self._graph.port_count)
+        for edge_index, port_index in ports:
+            edge_ports = self._graph._ports_of(edge_index)
+            if not 0 <= port_index < len(edge_ports):
+                raise IndexError(f"edge {edge_index} has no port {port_index}")  # noqa: TRY003 — the indices are the message
+            excluded_ports[edge_ports[port_index]] = 1
+        view._excluded_ports = excluded_ports
+        return view
+
+    def _masks(self) -> tuple[bytearray, bytearray | None, bytearray | None]:
+        """Edge, node and port masks, in the order the _core kernels take them."""
+        return self._excluded_edges, self._excluded_nodes, self._excluded_ports
 
     def _require_undirected(self, method_name: str) -> None:
         if self._graph._directed:
@@ -1621,6 +1693,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         For directed graphs, returns only outgoing edges (src=node_id).
         """
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("incident_edge_indices")
         result: list[EdgeIndex] = _incident_edges_ctx(
             self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes
         )
@@ -1628,11 +1702,15 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def outgoing_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all non-excluded outgoing edges. Directed graphs only."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("outgoing_edge_indices")
         self._require_directed("outgoing_edge_indices")
         return self.incident_edge_indices(node_id)
 
     def incoming_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all non-excluded incoming edges. Directed graphs only."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("incoming_edge_indices")
         result: list[EdgeIndex] = _incoming_edges_ctx(
             self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes
         )
@@ -1643,6 +1721,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         For directed graphs, returns successors (outgoing neighbors).
         """
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("neighbors")
         result: set[NodeIdT] = _neighbors_ctx(
             self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes
         )
@@ -1650,11 +1730,15 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def successors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of successor node IDs. Directed graphs only."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("successors")
         self._require_directed("successors")
         return self.neighbors(node_id)
 
     def predecessors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of predecessor node IDs. Directed graphs only."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("predecessors")
         result: set[NodeIdT] = _predecessors_ctx(
             self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes
         )
@@ -1666,16 +1750,22 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         For undirected graphs, self-loops are counted twice (via CSR).
         For directed graphs, returns out-degree.
         """
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("degree")
         result: int = _degree_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
         return result
 
     def out_degree(self, node_id: NodeIdT) -> int:
         """Return the out-degree of the node. Directed graphs only."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("out_degree")
         self._require_directed("out_degree")
         return self.degree(node_id)
 
     def in_degree(self, node_id: NodeIdT) -> int:
         """Return the in-degree of the node. Directed graphs only."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("in_degree")
         result: int = _in_degree_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
         return result
 
@@ -1684,6 +1774,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         Requires the base Graph to have been constructed with branch_ids.
         """
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("bridges_with_branch_ids")
         self._require_undirected("bridges_with_branch_ids")
         if self._graph._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
@@ -1709,6 +1801,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         are detached from ``node_id`` and reattached to ``new_node_id``.
         The remaining edges of ``node_id`` stay in place.
         """
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("split_node")
         edges = self._graph._edges
         base_branch_ids = self._graph._branch_ids
         if edges is None:
@@ -1749,6 +1843,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         node_simple: if True, each node may be visited at most once per path.
         ignore_self_loops: if True, self-loops are never traversed.
         """
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("all_edge_paths")
         target_node_ids = [targets] if isinstance(targets, int) else list(targets)
         cutoff_or_unbounded = cutoff if cutoff is not None else -1
         result: list[list[EdgeIndex]] = _all_edge_paths_ctx(
@@ -1766,7 +1862,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     def connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each connected component as a set of original node IDs."""
         self._require_undirected("connected_components")
-        yield from _connected_components_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        yield from _connected_components_ctx(self._graph._graph_capsule, *self._masks())
 
     def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the connected component containing ``node_id``, see ``Graph.connected_component``.
@@ -1775,29 +1871,29 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         to no component and raises ``ValueError``, as does an unknown node.
         """
         self._require_undirected("connected_component")
-        return _connected_component_of(self._graph, node_id, self._excluded_edges, self._excluded_nodes)
+        return _connected_component_of(self._graph, node_id, *self._masks())
 
     def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
         """Yield (node_id_set, branch_id_set) for each connected component.
 
         Requires the base Graph to have been constructed with branch_ids.
 
-        Excluded edges are removed from connectivity and their branch IDs
-        are dropped. Excluded nodes are removed from the output node sets
-        but their edges still contribute to connectivity and branch ID sets.
+        An edge joins its active ports and belongs to the component of its
+        active ports: an excluded edge, or one whose ports are all masked or
+        at excluded nodes, belongs to no component. Excluded nodes leave the
+        node sets.
         """
         self._require_undirected("connected_components_with_branch_ids")
         if self._graph._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
         yield from _connected_components_with_branches_ctx(
-            self._graph._graph_capsule,
-            self._graph._branch_ids,
-            self._excluded_edges,
-            self._excluded_nodes,
+            self._graph._graph_capsule, self._graph._branch_ids, *self._masks()
         )
 
     def strongly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each strongly connected component as a set of node IDs."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("strongly_connected_components")
         self._require_directed("strongly_connected_components")
         yield from _strongly_connected_components_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1806,13 +1902,15 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each weakly connected component as a set of node IDs."""
         self._require_directed("weakly_connected_components")
-        yield from _connected_components_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        yield from _connected_components_ctx(self._graph._graph_capsule, *self._masks())
 
     def topological_sort(self) -> list[NodeIdT]:
         """Return nodes in topological order (Kahn's algorithm).
 
         Raises ValueError if the graph contains a cycle.
         """
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("topological_sort")
         self._require_directed("topological_sort")
         result: list[NodeIdT] = _topological_sort_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1821,6 +1919,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
         """Return bridge edges as (node_id, node_id) pairs."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("bridges")
         self._require_undirected("bridges")
         result: list[tuple[NodeIdT, NodeIdT]] = _bridges_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1829,6 +1929,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def articulation_points(self) -> set[NodeIdT]:
         """Return the set of articulation points."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("articulation_points")
         self._require_undirected("articulation_points")
         result: set[NodeIdT] = _articulation_points_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1837,6 +1939,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def biconnected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each biconnected component as a set of node IDs."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("biconnected_components")
         self._require_undirected("biconnected_components")
         yield from _biconnected_components_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
 
@@ -1845,11 +1949,13 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         Excluded edges do not connect and excluded nodes are labelled -1.
         """
-        result: bytes = _component_labels_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        result: bytes = _component_labels_ctx(self._graph._graph_capsule, *self._masks())
         return memoryview(result).cast("i")
 
     def quotient_edges(self, labels: memoryview) -> tuple[memoryview, memoryview, memoryview, memoryview]:
         """Split the unmasked edges by endpoint label, see ``Graph.quotient_edges``; excluded edges are skipped."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("quotient_edges")
         return _quotient_edge_views(_quotient_edges_ctx(self._graph._graph_capsule, labels, self._excluded_edges))
 
     def series_parallel_reduce(
@@ -1861,6 +1967,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         series_blocked_mask: NodeMask | None = None,
     ) -> ReductionLog:
         """Reduce under the view's masks, see ``Graph.series_parallel_reduce``; excluded nodes and edges never move."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("series_parallel_reduce")
         self._require_undirected("series_parallel_reduce")
         buffers: tuple[bytes, ...] = _series_parallel_reduce_ctx(
             self._graph._graph_capsule,
@@ -1875,6 +1983,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def degrees(self) -> memoryview:
         """Degree per node index as an int32 view under the masks, see ``Graph.degrees``; excluded nodes get 0."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("degrees")
         result: bytes = _degrees_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
         return memoryview(result).cast("i")
 
@@ -1883,6 +1993,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         Excluded edges and edges at an excluded node get -1.
         """
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("bcc_edge_labels")
         self._require_undirected("bcc_edge_labels")
         result: bytes = _biconnected_component_edge_labels_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1891,6 +2003,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def cycle_basis(self) -> list[list[NodeIdT]]:
         """Return a fundamental cycle basis as a list of cycles."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("cycle_basis")
         self._require_undirected("cycle_basis")
         result: list[list[NodeIdT]] = _cycle_basis_ctx(
             self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
@@ -1899,6 +2013,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeIdT]:
         """Return the longest path in the DAG as a list of node IDs."""
+        if self._excluded_ports is not None:
+            raise _port_mask_unsupported("dag_longest_path")
         self._require_directed("dag_longest_path")
         result: list[NodeIdT] = _dag_longest_path_ctx(
             self._graph._graph_capsule, weights, self._excluded_edges, self._excluded_nodes
@@ -1907,7 +2023,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def bfs(self, source: NodeIdT) -> list[NodeIdT]:
         """Return nodes visited in BFS order from source."""
-        result: list[NodeIdT] = _bfs_ctx(self._graph._graph_capsule, source, self._excluded_edges, self._excluded_nodes)
+        result: list[NodeIdT] = _bfs_ctx(self._graph._graph_capsule, source, *self._masks())
         return result
 
     def shortest_path(
@@ -1919,18 +2035,14 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         """Return the shortest weighted path from source to target.
 
         Runs a bidirectional Dijkstra, so only a small part of a large graph is
-        settled. Pass ``weights`` as a float64 buffer (a numpy ``float64`` array
-        or ``array.array("d", ...)``) to hand it to C as is; a list of floats is
-        converted element by element first, which costs more than the search.
+        settled. One weight per edge, or one per port once an edge has more
+        than two ports; an edge then costs its entry port's weight plus its
+        exit port's weight. Pass ``weights`` as a float64 buffer (a numpy
+        ``float64`` array or ``array.array("d", ...)``) to hand it to C as is; a
+        list of floats is converted element by element first, which costs more
+        than the search.
         """
-        _distance, path = _dijkstra_ctx(
-            self._graph._graph_capsule,
-            weights,
-            source,
-            target,
-            self._excluded_edges,
-            self._excluded_nodes,
-        )
+        _distance, path = _dijkstra_ctx(self._graph._graph_capsule, weights, source, target, *self._masks())
         result: list[NodeIdT] = path
         return result
 
@@ -1940,15 +2052,10 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         source: NodeIdT,
         cutoff: float | None = None,
     ) -> dict[NodeIdT, float]:
-        """Return {node_id: distance} for all nodes reachable from source."""
+        """Return {node_id: distance} for all nodes reachable from source. Weights as in ``shortest_path``."""
         cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
         result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(
-            self._graph._graph_capsule,
-            weights,
-            source,
-            cutoff_or_unbounded,
-            self._excluded_edges,
-            self._excluded_nodes,
+            self._graph._graph_capsule, weights, source, cutoff_or_unbounded, *self._masks()
         )
         return result
 
@@ -1958,15 +2065,10 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         sources: Sequence[NodeIdT],
         cutoff: float | None = None,
     ) -> dict[NodeIdT, float]:
-        """Return {node_id: distance} from nearest source to each reachable node."""
+        """Return {node_id: distance} from nearest source to each reachable node. Weights as in ``shortest_path``."""
         cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
         result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(
-            self._graph._graph_capsule,
-            weights,
-            sources,
-            cutoff_or_unbounded,
-            self._excluded_edges,
-            self._excluded_nodes,
+            self._graph._graph_capsule, weights, sources, cutoff_or_unbounded, *self._masks()
         )
         return result
 
@@ -1976,299 +2078,6 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         if not lengths:
             return 0.0
         return max(lengths.values())
-
-
-class PortGraph(Graph[NodeIdT, BranchIdT]):
-    """A ``Graph`` whose edges have ports: built by ``Graph()`` when an edge is not a pair of node ids.
-
-    An edge is a tuple of node ids, one per port, and the position in the
-    tuple is the port index; a directed edge is ``(u, v)`` or
-    ``(in_nodes, out_nodes)``. The C core stores every edge as its list of
-    ports, with no auxiliary nodes or edges. A port is active when its edge,
-    the port and its node are unmasked, and an edge joins its active ports;
-    see the README section *Edges with ports* and
-    ``docs/multiport-decisions.md`` for the full contract.
-    """
-
-    __slots__ = ()
-
-    @property
-    def port_count(self) -> int:
-        """Number of ports over all edges."""
-        return int(_port_graph_shape(self._graph_capsule)[2])
-
-    def _port_offset_values(self) -> memoryview:
-        """int32 offsets: the ports of edge ``e`` are ``offsets[e]`` up to ``offsets[e + 1]``."""
-        if self._port_offsets is None:
-            self._port_offsets = memoryview(_port_offsets(self._graph_capsule)).cast("i")
-        return self._port_offsets
-
-    def _view(self) -> PortGraphView[NodeIdT, BranchIdT]:
-        return PortGraphView(self, bytearray(self.edge_count), bytearray(self.port_count), bytearray(self.node_count))
-
-    def without_edges(self, edge_indices: Collection[int]) -> PortGraphView[NodeIdT, BranchIdT]:  # type: ignore[override]
-        """View with the given edges masked: each joins nothing (masking case 1)."""
-        return self._view().without_edges(edge_indices)
-
-    def without_ports(self, ports: Collection[tuple[int, int]]) -> PortGraphView[NodeIdT, BranchIdT]:
-        """View with the given ``(edge_index, port_index)`` ports masked; the other ports of their edges stay joined."""
-        return self._view().without_ports(ports)
-
-    def without_nodes(self, node_ids: Collection[NodeIdT]) -> PortGraphView[NodeIdT, BranchIdT]:  # type: ignore[override]
-        """View with the given nodes masked: they leave every result and their ports are inactive."""
-        return self._view().without_nodes(node_ids)
-
-    def without_branches(self, branch_ids: Collection[BranchIdT]) -> PortGraphView[NodeIdT, BranchIdT]:  # type: ignore[override]
-        """View with every edge carrying one of the branch ids masked."""
-        return self._view().without_edges(self._edge_indices_of_branches(branch_ids))
-
-    def connected_components(self) -> Generator[set[NodeIdT], None, None]:
-        """Each connected component as a set of node ids; an edge joins its active ports."""
-        self._require_undirected("connected_components")
-        yield from _connected_components_ctx(self._graph_capsule)
-
-    def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
-        """Each weakly connected component as a set of node ids, direction ignored."""
-        self._require_directed("weakly_connected_components")
-        yield from _connected_components_ctx(self._graph_capsule)
-
-    def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
-        """The connected component containing ``node_id``."""
-        self._require_undirected("connected_component")
-        return _component_of_labels(self, node_id, _component_labels_ctx(self._graph_capsule))
-
-    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
-        """``(node ids, branch ids)`` per component; an edge belongs to the component of its active ports."""
-        self._require_undirected("connected_components_with_branch_ids")
-        if self._branch_ids is None:
-            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-        yield from _connected_components_with_branches_ctx(self._graph_capsule, self._branch_ids)
-
-    def component_labels(self) -> memoryview:
-        """The smallest node index of its component per node index, as an int32 view; direction ignored."""
-        return memoryview(_component_labels_ctx(self._graph_capsule)).cast("i")
-
-    def bfs(self, source: NodeIdT) -> list[NodeIdT]:
-        """Nodes in breadth-first order from ``source``; an edge leads from active (in-)ports to active (out-)ports."""
-        result: list[NodeIdT] = _bfs_ctx(self._graph_capsule, source)
-        return result
-
-    def shortest_path_lengths(
-        self, weights: Sequence[float], source: NodeIdT, cutoff: float | None = None
-    ) -> dict[NodeIdT, float]:
-        """``{node id: distance}`` within ``cutoff``; one weight per port, an edge costs its entry plus exit port."""
-        cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
-        result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(
-            self._graph_capsule, weights, source, cutoff_or_unbounded
-        )
-        return result
-
-    def multi_source_shortest_path_lengths(
-        self, weights: Sequence[float], sources: Sequence[NodeIdT], cutoff: float | None = None
-    ) -> dict[NodeIdT, float]:
-        """``{node id: distance}`` from the nearest source, one weight per port."""
-        cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
-        result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(
-            self._graph_capsule, weights, sources, cutoff_or_unbounded
-        )
-        return result
-
-    def eccentricity(self, weights: Sequence[float], source: NodeIdT) -> float:
-        """The largest shortest-path distance from ``source``, one weight per port."""
-        lengths = self.shortest_path_lengths(weights, source)
-        return max(lengths.values()) if lengths else 0.0
-
-    def shortest_path(self, weights: Sequence[float], source: NodeIdT, target: NodeIdT) -> list[NodeIdT]:
-        """The nodes of a cheapest path, bidirectional Dijkstra; one weight per port."""
-        _distance, path = _dijkstra_ctx(self._graph_capsule, weights, source, target)
-        result: list[NodeIdT] = path
-        return result
-
-
-class PortGraphView(Generic[NodeIdT, BranchIdT]):
-    """A ``PortGraph`` with edges, ports and nodes masked; masks combine as a union in any order."""
-
-    __slots__ = ("_graph", "_excluded_edges", "_excluded_ports", "_excluded_nodes")
-
-    def __init__(
-        self,
-        graph: PortGraph[NodeIdT, BranchIdT],
-        excluded_edges: bytearray,
-        excluded_ports: bytearray,
-        excluded_nodes: bytearray,
-    ) -> None:
-        self._graph = graph
-        self._excluded_edges = excluded_edges
-        self._excluded_ports = excluded_ports
-        self._excluded_nodes = excluded_nodes
-
-    def _copy(self) -> PortGraphView[NodeIdT, BranchIdT]:
-        return PortGraphView(
-            self._graph,
-            bytearray(self._excluded_edges),
-            bytearray(self._excluded_ports),
-            bytearray(self._excluded_nodes),
-        )
-
-    def _masks(self) -> tuple[bytearray, bytearray, bytearray]:
-        """Edge, node and port masks, in the order the _core kernels take them."""
-        return self._excluded_edges, self._excluded_nodes, self._excluded_ports
-
-    def without_edges(self, edge_indices: Collection[int]) -> PortGraphView[NodeIdT, BranchIdT]:
-        """A further view with the given edges masked as well."""
-        view = self._copy()
-        for edge_index in edge_indices:
-            view._excluded_edges[edge_index] = 1
-        return view
-
-    def without_ports(self, ports: Collection[tuple[int, int]]) -> PortGraphView[NodeIdT, BranchIdT]:
-        """A further view with the given ``(edge_index, port_index)`` ports masked as well."""
-        offsets = self._graph._port_offset_values()
-        view = self._copy()
-        for edge_index, port_index in ports:
-            first_port = offsets[edge_index]
-            if not 0 <= port_index < offsets[edge_index + 1] - first_port:
-                raise IndexError(f"edge {edge_index} has no port {port_index}")  # noqa: TRY003 — the indices are the message
-            view._excluded_ports[first_port + port_index] = 1
-        return view
-
-    def without_nodes(self, node_ids: Collection[NodeIdT]) -> PortGraphView[NodeIdT, BranchIdT]:
-        """A further view with the given nodes masked as well; unknown node ids are ignored."""
-        node_index_by_node_id = self._graph._get_node_index_by_node_id()
-        view = self._copy()
-        for node_id in node_ids:
-            node_index = node_index_by_node_id.get(node_id)
-            if node_index is not None:
-                view._excluded_nodes[node_index] = 1
-        return view
-
-    def without_branches(self, branch_ids: Collection[BranchIdT]) -> PortGraphView[NodeIdT, BranchIdT]:
-        """A further view with every edge carrying one of the branch ids masked as well."""
-        return self.without_edges(self._graph._edge_indices_of_branches(branch_ids))
-
-    def connected_components(self) -> Generator[set[NodeIdT], None, None]:
-        """Each connected component of the active graph as a set of node ids; masked nodes are left out."""
-        self._graph._require_undirected("connected_components")
-        yield from _connected_components_ctx(self._graph._graph_capsule, *self._masks())
-
-    def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
-        """Each weakly connected component of the active graph, direction ignored."""
-        self._graph._require_directed("weakly_connected_components")
-        yield from _connected_components_ctx(self._graph._graph_capsule, *self._masks())
-
-    def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
-        """The connected component containing ``node_id``; a masked node raises ``ValueError``."""
-        self._graph._require_undirected("connected_component")
-        return _component_of_labels(
-            self._graph, node_id, _component_labels_ctx(self._graph._graph_capsule, *self._masks())
-        )
-
-    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
-        """``(node ids, branch ids)`` per component of the active graph, by the membership rule."""
-        self._graph._require_undirected("connected_components_with_branch_ids")
-        if self._graph._branch_ids is None:
-            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-        yield from _connected_components_with_branches_ctx(
-            self._graph._graph_capsule, self._graph._branch_ids, *self._masks()
-        )
-
-    def component_labels(self) -> memoryview:
-        """The smallest node index of its component per node index; masked nodes are labelled -1."""
-        return memoryview(_component_labels_ctx(self._graph._graph_capsule, *self._masks())).cast("i")
-
-    def bfs(self, source: NodeIdT) -> list[NodeIdT]:
-        """Nodes in breadth-first order from ``source``; an edge leads from active (in-)ports to active (out-)ports."""
-        result: list[NodeIdT] = _bfs_ctx(
-            self._graph._graph_capsule, source, self._excluded_edges, self._excluded_nodes, self._excluded_ports
-        )
-        return result
-
-    def shortest_path_lengths(
-        self, weights: Sequence[float], source: NodeIdT, cutoff: float | None = None
-    ) -> dict[NodeIdT, float]:
-        """``{node id: distance}`` within ``cutoff``; one weight per port, an edge costs its entry plus exit port."""
-        cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
-        result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(
-            self._graph._graph_capsule, weights, source, cutoff_or_unbounded, *self._masks()
-        )
-        return result
-
-    def multi_source_shortest_path_lengths(
-        self, weights: Sequence[float], sources: Sequence[NodeIdT], cutoff: float | None = None
-    ) -> dict[NodeIdT, float]:
-        """``{node id: distance}`` from the nearest source, one weight per port."""
-        cutoff_or_unbounded = cutoff if cutoff is not None else -1.0
-        result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(
-            self._graph._graph_capsule, weights, sources, cutoff_or_unbounded, *self._masks()
-        )
-        return result
-
-    def eccentricity(self, weights: Sequence[float], source: NodeIdT) -> float:
-        """The largest shortest-path distance from ``source``, one weight per port."""
-        lengths = self.shortest_path_lengths(weights, source)
-        return max(lengths.values()) if lengths else 0.0
-
-    def shortest_path(self, weights: Sequence[float], source: NodeIdT, target: NodeIdT) -> list[NodeIdT]:
-        """The nodes of a cheapest path, bidirectional Dijkstra; one weight per port."""
-        _distance, path = _dijkstra_ctx(self._graph._graph_capsule, weights, source, target, *self._masks())
-        result: list[NodeIdT] = path
-        return result
-
-
-_PORT_GRAPH_PLANNED = {
-    "articulation_points": "the critical-elements stage",
-    "biconnected_components": "the critical-elements stage",
-    "two_edge_connected_components": "the critical-elements stage",
-    "nodes_on_simple_paths": "the critical-elements stage",
-    "bridges": "the critical-elements stage, as critical_edges()",
-    "bridges_with_branch_ids": "the critical-elements stage, as critical_edges()",
-    "edge_indices": "the critical-elements stage, as edge_indices_at()",
-    "strongly_connected_components": "the directed stage",
-    "topological_sort": "the directed stage",
-    "dag_longest_path": "the directed stage",
-}
-"""Methods a later stage of the multiport work implements on edges with ports."""
-
-_PORT_GRAPH_UNSPECIFIED = (
-    "is_multigraph",
-    "incident_edge_indices",
-    "outgoing_edge_indices",
-    "incoming_edge_indices",
-    "neighbors",
-    "successors",
-    "predecessors",
-    "degree",
-    "out_degree",
-    "in_degree",
-    "with_edges",
-    "split_node",
-    "all_edge_paths",
-    "quotient_edges",
-    "degrees",
-    "series_parallel_reduce",
-    "series_parallel_state",
-    "bcc_edge_labels",
-    "cycle_basis",
-)
-"""Methods whose meaning on edges with ports is not decided yet (``docs/multiport-decisions.md``, O3)."""
-
-
-def _unavailable_on_ports(name: str, reason: str) -> object:
-    def unavailable(*_arguments: object, **_keywords: object) -> object:
-        raise NotImplementedError(f"{name} is not available on graphs with multiport edges: {reason}")
-
-    unavailable.__name__ = name
-    return unavailable
-
-
-for _name, _stage in _PORT_GRAPH_PLANNED.items():
-    for _cls in (PortGraph, PortGraphView):
-        if _name != "edge_indices" or _cls is PortGraph:
-            setattr(_cls, _name, _unavailable_on_ports(_name, f"planned for {_stage}"))
-for _name in _PORT_GRAPH_UNSPECIFIED:
-    _unavailable = _unavailable_on_ports(_name, "its meaning there is not decided yet")
-    setattr(PortGraph, _name, property(_unavailable) if _name == "is_multigraph" else _unavailable)  # type: ignore[arg-type]  # a raising callable
-    setattr(PortGraphView, _name, _unavailable)
 
 
 def for_each_edge_excluded(

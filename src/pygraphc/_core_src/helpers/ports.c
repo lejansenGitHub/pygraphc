@@ -210,18 +210,15 @@ int parse_port_mask(const GraphContext *graph, PyObject *port_mask_obj, const ui
     mask->two_port_edges = NULL;
     mask->ports_buffer.obj = NULL;
     if (port_mask_obj == NULL || port_mask_obj == Py_None) return 0;
-    if (!graph->ports) {
-        PyErr_SetString(PyExc_ValueError, "a port mask needs a graph with multiport edges");
-        return -1;
-    }
     const PortList *ports = graph->ports;
-    if (parse_mask(port_mask_obj, ports->port_count, &mask->ports, &mask->ports_buffer) < 0) return -1;
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
+    Py_ssize_t port_count = ports ? ports->port_count : 2 * edge_count;
+    if (parse_mask(port_mask_obj, port_count, &mask->ports, &mask->ports_buffer) < 0) return -1;
     mask->two_port_edges = (uint8_t *)malloc((size_t)(edge_count > 0 ? edge_count : 1));
     if (!mask->two_port_edges) { release_mask(&mask->ports_buffer); PyErr_NoMemory(); return -1; }
     for (Py_ssize_t edge = 0; edge < edge_count; edge++) {
-        int first_port = ports->port_offsets[edge];
-        int two_ports = ports->port_offsets[edge + 1] - first_port == 2;
+        Py_ssize_t first_port = ports ? ports->port_offsets[edge] : 2 * edge;
+        int two_ports = ports ? ports->port_offsets[edge + 1] - first_port == 2 : 1;
         mask->two_port_edges[edge] = (uint8_t)((edge_mask && edge_mask[edge]) ||
                                                (two_ports && (mask->ports[first_port] || mask->ports[first_port + 1])));
     }

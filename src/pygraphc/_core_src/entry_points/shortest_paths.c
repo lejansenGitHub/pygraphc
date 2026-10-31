@@ -359,7 +359,8 @@ PyObject *py_dijkstra_by_node_id(PyObject *self, PyObject *args) {
     if (build_adjacency(node_count, &context.edges, &adjacency, 0) < 0) { node_id_context_free(&context); free_weights(&weights); return NULL; }
 
     BidirectionalPath bidirectional_path;
-    int failed = bidirectional_dijkstra(node_count, &adjacency, weights.values, NULL, NULL, 0, source, target, &bidirectional_path) < 0;
+    int failed = bidirectional_dijkstra(node_count, 0, &adjacency, weights.values, NULL, NULL, NULL, NULL, NULL, 0,
+                                        source, target, &bidirectional_path) < 0;
     PyObject *path = failed ? NULL : bidirectional_path_to_list(&bidirectional_path, &context);
     free(bidirectional_path.path);
     free_adjacency(&adjacency); free_weights(&weights);
@@ -553,12 +554,9 @@ PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     if (!graph->has_adjacency) { free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); PyObject *empty_path = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, empty_path); }
 
     BidirectionalPath bidirectional_path;
-    int failed = (ports
-        ? bidirectional_dijkstra_with_ports(node_count, edge_count, &graph->adjacency, weights.values, ports,
-                                            two_port_edge_mask(&port_mask, edge_mask), edge_mask, port_mask.ports,
-                                            node_mask, graph->directed, source, target, &bidirectional_path)
-        : bidirectional_dijkstra(node_count, &graph->adjacency, weights.values, edge_mask, node_mask, graph->directed,
-                                 source, target, &bidirectional_path)) < 0;
+    int failed = bidirectional_dijkstra(node_count, edge_count, &graph->adjacency, weights.values, ports,
+                                        two_port_edge_mask(&port_mask, edge_mask), edge_mask, port_mask.ports,
+                                        node_mask, graph->directed, source, target, &bidirectional_path) < 0;
     PyObject *path = failed ? NULL : bidirectional_path_to_list(&bidirectional_path, &graph->node_ids);
     free(bidirectional_path.path);
     free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
@@ -677,12 +675,13 @@ static PyObject *shortest_path_lengths_from(const GraphContext *graph, PyObject 
             distance[source]=0.0; int heap_slot=min_heap.size++; heap[heap_slot]=source; heap_position[source]=heap_slot; min_heap_sift_up(&min_heap,heap_slot);
         }
     }
+    const uint8_t *traversal_edge_mask = two_port_edge_mask(&port_mask, edge_mask);
     if (ports)
-        relax_until_settled(graph, weights.values, two_port_edge_mask(&port_mask, edge_mask), edge_mask, port_mask.ports,
-                            node_mask, use_cutoff, cutoff, &min_heap, settled_edges, 1);
+        relax_until_settled(graph, weights.values, traversal_edge_mask, edge_mask, port_mask.ports, node_mask,
+                            use_cutoff, cutoff, &min_heap, settled_edges, 1);
     else
-        relax_until_settled(graph, weights.values, edge_mask, edge_mask, NULL, node_mask, use_cutoff, cutoff, &min_heap,
-                            NULL, 0);
+        relax_until_settled(graph, weights.values, traversal_edge_mask, NULL, NULL, node_mask, use_cutoff, cutoff,
+                            &min_heap, NULL, 0);
     for (int node=0;node<node_count;node++) {
         if (node_mask && node_mask[node]) continue;
         if (distance[node] < HUGE_VAL && (!use_cutoff || distance[node] <= cutoff)) {

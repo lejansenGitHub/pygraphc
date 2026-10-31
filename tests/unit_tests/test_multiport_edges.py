@@ -8,14 +8,12 @@ case of the README table it checks. Throughout, a three-port edge joins nodes
 import pytest
 from pygraphc._core import port_graph_shape  # noqa: PLC2701 — D1 checks what the C core stores
 
-from pygraphc import Graph, PortGraph
+from pygraphc import Graph
 
 
-def _three_port_edge_between_two_port_edges() -> PortGraph[int, int]:
+def _three_port_edge_between_two_port_edges() -> Graph[int, int]:
     """1 - 2, the three-port edge (2, 3, 4), 4 - 5; branch ids 10, 11, 12."""
-    graph = Graph([1, 2, 3, 4, 5], [(1, 2), (2, 3, 4), (4, 5)], branch_ids=[10, 11, 12])
-    assert isinstance(graph, PortGraph)
-    return graph
+    return Graph([1, 2, 3, 4, 5], [(1, 2), (2, 3, 4), (4, 5)], branch_ids=[10, 11, 12])
 
 
 def _components(view: object) -> list[list[int]]:
@@ -67,9 +65,14 @@ def test_two_ports_at_one_node_stay_distinguishable() -> None:
 # ── D3: graphs of two-port edges are unchanged ──
 
 
-def test_a_graph_of_two_port_edges_stays_a_plain_graph() -> None:
-    """D3: pairs take the unchanged two-port parser; only a non-pair edge makes a PortGraph."""
-    assert type(Graph([1, 2, 3], [(1, 2), (2, 3)])) is Graph
+def test_a_graph_of_two_port_edges_keeps_no_port_list() -> None:
+    """D3: pairs take the unchanged two-port parser; only a non-pair edge adds a port list to the C core."""
+    graph = Graph([1, 2, 3], [(1, 2), (2, 3)])
+
+    # --- Assert ---
+    assert graph.port_count == 4
+    with pytest.raises(TypeError, match="multiport edges"):
+        port_graph_shape(graph._graph_capsule)
 
 
 def test_two_port_edge_errors_are_reported_as_before() -> None:
@@ -224,8 +227,46 @@ def test_component_labels_name_the_smallest_node_index() -> None:
 
 def test_methods_of_later_stages_say_so() -> None:
     """Until their stage lands, methods not yet on ports raise instead of answering on the two-port structure alone."""
-    with pytest.raises(NotImplementedError, match="critical-elements stage"):
-        _three_port_edge_between_two_port_edges().articulation_points()
+    graph = _three_port_edge_between_two_port_edges()
+
+    # --- Assert ---
+    with pytest.raises(NotImplementedError, match="multiport edges"):
+        graph.articulation_points()
+    with pytest.raises(NotImplementedError, match="multiport edges"):
+        graph.with_edges([(1, 3)])
+    with pytest.raises(NotImplementedError, match="multiport edges"):
+        graph.without_edges([0]).degree(2)
+
+
+def test_methods_of_later_stages_refuse_a_port_mask_on_two_port_edges() -> None:
+    """A port mask on a graph of two-port edges is not silently dropped by a method that cannot read it yet."""
+    view = Graph([1, 2, 3], [(1, 2), (2, 3)]).without_ports([(0, 1)])
+
+    with pytest.raises(NotImplementedError, match="port masks"):
+        view.bridges()
+
+
+# ── Graphs of two-port edges follow the same rules ──
+
+
+def test_masking_case_5_on_a_graph_of_two_port_edges() -> None:
+    """Case 5 without any multiport edge: the edge with a masked port joins nothing and belongs to its active end."""
+    graph = Graph([1, 2, 3], [(1, 2), (2, 3)], branch_ids=[10, 11])
+    view = graph.without_ports([(0, 1)])
+
+    # --- Assert ---
+    assert _components(view) == [[1], [2, 3]]
+    assert sorted(view.connected_components_with_branch_ids(), key=sorted) == [({1}, {10}), ({2, 3}, {11})]
+    assert view.bfs(2) == [2, 3]
+    assert view.shortest_path_lengths([1.0, 1.0], 1) == {1: 0.0}
+    assert view.shortest_path([1.0, 1.0], 1, 3) == []
+
+
+def test_two_port_edge_with_both_ends_masked_belongs_to_no_component() -> None:
+    """D8 on a graph of two-port edges: with both endpoints masked, the edge has no active port and no component."""
+    view = Graph([1, 2, 3], [(1, 2), (2, 3)], branch_ids=[10, 11]).without_nodes([1, 2])
+
+    assert list(view.connected_components_with_branch_ids()) == [({3}, {11})]
 
 
 # ── Traversal ──

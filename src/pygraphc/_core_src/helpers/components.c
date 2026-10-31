@@ -70,10 +70,15 @@ int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *ed
     return components_of(node_count, edges, edge_mask, node_mask, NULL, NULL, NULL, components, 0);
 }
 
-int compute_components_with_ports(int node_count, EdgeList *edges, const PortList *ports, const uint8_t *edge_mask,
-                                  const PortMask *port_mask, const uint8_t *node_mask, ComponentResult *components) {
-    return components_of(node_count, edges, two_port_edge_mask(port_mask, edge_mask), node_mask, ports, edge_mask,
-                         port_mask->ports, components, 1);
+int compute_graph_components(GraphContext *graph, const uint8_t *edge_mask, const PortMask *port_mask,
+                             const uint8_t *node_mask, ComponentResult *components) {
+    int node_count = graph->node_ids.node_count;
+    EdgeList *edges = &graph->node_ids.edges;
+    const uint8_t *traversal_edge_mask = two_port_edge_mask(port_mask, edge_mask);
+    return graph->ports
+        ? components_of(node_count, edges, traversal_edge_mask, node_mask, graph->ports, edge_mask, port_mask->ports,
+                        components, 1)
+        : components_of(node_count, edges, traversal_edge_mask, node_mask, NULL, NULL, NULL, components, 0);
 }
 
 /* ── Strongly connected components (iterative Tarjan's, directed CSR) ── */

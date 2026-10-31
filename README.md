@@ -458,9 +458,12 @@ Graph(node_ids, [(1, 2), ((1,), (2, 3)), ((4, 5), (6,))], directed=True)
 #                 1 -> 2   1 feeds 2 and 3   4 and 5 both feed 6
 ```
 
-**Graphs of two-port edges behave exactly as before.** Every existing call, input
+**Graphs of two-port edges behave as before.** Every existing call, input
 format and result keeps its meaning; edges with more ports only add to the
-interface.
+interface. The one change is membership under node masks: an edge whose two
+endpoints are both masked has no active port and so belongs to no component,
+where it used to form a component of its own with no nodes. There is one
+`Graph` class and one `GraphView` for every kind of edge.
 
 #### One rule decides everything: active ports
 
@@ -508,9 +511,10 @@ graph.without_nodes([3])          # node 3 leaves; ports at 2 and 4 stay joined 
 graph.without_ports([(1, 0)]).without_nodes([4])   # one active port left: joins nothing (case 3)
 ```
 
-`without_ports` takes `(edge_index, port_index)` pairs. A two-port edge's port 0
-is its first node and port 1 its second, so masking one of its ports detaches
-it like masking the edge (case 5).
+`without_ports` takes `(edge_index, port_index)` pairs on any graph. A two-port
+edge's port 0 is its first node and port 1 its second, so masking one of its
+ports detaches it like masking the edge (case 5), while it still belongs to the
+component of its active end.
 
 #### Weights per port
 
@@ -540,6 +544,14 @@ removal disconnects its component, two-port and multiport edges alike, and
 two-port edges they behave as before, and the `*_with_branch_ids` methods stay as they
 are.
 
+#### Methods not yet available on ports
+
+Methods whose kernel does not read ports yet raise `NotImplementedError` on a
+graph with a multiport edge and on a view with a port mask, instead of
+answering on part of the graph; `docs/multiport-decisions.md` lists the stage
+that brings each. On graphs of two-port edges without a port mask they run as
+before, with no added cost per call.
+
 #### Open points
 
 - **Ports without a known node** are rejected at construction, as edges with
@@ -551,7 +563,7 @@ are.
 
 ### Node-masked views (exclude nodes without rebuilding)
 
-Exclude nodes without rebuilding the CSR. Traversal stops at excluded nodes — they break connectivity. For `connected_components_with_branch_ids`, incident edge branch IDs are still collected in the non-excluded endpoint's CC. Chainable with edge masks.
+Exclude nodes without rebuilding the CSR. Traversal stops at excluded nodes — they break connectivity. For `connected_components_with_branch_ids`, incident edge branch IDs are still collected in the non-excluded endpoint's CC; an edge with both endpoints excluded belongs to no component. Chainable with edge masks.
 
 ```python
 g = Graph([0, 1, 2, 3, 4], [(0, 1), (1, 2), (2, 3), (3, 4)])

@@ -31,11 +31,12 @@ typedef struct {
 } PortMask;
 
 /*
- * Parse an optional port mask (None masks nothing). A two-port edge with a
- * masked port joins nothing (masking case 5), so it is folded into a copy of
- * the edge mask once per call and the kernels check two-port edges by edge
- * mask alone. Only a graph with multiport edges numbers its ports. Returns 0,
- * or -1 with an exception set.
+ * Parse an optional port mask (None masks nothing), one byte per port. Every
+ * graph numbers its ports: with a port list as listed there, without one edge e
+ * has ports 2e and 2e + 1. A two-port edge with a masked port joins nothing
+ * (masking case 5), so it is folded into a copy of the edge mask once per call
+ * and the kernels check two-port edges by edge mask alone. Returns 0, or -1
+ * with an exception set.
  */
 PYGRAPHC_INTERNAL int parse_port_mask(const GraphContext *graph, PyObject *port_mask_obj, const uint8_t *edge_mask,
                                       PortMask *mask);
@@ -44,6 +45,29 @@ PYGRAPHC_INTERNAL void release_port_mask(PortMask *mask);
 /* The edge mask under which two-port edges are traversed: the given one, unless a port mask is set. */
 static inline const uint8_t *two_port_edge_mask(const PortMask *mask, const uint8_t *edge_mask) {
     return mask->two_port_edges ? mask->two_port_edges : edge_mask;
+}
+
+/*
+ * The node of the first active port of an edge, or -1 when it has none: the
+ * membership rule (an edge belongs to the component of its active ports, which
+ * are always joined). Without a port list, edge e has ports 2e and 2e + 1 at
+ * its two endpoints.
+ */
+static inline int first_active_port_node(const GraphContext *graph, int edge, const uint8_t *edge_mask,
+                                         const uint8_t *port_mask, const uint8_t *node_mask) {
+    const PortList *ports = graph->ports;
+    if (ports) {
+        for (int port = ports->port_offsets[edge]; port < ports->port_offsets[edge + 1]; port++)
+            if (port_is_active(ports, edge, port, edge_mask, port_mask, node_mask)) return ports->port_nodes[port];
+        return -1;
+    }
+    if (edge_mask && edge_mask[edge]) return -1;
+    const EdgeList *edges = &graph->node_ids.edges;
+    int first_node = EDGE_FIRST_ENDPOINT(edges, edge);
+    if (!(port_mask && port_mask[2 * edge]) && !(node_mask && node_mask[first_node])) return first_node;
+    int second_node = EDGE_SECOND_ENDPOINT(edges, edge);
+    if (!(port_mask && port_mask[2 * edge + 1]) && !(node_mask && node_mask[second_node])) return second_node;
+    return -1;
 }
 
 #endif

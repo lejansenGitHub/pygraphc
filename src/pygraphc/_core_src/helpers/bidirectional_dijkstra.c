@@ -191,20 +191,15 @@ static inline __attribute__((always_inline)) int bidirectional_search(
     return status;
 }
 
-int bidirectional_dijkstra(int node_count, const AdjacencyList *adjacency, const double *edge_weights,
-                           const uint8_t *edge_mask, const uint8_t *node_mask,
-                           int directed, int source, int target, BidirectionalPath *out) {
-    return bidirectional_search(node_count, 0, adjacency, edge_weights, NULL, edge_mask, edge_mask, NULL, node_mask,
-                                directed, source, target, out, 0);
-}
-
-int bidirectional_dijkstra_with_ports(int node_count, int edge_count, const AdjacencyList *adjacency,
-                                      const double *port_weights, const PortList *ports,
-                                      const uint8_t *two_port_edge_mask, const uint8_t *edge_mask,
-                                      const uint8_t *port_mask, const uint8_t *node_mask, int directed, int source,
-                                      int target, BidirectionalPath *out) {
-    return bidirectional_search(node_count, edge_count, adjacency, port_weights, ports, two_port_edge_mask, edge_mask,
-                                port_mask, node_mask, directed, source, target, out, 1);
+int bidirectional_dijkstra(int node_count, int edge_count, const AdjacencyList *adjacency, const double *weights,
+                           const PortList *ports, const uint8_t *two_port_edge_mask, const uint8_t *edge_mask,
+                           const uint8_t *port_mask, const uint8_t *node_mask, int directed, int source, int target,
+                           BidirectionalPath *out) {
+    return ports
+        ? bidirectional_search(node_count, edge_count, adjacency, weights, ports, two_port_edge_mask, edge_mask,
+                               port_mask, node_mask, directed, source, target, out, 1)
+        : bidirectional_search(node_count, 0, adjacency, weights, NULL, two_port_edge_mask, NULL, NULL, node_mask,
+                               directed, source, target, out, 0);
 }
 
 /* Turn the node indices of a bidirectional result into a list of node IDs. */
