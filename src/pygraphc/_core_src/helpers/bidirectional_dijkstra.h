@@ -11,11 +11,11 @@ typedef struct {
     double weight;
     int *path;
     int path_length;
-} BidiPath;
+} BidirectionalPath;
 
-PYGRAPHC_INTERNAL int bidi_dijkstra(int n, const AdjList *al, const double *edge_weights,
-                                    const uint8_t *edge_mask, const uint8_t *node_mask,
-                                    int directed, int source, int target, BidiPath *out);
-PYGRAPHC_INTERNAL PyObject *bidi_path_to_list(const BidiPath *bp, const NidContext *ctx);
+PYGRAPHC_INTERNAL int bidirectional_dijkstra(int node_count, const AdjacencyList *adjacency, const double *edge_weights,
+                                             const uint8_t *edge_mask, const uint8_t *node_mask,
+                                             int directed, int source, int target, BidirectionalPath *out);
+PYGRAPHC_INTERNAL PyObject *bidirectional_path_to_list(const BidirectionalPath *bidirectional_path, const NodeIdContext *context);
 
 #endif

@@ -4,14 +4,15 @@
 
 #include "../models.h"
 
-PYGRAPHC_INTERNAL int compute_components_masked(int n, EdgeList *el, const uint8_t *mask,
+PYGRAPHC_INTERNAL int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *edge_mask,
                                                 const uint8_t *node_mask,
-                                                ComponentResult *cr);
-PYGRAPHC_INTERNAL int compute_scc_masked(int n, AdjList *al, const uint8_t *mask,
-                                         const uint8_t *node_mask, ComponentResult *cr);
+                                                ComponentResult *components);
+PYGRAPHC_INTERNAL int compute_strongly_connected_components_masked(int node_count, AdjacencyList *adjacency,
+                                                                   const uint8_t *edge_mask, const uint8_t *node_mask,
+                                                                   ComponentResult *components);
 
-static inline int compute_components(int n, EdgeList *el, ComponentResult *cr) {
-    return compute_components_masked(n, el, NULL, NULL, cr);
+static inline int compute_components(int node_count, EdgeList *edges, ComponentResult *components) {
+    return compute_components_masked(node_count, edges, NULL, NULL, components);
 }
 
 #endif

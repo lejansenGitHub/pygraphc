@@ -3,122 +3,122 @@
 #include "../helpers/parse.h"
 
 PyObject *py_parse_graph(PyObject *self, PyObject *args) {
-    PyObject *nids, *edges_or_src, *dst_obj = Py_None;
+    PyObject *node_ids_obj, *edges_or_src, *dst_obj = Py_None;
     int directed = 0;
-    if (!PyArg_ParseTuple(args, "OO|Op", &nids, &edges_or_src, &dst_obj, &directed))
+    if (!PyArg_ParseTuple(args, "OO|Op", &node_ids_obj, &edges_or_src, &dst_obj, &directed))
         return NULL;
 
-    GraphCtx *g = (GraphCtx *)malloc(sizeof(GraphCtx));
-    if (!g) { PyErr_NoMemory(); return NULL; }
-    g->has_adj = 0;
-    g->directed = directed;
+    GraphContext *graph = (GraphContext *)malloc(sizeof(GraphContext));
+    if (!graph) { PyErr_NoMemory(); return NULL; }
+    graph->has_adjacency = 0;
+    graph->directed = directed;
 
-    int rc;
+    int status;
     if (dst_obj != Py_None)
-        rc = nid_parse_split(nids, edges_or_src, dst_obj, &g->nid);
+        status = node_id_parse_split(node_ids_obj, edges_or_src, dst_obj, &graph->node_ids);
     else
-        rc = nid_parse(nids, edges_or_src, &g->nid);
-    if (rc < 0) { free(g); return NULL; }
+        status = node_id_parse(node_ids_obj, edges_or_src, &graph->node_ids);
+    if (status < 0) { free(graph); return NULL; }
 
-    if (g->nid.n > 0 && g->nid.el.m > 0) {
-        if (build_adj(g->nid.n, &g->nid.el, &g->al, directed) < 0) {
-            nid_free(&g->nid);
-            free(g);
+    if (graph->node_ids.node_count > 0 && graph->node_ids.edges.edge_count > 0) {
+        if (build_adjacency(graph->node_ids.node_count, &graph->node_ids.edges, &graph->adjacency, directed) < 0) {
+            node_id_context_free(&graph->node_ids);
+            free(graph);
             return NULL;
         }
-        g->has_adj = 1;
+        graph->has_adjacency = 1;
     }
 
-    return PyCapsule_New(g, "pygraphc.GraphCtx", graphctx_destructor);
+    return PyCapsule_New(graph, "pygraphc.GraphCtx", graph_context_destructor);
 }
 
 PyObject *py_graph_is_directed(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
-    if (!g) return NULL;
-    return PyBool_FromLong(g->directed);
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    return PyBool_FromLong(graph->directed);
 }
 
 PyObject *py_graph_edge_count(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
-    if (!g) return NULL;
-    return PyLong_FromSsize_t(g->nid.el.m);
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    return PyLong_FromSsize_t(graph->node_ids.edges.edge_count);
 }
 
 PyObject *py_graph_node_count(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
-    if (!g) return NULL;
-    return PyLong_FromLong(g->nid.n);
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    return PyLong_FromLong(graph->node_ids.node_count);
 }
 
-/* ── translate_edges(node_ids, nid_edges) -> index-based edges ── */
+/* ── translate_edges(node_ids, node_id_edges) -> index-based edges ── */
 
 PyObject *py_translate_edges(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj;
     if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
-    PyObject *nid_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
-    if (!nid_fast) return NULL;
-    int n = (int)PySequence_Fast_GET_SIZE(nid_fast);
-    PyObject **nid_items = PySequence_Fast_ITEMS(nid_fast);
+    PyObject *node_ids_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
+    if (!node_ids_fast) return NULL;
+    int node_count = (int)PySequence_Fast_GET_SIZE(node_ids_fast);
+    PyObject **node_id_items = PySequence_Fast_ITEMS(node_ids_fast);
 
     /* Build hash map: node_id -> index */
-    IntMap im;
-    if (intmap_init(&im, n) < 0) { Py_DECREF(nid_fast); return NULL; }
-    for (int i = 0; i < n; i++) {
-        long nid = PyLong_AsLong(nid_items[i]);
-        if (nid == -1 && PyErr_Occurred()) {
-            intmap_free(&im); Py_DECREF(nid_fast); return NULL;
+    IntMap node_index_by_node_id;
+    if (intmap_init(&node_index_by_node_id, node_count) < 0) { Py_DECREF(node_ids_fast); return NULL; }
+    for (int node = 0; node < node_count; node++) {
+        long node_id = PyLong_AsLong(node_id_items[node]);
+        if (node_id == -1 && PyErr_Occurred()) {
+            intmap_free(&node_index_by_node_id); Py_DECREF(node_ids_fast); return NULL;
         }
-        intmap_put(&im, nid, i);
+        intmap_put(&node_index_by_node_id, node_id, node);
     }
-    Py_DECREF(nid_fast);
+    Py_DECREF(node_ids_fast);
 
-    /* Parse nid_edges and translate */
-    PyObject *fast = PySequence_Fast(edges_obj, "edges must be a sequence");
-    if (!fast) { intmap_free(&im); return NULL; }
-    Py_ssize_t m = PySequence_Fast_GET_SIZE(fast);
+    /* Parse the node-ID edges and translate */
+    PyObject *edges_fast = PySequence_Fast(edges_obj, "edges must be a sequence");
+    if (!edges_fast) { intmap_free(&node_index_by_node_id); return NULL; }
+    Py_ssize_t edge_count = PySequence_Fast_GET_SIZE(edges_fast);
 
-    PyObject *result = PyList_New(m);
-    if (!result) { intmap_free(&im); Py_DECREF(fast); return NULL; }
+    PyObject *result = PyList_New(edge_count);
+    if (!result) { intmap_free(&node_index_by_node_id); Py_DECREF(edges_fast); return NULL; }
 
-    PyObject **items = PySequence_Fast_ITEMS(fast);
-    for (Py_ssize_t i = 0; i < m; i++) {
-        PyObject *edge = items[i];
+    PyObject **edge_items = PySequence_Fast_ITEMS(edges_fast);
+    for (Py_ssize_t edge_index = 0; edge_index < edge_count; edge_index++) {
+        PyObject *edge = edge_items[edge_index];
         PyObject *edge_fast = PySequence_Fast(edge, "each edge must be a 2-tuple");
         if (!edge_fast || PySequence_Fast_GET_SIZE(edge_fast) != 2) {
             Py_XDECREF(edge_fast);
-            intmap_free(&im); Py_DECREF(fast); Py_DECREF(result);
+            intmap_free(&node_index_by_node_id); Py_DECREF(edges_fast); Py_DECREF(result);
             PyErr_SetString(PyExc_ValueError, "each edge must be a 2-tuple");
             return NULL;
         }
-        PyObject **ep = PySequence_Fast_ITEMS(edge_fast);
-        long u_nid = PyLong_AsLong(ep[0]);
-        long v_nid = PyLong_AsLong(ep[1]);
+        PyObject **endpoint_items = PySequence_Fast_ITEMS(edge_fast);
+        long first_node_id = PyLong_AsLong(endpoint_items[0]);
+        long second_node_id = PyLong_AsLong(endpoint_items[1]);
         Py_DECREF(edge_fast);
         if (PyErr_Occurred()) {
-            intmap_free(&im); Py_DECREF(fast); Py_DECREF(result);
+            intmap_free(&node_index_by_node_id); Py_DECREF(edges_fast); Py_DECREF(result);
             return NULL;
         }
-        int u_idx = intmap_get(&im, u_nid);
-        int v_idx = intmap_get(&im, v_nid);
-        if (u_idx < 0 || v_idx < 0) {
-            intmap_free(&im); Py_DECREF(fast); Py_DECREF(result);
+        int first_index = intmap_get(&node_index_by_node_id, first_node_id);
+        int second_index = intmap_get(&node_index_by_node_id, second_node_id);
+        if (first_index < 0 || second_index < 0) {
+            intmap_free(&node_index_by_node_id); Py_DECREF(edges_fast); Py_DECREF(result);
             PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
             return NULL;
         }
-        PyObject *tup = PyTuple_New(2);
-        PyTuple_SET_ITEM(tup, 0, PyLong_FromLong(u_idx));
-        PyTuple_SET_ITEM(tup, 1, PyLong_FromLong(v_idx));
-        PyList_SET_ITEM(result, i, tup);
+        PyObject *pair = PyTuple_New(2);
+        PyTuple_SET_ITEM(pair, 0, PyLong_FromLong(first_index));
+        PyTuple_SET_ITEM(pair, 1, PyLong_FromLong(second_index));
+        PyList_SET_ITEM(result, edge_index, pair);
     }
 
-    intmap_free(&im);
-    Py_DECREF(fast);
+    intmap_free(&node_index_by_node_id);
+    Py_DECREF(edges_fast);
     return result;
 }

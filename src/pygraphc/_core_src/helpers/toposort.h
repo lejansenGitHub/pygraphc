@@ -4,8 +4,8 @@
 
 #include "../models.h"
 
-PYGRAPHC_INTERNAL int toposort_core(int n, EdgeList *el, int **out_order);
-PYGRAPHC_INTERNAL int toposort_core_masked(int n, EdgeList *el, const uint8_t *mask,
-                                           const uint8_t *node_mask, int **out_order);
+PYGRAPHC_INTERNAL int topological_order(int node_count, EdgeList *edges, int **out_order);
+PYGRAPHC_INTERNAL int topological_order_masked(int node_count, EdgeList *edges, const uint8_t *edge_mask,
+                                               const uint8_t *node_mask, int **out_order);
 
 #endif

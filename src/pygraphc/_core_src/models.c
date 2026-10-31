@@ -1,136 +1,136 @@
 /* Init and free helpers of the data models. */
 #include "models.h"
 
-void free_edges(EdgeList *el) {
-    if (el->owns_memory) {
-        free(el->src);
-        free(el->dst);
+void free_edges(EdgeList *edges) {
+    if (edges->owns_memory) {
+        free(edges->first_endpoints);
+        free(edges->second_endpoints);
     }
 }
 
-int intmap_init(IntMap *m, int n) {
-    int cap = 16;
-    while (cap < n * 2) cap <<= 1;
-    m->cap = cap;
-    m->mask = cap - 1;
-    m->keys = (long *)malloc((size_t)cap * sizeof(long));
-    m->vals = (int *)malloc((size_t)cap * sizeof(int));
-    if (!m->keys || !m->vals) {
-        free(m->keys); free(m->vals);
+int intmap_init(IntMap *map, int expected_count) {
+    int capacity = 16;
+    while (capacity < expected_count * 2) capacity <<= 1;
+    map->capacity = capacity;
+    map->capacity_mask = capacity - 1;
+    map->keys = (long *)malloc((size_t)capacity * sizeof(long));
+    map->values = (int *)malloc((size_t)capacity * sizeof(int));
+    if (!map->keys || !map->values) {
+        free(map->keys); free(map->values);
         PyErr_NoMemory();
         return -1;
     }
-    memset(m->keys, 0xFF, (size_t)cap * sizeof(long)); /* -1 = empty sentinel */
+    memset(map->keys, 0xFF, (size_t)capacity * sizeof(long)); /* -1 = empty sentinel */
     return 0;
 }
 
-void intmap_free(IntMap *m) {
-    free(m->keys);
-    free(m->vals);
+void intmap_free(IntMap *map) {
+    free(map->keys);
+    free(map->values);
 }
 
-void nid_free(NidContext *ctx) {
-    free_edges(&ctx->el);
-    if (ctx->im.keys) intmap_free(&ctx->im);
-    Py_DECREF(ctx->nid_fast);
+void node_id_context_free(NodeIdContext *context) {
+    free_edges(&context->edges);
+    if (context->node_index_by_node_id.keys) intmap_free(&context->node_index_by_node_id);
+    Py_DECREF(context->node_ids_fast);
 }
 
-int build_adj(int n, EdgeList *el, AdjList *al, int directed) {
-    Py_ssize_t m = el->m;
-    Py_ssize_t total = directed ? m : 2 * m;
-    al->offset = (int *)calloc((size_t)(n + 1), sizeof(int));
-    al->adj = total > 0 ? (int *)malloc((size_t)total * sizeof(int)) : NULL;
-    al->eid = total > 0 ? (int *)malloc((size_t)total * sizeof(int)) : NULL;
-    al->rev_offset = NULL;
-    al->rev_adj = NULL;
-    al->rev_eid = NULL;
-    if (!al->offset || (total > 0 && (!al->adj || !al->eid))) {
-        free(al->offset); free(al->adj); free(al->eid);
+int build_adjacency(int node_count, EdgeList *edges, AdjacencyList *adjacency, int directed) {
+    Py_ssize_t edge_count = edges->edge_count;
+    Py_ssize_t slot_count = directed ? edge_count : 2 * edge_count;
+    adjacency->offset = (int *)calloc((size_t)(node_count + 1), sizeof(int));
+    adjacency->neighbors = slot_count > 0 ? (int *)malloc((size_t)slot_count * sizeof(int)) : NULL;
+    adjacency->edge_indices = slot_count > 0 ? (int *)malloc((size_t)slot_count * sizeof(int)) : NULL;
+    adjacency->reverse_offset = NULL;
+    adjacency->reverse_neighbors = NULL;
+    adjacency->reverse_edge_indices = NULL;
+    if (!adjacency->offset || (slot_count > 0 && (!adjacency->neighbors || !adjacency->edge_indices))) {
+        free(adjacency->offset); free(adjacency->neighbors); free(adjacency->edge_indices);
         PyErr_NoMemory();
         return -1;
     }
 
     /* Count degrees for forward CSR */
-    for (Py_ssize_t i = 0; i < m; i++) {
-        al->offset[EDGE_SRC(el, i) + 1]++;
+    for (Py_ssize_t edge_index = 0; edge_index < edge_count; edge_index++) {
+        adjacency->offset[EDGE_FIRST_ENDPOINT(edges, edge_index) + 1]++;
         if (!directed)
-            al->offset[EDGE_DST(el, i) + 1]++;
+            adjacency->offset[EDGE_SECOND_ENDPOINT(edges, edge_index) + 1]++;
     }
-    for (int i = 1; i <= n; i++) al->offset[i] += al->offset[i - 1];
+    for (int node = 1; node <= node_count; node++) adjacency->offset[node] += adjacency->offset[node - 1];
 
     /* Fill forward CSR */
-    if (total > 0) {
-        int *pos = (int *)malloc((size_t)n * sizeof(int));
-        if (!pos) {
-            free(al->offset); free(al->adj); free(al->eid);
+    if (slot_count > 0) {
+        int *next_slot = (int *)malloc((size_t)node_count * sizeof(int));
+        if (!next_slot) {
+            free(adjacency->offset); free(adjacency->neighbors); free(adjacency->edge_indices);
             PyErr_NoMemory();
             return -1;
         }
-        memcpy(pos, al->offset, (size_t)n * sizeof(int));
-        for (Py_ssize_t i = 0; i < m; i++) {
-            int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
-            al->adj[pos[u]] = v; al->eid[pos[u]++] = (int)i;
+        memcpy(next_slot, adjacency->offset, (size_t)node_count * sizeof(int));
+        for (Py_ssize_t edge_index = 0; edge_index < edge_count; edge_index++) {
+            int first_node = EDGE_FIRST_ENDPOINT(edges, edge_index), second_node = EDGE_SECOND_ENDPOINT(edges, edge_index);
+            adjacency->neighbors[next_slot[first_node]] = second_node; adjacency->edge_indices[next_slot[first_node]++] = (int)edge_index;
             if (!directed) {
-                al->adj[pos[v]] = u; al->eid[pos[v]++] = (int)i;
+                adjacency->neighbors[next_slot[second_node]] = first_node; adjacency->edge_indices[next_slot[second_node]++] = (int)edge_index;
             }
         }
-        free(pos);
+        free(next_slot);
     }
 
     /* Build reverse CSR for directed graphs */
-    if (directed && m > 0) {
-        al->rev_offset = (int *)calloc((size_t)(n + 1), sizeof(int));
-        al->rev_adj = (int *)malloc((size_t)m * sizeof(int));
-        al->rev_eid = (int *)malloc((size_t)m * sizeof(int));
-        if (!al->rev_offset || !al->rev_adj || !al->rev_eid) {
-            free(al->rev_offset); free(al->rev_adj); free(al->rev_eid);
-            al->rev_offset = NULL; al->rev_adj = NULL; al->rev_eid = NULL;
-            free(al->offset); free(al->adj); free(al->eid);
+    if (directed && edge_count > 0) {
+        adjacency->reverse_offset = (int *)calloc((size_t)(node_count + 1), sizeof(int));
+        adjacency->reverse_neighbors = (int *)malloc((size_t)edge_count * sizeof(int));
+        adjacency->reverse_edge_indices = (int *)malloc((size_t)edge_count * sizeof(int));
+        if (!adjacency->reverse_offset || !adjacency->reverse_neighbors || !adjacency->reverse_edge_indices) {
+            free(adjacency->reverse_offset); free(adjacency->reverse_neighbors); free(adjacency->reverse_edge_indices);
+            adjacency->reverse_offset = NULL; adjacency->reverse_neighbors = NULL; adjacency->reverse_edge_indices = NULL;
+            free(adjacency->offset); free(adjacency->neighbors); free(adjacency->edge_indices);
             PyErr_NoMemory();
             return -1;
         }
-        for (Py_ssize_t i = 0; i < m; i++)
-            al->rev_offset[EDGE_DST(el, i) + 1]++;
-        for (int i = 1; i <= n; i++) al->rev_offset[i] += al->rev_offset[i - 1];
+        for (Py_ssize_t edge_index = 0; edge_index < edge_count; edge_index++)
+            adjacency->reverse_offset[EDGE_SECOND_ENDPOINT(edges, edge_index) + 1]++;
+        for (int node = 1; node <= node_count; node++) adjacency->reverse_offset[node] += adjacency->reverse_offset[node - 1];
 
-        int *pos = (int *)malloc((size_t)n * sizeof(int));
-        if (!pos) {
-            free(al->rev_offset); free(al->rev_adj); free(al->rev_eid);
-            al->rev_offset = NULL; al->rev_adj = NULL; al->rev_eid = NULL;
-            free(al->offset); free(al->adj); free(al->eid);
+        int *next_slot = (int *)malloc((size_t)node_count * sizeof(int));
+        if (!next_slot) {
+            free(adjacency->reverse_offset); free(adjacency->reverse_neighbors); free(adjacency->reverse_edge_indices);
+            adjacency->reverse_offset = NULL; adjacency->reverse_neighbors = NULL; adjacency->reverse_edge_indices = NULL;
+            free(adjacency->offset); free(adjacency->neighbors); free(adjacency->edge_indices);
             PyErr_NoMemory();
             return -1;
         }
-        memcpy(pos, al->rev_offset, (size_t)n * sizeof(int));
-        for (Py_ssize_t i = 0; i < m; i++) {
-            int u = EDGE_SRC(el, i), v = EDGE_DST(el, i);
-            al->rev_adj[pos[v]] = u; al->rev_eid[pos[v]++] = (int)i;
+        memcpy(next_slot, adjacency->reverse_offset, (size_t)node_count * sizeof(int));
+        for (Py_ssize_t edge_index = 0; edge_index < edge_count; edge_index++) {
+            int first_node = EDGE_FIRST_ENDPOINT(edges, edge_index), second_node = EDGE_SECOND_ENDPOINT(edges, edge_index);
+            adjacency->reverse_neighbors[next_slot[second_node]] = first_node; adjacency->reverse_edge_indices[next_slot[second_node]++] = (int)edge_index;
         }
-        free(pos);
+        free(next_slot);
     }
 
     return 0;
 }
 
-void free_adj(AdjList *al) {
-    free(al->offset);
-    free(al->adj);
-    free(al->eid);
-    free(al->rev_offset);
-    free(al->rev_adj);
-    free(al->rev_eid);
+void free_adjacency(AdjacencyList *adjacency) {
+    free(adjacency->offset);
+    free(adjacency->neighbors);
+    free(adjacency->edge_indices);
+    free(adjacency->reverse_offset);
+    free(adjacency->reverse_neighbors);
+    free(adjacency->reverse_edge_indices);
 }
 
-void graphctx_destructor(PyObject *capsule) {
-    GraphCtx *g = (GraphCtx *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
-    if (!g) { PyErr_Clear(); return; }
-    if (g->has_adj) free_adj(&g->al);
-    free_edges(&g->nid.el);
-    if (g->nid.im.keys) intmap_free(&g->nid.im);
-    Py_DECREF(g->nid.nid_fast);
-    free(g);
+void graph_context_destructor(PyObject *capsule) {
+    GraphContext *graph = (GraphContext *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
+    if (!graph) { PyErr_Clear(); return; }
+    if (graph->has_adjacency) free_adjacency(&graph->adjacency);
+    free_edges(&graph->node_ids.edges);
+    if (graph->node_ids.node_index_by_node_id.keys) intmap_free(&graph->node_ids.node_index_by_node_id);
+    Py_DECREF(graph->node_ids.node_ids_fast);
+    free(graph);
 }
 
-void free_weights(WeightList *wl) {
-    if (wl->owns_memory) free(wl->w);
+void free_weights(WeightList *weights) {
+    if (weights->owns_memory) free(weights->values);
 }

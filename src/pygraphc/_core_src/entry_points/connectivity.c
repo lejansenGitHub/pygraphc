@@ -6,122 +6,122 @@
 /* ── connected_components(n, edges) -> list[set[int]] ── */
 
 PyObject *py_connected_components(PyObject *self, PyObject *args) {
-    int n;
+    int node_count;
     PyObject *edges_obj;
-    if (!PyArg_ParseTuple(args, "iO", &n, &edges_obj)) return NULL;
+    if (!PyArg_ParseTuple(args, "iO", &node_count, &edges_obj)) return NULL;
 
-    EdgeList el;
-    if (parse_edges(edges_obj, &el) < 0) return NULL;
+    EdgeList edges;
+    if (parse_edges(edges_obj, &edges) < 0) return NULL;
 
-    ComponentResult cr;
-    if (compute_components(n, &el, &cr) < 0) {
-        free_edges(&el);
+    ComponentResult components;
+    if (compute_components(node_count, &edges, &components) < 0) {
+        free_edges(&edges);
         return NULL;
     }
-    free_edges(&el);
+    free_edges(&edges);
 
-    int nc = cr.num_comp;
+    int component_count = components.component_count;
 
     /* Build sets directly — no intermediate bucketing */
-    PyObject *result = PyList_New(nc);
-    if (!result) { free(cr.labels); return NULL; }
+    PyObject *result = PyList_New(component_count);
+    if (!result) { free(components.labels); return NULL; }
 
-    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
-    if (!sets) { free(cr.labels); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
-    for (int c = 0; c < nc; c++) {
-        sets[c] = PySet_New(NULL);
-        if (!sets[c]) {
-            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
-            free(sets); free(cr.labels); Py_DECREF(result);
+    PyObject **component_sets = (PyObject **)malloc((size_t)component_count * sizeof(PyObject *));
+    if (!component_sets) { free(components.labels); Py_DECREF(result); PyErr_NoMemory(); return NULL; }
+    for (int component = 0; component < component_count; component++) {
+        component_sets[component] = PySet_New(NULL);
+        if (!component_sets[component]) {
+            for (int previous_component = 0; previous_component < component; previous_component++) Py_DECREF(component_sets[previous_component]);
+            free(component_sets); free(components.labels); Py_DECREF(result);
             return NULL;
         }
     }
 
-    for (int i = 0; i < n; i++) {
-        PyObject *val = PyLong_FromLong(i);
-        PySet_Add(sets[cr.labels[i]], val);
-        Py_DECREF(val);
+    for (int node = 0; node < node_count; node++) {
+        PyObject *node_obj = PyLong_FromLong(node);
+        PySet_Add(component_sets[components.labels[node]], node_obj);
+        Py_DECREF(node_obj);
     }
 
-    for (int c = 0; c < nc; c++)
-        PyList_SET_ITEM(result, c, sets[c]);
+    for (int component = 0; component < component_count; component++)
+        PyList_SET_ITEM(result, component, component_sets[component]);
 
-    free(sets);
-    free(cr.labels);
+    free(component_sets);
+    free(components.labels);
     return result;
 }
 
 /* ── connected_components_with_branches(n, edges, branch_ids) -> list[tuple[set[int], set[int]]] ── */
 
 PyObject *py_connected_components_with_branches(PyObject *self, PyObject *args) {
-    int n;
+    int node_count;
     PyObject *edges_obj, *branch_ids_obj;
-    if (!PyArg_ParseTuple(args, "iOO", &n, &edges_obj, &branch_ids_obj)) return NULL;
+    if (!PyArg_ParseTuple(args, "iOO", &node_count, &edges_obj, &branch_ids_obj)) return NULL;
 
-    EdgeList el;
-    if (parse_edges(edges_obj, &el) < 0) return NULL;
+    EdgeList edges;
+    if (parse_edges(edges_obj, &edges) < 0) return NULL;
 
     /* Parse branch_ids */
-    PyObject *br_fast = PySequence_Fast(branch_ids_obj, "branch_ids must be a sequence");
-    if (!br_fast) { free_edges(&el); return NULL; }
-    Py_ssize_t br_len = PySequence_Fast_GET_SIZE(br_fast);
+    PyObject *branch_ids_fast = PySequence_Fast(branch_ids_obj, "branch_ids must be a sequence");
+    if (!branch_ids_fast) { free_edges(&edges); return NULL; }
+    Py_ssize_t branch_id_count = PySequence_Fast_GET_SIZE(branch_ids_fast);
 
-    ComponentResult cr;
-    if (compute_components(n, &el, &cr) < 0) {
-        Py_DECREF(br_fast);
-        free_edges(&el);
+    ComponentResult components;
+    if (compute_components(node_count, &edges, &components) < 0) {
+        Py_DECREF(branch_ids_fast);
+        free_edges(&edges);
         return NULL;
     }
 
-    int num_comp = cr.num_comp;
+    int component_count = components.component_count;
 
     /* Bucket nodes */
-    int *sizes  = (int *)calloc(num_comp, sizeof(int));
-    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
-    int **buckets = (int **)malloc(num_comp * sizeof(int *));
-    int *offsets  = (int *)calloc(num_comp, sizeof(int));
-    for (int c = 0; c < num_comp; c++)
-        buckets[c] = (int *)malloc(sizes[c] * sizeof(int));
-    for (int i = 0; i < n; i++) {
-        int c = cr.labels[i];
-        buckets[c][offsets[c]++] = i;
+    int *sizes  = (int *)calloc(component_count, sizeof(int));
+    for (int node = 0; node < node_count; node++) sizes[components.labels[node]]++;
+    int **buckets = (int **)malloc(component_count * sizeof(int *));
+    int *offsets  = (int *)calloc(component_count, sizeof(int));
+    for (int component = 0; component < component_count; component++)
+        buckets[component] = (int *)malloc(sizes[component] * sizeof(int));
+    for (int node = 0; node < node_count; node++) {
+        int component = components.labels[node];
+        buckets[component][offsets[component]++] = node;
     }
 
     /* Build branch sets per component */
-    PyObject **branch_sets = (PyObject **)calloc(num_comp, sizeof(PyObject *));
-    for (int c = 0; c < num_comp; c++)
-        branch_sets[c] = PySet_New(NULL);
+    PyObject **branch_sets = (PyObject **)calloc(component_count, sizeof(PyObject *));
+    for (int component = 0; component < component_count; component++)
+        branch_sets[component] = PySet_New(NULL);
 
-    Py_ssize_t edge_branch_count = el.m < br_len ? el.m : br_len;
-    PyObject **br_items = PySequence_Fast_ITEMS(br_fast);
-    for (Py_ssize_t i = 0; i < edge_branch_count; i++) {
-        int c = cr.labels[EDGE_SRC(&el, i)];
-        PySet_Add(branch_sets[c], br_items[i]);
+    Py_ssize_t edge_branch_count = edges.edge_count < branch_id_count ? edges.edge_count : branch_id_count;
+    PyObject **branch_id_items = PySequence_Fast_ITEMS(branch_ids_fast);
+    for (Py_ssize_t edge_index = 0; edge_index < edge_branch_count; edge_index++) {
+        int component = components.labels[EDGE_FIRST_ENDPOINT(&edges, edge_index)];
+        PySet_Add(branch_sets[component], branch_id_items[edge_index]);
     }
-    Py_DECREF(br_fast);
-    free_edges(&el);
+    Py_DECREF(branch_ids_fast);
+    free_edges(&edges);
 
     /* Build result list */
-    PyObject *result = PyList_New(num_comp);
-    if (!result) goto cleanup2;
+    PyObject *result = PyList_New(component_count);
+    if (!result) goto cleanup;
 
-    for (int c = 0; c < num_comp; c++) {
+    for (int component = 0; component < component_count; component++) {
         PyObject *node_set = PySet_New(NULL);
-        for (int j = 0; j < sizes[c]; j++) {
-            PyObject *val = PyLong_FromLong(buckets[c][j]);
-            PySet_Add(node_set, val);
-            Py_DECREF(val);
+        for (int member = 0; member < sizes[component]; member++) {
+            PyObject *node_obj = PyLong_FromLong(buckets[component][member]);
+            PySet_Add(node_set, node_obj);
+            Py_DECREF(node_obj);
         }
-        PyObject *tup = PyTuple_Pack(2, node_set, branch_sets[c]);
+        PyObject *pair = PyTuple_Pack(2, node_set, branch_sets[component]);
         Py_DECREF(node_set);
-        PyList_SET_ITEM(result, c, tup);
+        PyList_SET_ITEM(result, component, pair);
     }
 
-cleanup2:
-    free(cr.labels); free(sizes); free(offsets);
-    for (int c = 0; c < num_comp; c++) {
-        free(buckets[c]);
-        Py_DECREF(branch_sets[c]);
+cleanup:
+    free(components.labels); free(sizes); free(offsets);
+    for (int component = 0; component < component_count; component++) {
+        free(buckets[component]);
+        Py_DECREF(branch_sets[component]);
     }
     free(buckets); free(branch_sets);
     return result;
@@ -137,55 +137,55 @@ PyObject *py_connected_components_remapped(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj;
     if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
-    PyObject *nid_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
-    if (!nid_fast) return NULL;
-    int n = (int)PySequence_Fast_GET_SIZE(nid_fast);
-    PyObject **nid_items = PySequence_Fast_ITEMS(nid_fast);
+    PyObject *node_ids_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
+    if (!node_ids_fast) return NULL;
+    int node_count = (int)PySequence_Fast_GET_SIZE(node_ids_fast);
+    PyObject **node_id_items = PySequence_Fast_ITEMS(node_ids_fast);
 
-    EdgeList el;
-    if (parse_edges(edges_obj, &el) < 0) { Py_DECREF(nid_fast); return NULL; }
+    EdgeList edges;
+    if (parse_edges(edges_obj, &edges) < 0) { Py_DECREF(node_ids_fast); return NULL; }
 
-    ComponentResult cr;
-    if (compute_components(n, &el, &cr) < 0) {
-        free_edges(&el);
-        Py_DECREF(nid_fast);
+    ComponentResult components;
+    if (compute_components(node_count, &edges, &components) < 0) {
+        free_edges(&edges);
+        Py_DECREF(node_ids_fast);
         return NULL;
     }
-    free_edges(&el);
+    free_edges(&edges);
 
-    int num_comp = cr.num_comp;
+    int component_count = components.component_count;
 
     /* Bucket nodes by component */
-    int *sizes  = (int *)calloc(num_comp, sizeof(int));
-    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
-    int **buckets = (int **)malloc(num_comp * sizeof(int *));
-    int *offsets  = (int *)calloc(num_comp, sizeof(int));
-    for (int c = 0; c < num_comp; c++)
-        buckets[c] = (int *)malloc(sizes[c] * sizeof(int));
-    for (int i = 0; i < n; i++) {
-        int c = cr.labels[i];
-        buckets[c][offsets[c]++] = i;
+    int *sizes  = (int *)calloc(component_count, sizeof(int));
+    for (int node = 0; node < node_count; node++) sizes[components.labels[node]]++;
+    int **buckets = (int **)malloc(component_count * sizeof(int *));
+    int *offsets  = (int *)calloc(component_count, sizeof(int));
+    for (int component = 0; component < component_count; component++)
+        buckets[component] = (int *)malloc(sizes[component] * sizeof(int));
+    for (int node = 0; node < node_count; node++) {
+        int component = components.labels[node];
+        buckets[component][offsets[component]++] = node;
     }
 
     /* Build Python list of sets with remapped node IDs */
-    PyObject *result = PyList_New(num_comp);
-    if (!result) goto cleanup_r;
+    PyObject *result = PyList_New(component_count);
+    if (!result) goto cleanup;
 
-    for (int c = 0; c < num_comp; c++) {
-        PyObject *s = PySet_New(NULL);
-        if (!s) { Py_DECREF(result); result = NULL; goto cleanup_r; }
-        for (int j = 0; j < sizes[c]; j++) {
+    for (int component = 0; component < component_count; component++) {
+        PyObject *component_set = PySet_New(NULL);
+        if (!component_set) { Py_DECREF(result); result = NULL; goto cleanup; }
+        for (int member = 0; member < sizes[component]; member++) {
             /* Use the original node ID from the remapping array */
-            PySet_Add(s, nid_items[buckets[c][j]]);
+            PySet_Add(component_set, node_id_items[buckets[component][member]]);
         }
-        PyList_SET_ITEM(result, c, s);
+        PyList_SET_ITEM(result, component, component_set);
     }
 
-cleanup_r:
-    free(cr.labels); free(sizes); free(offsets);
-    for (int c = 0; c < num_comp; c++) free(buckets[c]);
+cleanup:
+    free(components.labels); free(sizes); free(offsets);
+    for (int component = 0; component < component_count; component++) free(buckets[component]);
     free(buckets);
-    Py_DECREF(nid_fast);
+    Py_DECREF(node_ids_fast);
     return result;
 }
 
@@ -199,218 +199,218 @@ PyObject *py_connected_components_with_branches_remapped(PyObject *self, PyObjec
     PyObject *node_ids_obj, *edges_obj, *branch_ids_obj;
     if (!PyArg_ParseTuple(args, "OOO", &node_ids_obj, &edges_obj, &branch_ids_obj)) return NULL;
 
-    PyObject *nid_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
-    if (!nid_fast) return NULL;
-    int n = (int)PySequence_Fast_GET_SIZE(nid_fast);
-    PyObject **nid_items = PySequence_Fast_ITEMS(nid_fast);
+    PyObject *node_ids_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
+    if (!node_ids_fast) return NULL;
+    int node_count = (int)PySequence_Fast_GET_SIZE(node_ids_fast);
+    PyObject **node_id_items = PySequence_Fast_ITEMS(node_ids_fast);
 
-    EdgeList el;
-    if (parse_edges(edges_obj, &el) < 0) { Py_DECREF(nid_fast); return NULL; }
+    EdgeList edges;
+    if (parse_edges(edges_obj, &edges) < 0) { Py_DECREF(node_ids_fast); return NULL; }
 
-    PyObject *br_fast = PySequence_Fast(branch_ids_obj, "branch_ids must be a sequence");
-    if (!br_fast) { free_edges(&el); Py_DECREF(nid_fast); return NULL; }
-    Py_ssize_t br_len = PySequence_Fast_GET_SIZE(br_fast);
+    PyObject *branch_ids_fast = PySequence_Fast(branch_ids_obj, "branch_ids must be a sequence");
+    if (!branch_ids_fast) { free_edges(&edges); Py_DECREF(node_ids_fast); return NULL; }
+    Py_ssize_t branch_id_count = PySequence_Fast_GET_SIZE(branch_ids_fast);
 
-    ComponentResult cr;
-    if (compute_components(n, &el, &cr) < 0) {
-        Py_DECREF(br_fast);
-        free_edges(&el);
-        Py_DECREF(nid_fast);
+    ComponentResult components;
+    if (compute_components(node_count, &edges, &components) < 0) {
+        Py_DECREF(branch_ids_fast);
+        free_edges(&edges);
+        Py_DECREF(node_ids_fast);
         return NULL;
     }
 
-    int num_comp = cr.num_comp;
+    int component_count = components.component_count;
 
     /* Bucket nodes */
-    int *sizes  = (int *)calloc(num_comp, sizeof(int));
-    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
-    int **buckets = (int **)malloc(num_comp * sizeof(int *));
-    int *offsets  = (int *)calloc(num_comp, sizeof(int));
-    for (int c = 0; c < num_comp; c++)
-        buckets[c] = (int *)malloc(sizes[c] * sizeof(int));
-    for (int i = 0; i < n; i++) {
-        int c = cr.labels[i];
-        buckets[c][offsets[c]++] = i;
+    int *sizes  = (int *)calloc(component_count, sizeof(int));
+    for (int node = 0; node < node_count; node++) sizes[components.labels[node]]++;
+    int **buckets = (int **)malloc(component_count * sizeof(int *));
+    int *offsets  = (int *)calloc(component_count, sizeof(int));
+    for (int component = 0; component < component_count; component++)
+        buckets[component] = (int *)malloc(sizes[component] * sizeof(int));
+    for (int node = 0; node < node_count; node++) {
+        int component = components.labels[node];
+        buckets[component][offsets[component]++] = node;
     }
 
     /* Build branch sets per component */
-    PyObject **branch_sets = (PyObject **)calloc(num_comp, sizeof(PyObject *));
-    for (int c = 0; c < num_comp; c++)
-        branch_sets[c] = PySet_New(NULL);
+    PyObject **branch_sets = (PyObject **)calloc(component_count, sizeof(PyObject *));
+    for (int component = 0; component < component_count; component++)
+        branch_sets[component] = PySet_New(NULL);
 
-    Py_ssize_t edge_branch_count = el.m < br_len ? el.m : br_len;
-    PyObject **br_items = PySequence_Fast_ITEMS(br_fast);
-    for (Py_ssize_t i = 0; i < edge_branch_count; i++) {
-        int c = cr.labels[EDGE_SRC(&el, i)];
-        PySet_Add(branch_sets[c], br_items[i]);
+    Py_ssize_t edge_branch_count = edges.edge_count < branch_id_count ? edges.edge_count : branch_id_count;
+    PyObject **branch_id_items = PySequence_Fast_ITEMS(branch_ids_fast);
+    for (Py_ssize_t edge_index = 0; edge_index < edge_branch_count; edge_index++) {
+        int component = components.labels[EDGE_FIRST_ENDPOINT(&edges, edge_index)];
+        PySet_Add(branch_sets[component], branch_id_items[edge_index]);
     }
-    Py_DECREF(br_fast);
-    free_edges(&el);
+    Py_DECREF(branch_ids_fast);
+    free_edges(&edges);
 
     /* Build result list with remapped node IDs */
-    PyObject *result = PyList_New(num_comp);
-    if (!result) goto cleanup_rb;
+    PyObject *result = PyList_New(component_count);
+    if (!result) goto cleanup;
 
-    for (int c = 0; c < num_comp; c++) {
+    for (int component = 0; component < component_count; component++) {
         PyObject *node_set = PySet_New(NULL);
-        for (int j = 0; j < sizes[c]; j++)
-            PySet_Add(node_set, nid_items[buckets[c][j]]);
-        PyObject *tup = PyTuple_Pack(2, node_set, branch_sets[c]);
+        for (int member = 0; member < sizes[component]; member++)
+            PySet_Add(node_set, node_id_items[buckets[component][member]]);
+        PyObject *pair = PyTuple_Pack(2, node_set, branch_sets[component]);
         Py_DECREF(node_set);
-        PyList_SET_ITEM(result, c, tup);
+        PyList_SET_ITEM(result, component, pair);
     }
 
-cleanup_rb:
-    free(cr.labels); free(sizes); free(offsets);
-    for (int c = 0; c < num_comp; c++) {
-        free(buckets[c]);
-        Py_DECREF(branch_sets[c]);
+cleanup:
+    free(components.labels); free(sizes); free(offsets);
+    for (int component = 0; component < component_count; component++) {
+        free(buckets[component]);
+        Py_DECREF(branch_sets[component]);
     }
     free(buckets); free(branch_sets);
-    Py_DECREF(nid_fast);
+    Py_DECREF(node_ids_fast);
     return result;
 }
 
 /* ── connected_components (node-ID edges) ── */
 
-PyObject *py_cc_nid(PyObject *self, PyObject *args) {
-    PyObject *nids, *edges;
-    if (!PyArg_ParseTuple(args, "OO", &nids, &edges)) return NULL;
+PyObject *py_connected_components_by_node_id(PyObject *self, PyObject *args) {
+    PyObject *node_ids_obj, *edges_obj;
+    if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
-    NidContext ctx;
-    if (nid_parse(nids, edges, &ctx) < 0) return NULL;
-    int n = ctx.n;
-    if (n == 0) { nid_free(&ctx); return PyList_New(0); }
+    NodeIdContext context;
+    if (node_id_parse(node_ids_obj, edges_obj, &context) < 0) return NULL;
+    int node_count = context.node_count;
+    if (node_count == 0) { node_id_context_free(&context); return PyList_New(0); }
 
-    ComponentResult cr;
-    if (compute_components(n, &ctx.el, &cr) < 0) { nid_free(&ctx); return NULL; }
+    ComponentResult components;
+    if (compute_components(node_count, &context.edges, &components) < 0) { node_id_context_free(&context); return NULL; }
 
-    int nc = cr.num_comp;
+    int component_count = components.component_count;
 
     /* Build sets directly — no intermediate bucketing */
-    PyObject *result = PyList_New(nc);
-    if (!result) { free(cr.labels); nid_free(&ctx); return NULL; }
+    PyObject *result = PyList_New(component_count);
+    if (!result) { free(components.labels); node_id_context_free(&context); return NULL; }
 
-    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
-    if (!sets) { free(cr.labels); Py_DECREF(result); nid_free(&ctx); PyErr_NoMemory(); return NULL; }
-    for (int c = 0; c < nc; c++) {
-        sets[c] = PySet_New(NULL);
-        if (!sets[c]) {
-            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
-            free(sets); free(cr.labels); Py_DECREF(result); nid_free(&ctx);
+    PyObject **component_sets = (PyObject **)malloc((size_t)component_count * sizeof(PyObject *));
+    if (!component_sets) { free(components.labels); Py_DECREF(result); node_id_context_free(&context); PyErr_NoMemory(); return NULL; }
+    for (int component = 0; component < component_count; component++) {
+        component_sets[component] = PySet_New(NULL);
+        if (!component_sets[component]) {
+            for (int previous_component = 0; previous_component < component; previous_component++) Py_DECREF(component_sets[previous_component]);
+            free(component_sets); free(components.labels); Py_DECREF(result); node_id_context_free(&context);
             return NULL;
         }
     }
 
-    for (int i = 0; i < n; i++)
-        PySet_Add(sets[cr.labels[i]], ctx.nid_items[i]);
+    for (int node = 0; node < node_count; node++)
+        PySet_Add(component_sets[components.labels[node]], context.node_id_items[node]);
 
-    for (int c = 0; c < nc; c++)
-        PyList_SET_ITEM(result, c, sets[c]);
+    for (int component = 0; component < component_count; component++)
+        PyList_SET_ITEM(result, component, component_sets[component]);
 
-    free(sets);
-    free(cr.labels);
-    nid_free(&ctx);
+    free(component_sets);
+    free(components.labels);
+    node_id_context_free(&context);
     return result;
 }
 
-/* ── connected_components (node-ID, split src/dst) ── */
+/* ── connected_components (node-ID, split endpoint sequences) ── */
 
-PyObject *py_cc_nid_split(PyObject *self, PyObject *args) {
-    PyObject *nids, *src, *dst;
-    if (!PyArg_ParseTuple(args, "OOO", &nids, &src, &dst)) return NULL;
+PyObject *py_connected_components_by_node_id_split(PyObject *self, PyObject *args) {
+    PyObject *node_ids_obj, *first_endpoints_obj, *second_endpoints_obj;
+    if (!PyArg_ParseTuple(args, "OOO", &node_ids_obj, &first_endpoints_obj, &second_endpoints_obj)) return NULL;
 
-    NidContext ctx;
-    if (nid_parse_split(nids, src, dst, &ctx) < 0) return NULL;
-    int n = ctx.n;
-    if (n == 0) { nid_free(&ctx); return PyList_New(0); }
+    NodeIdContext context;
+    if (node_id_parse_split(node_ids_obj, first_endpoints_obj, second_endpoints_obj, &context) < 0) return NULL;
+    int node_count = context.node_count;
+    if (node_count == 0) { node_id_context_free(&context); return PyList_New(0); }
 
-    ComponentResult cr;
-    if (compute_components(n, &ctx.el, &cr) < 0) { nid_free(&ctx); return NULL; }
+    ComponentResult components;
+    if (compute_components(node_count, &context.edges, &components) < 0) { node_id_context_free(&context); return NULL; }
 
-    int nc = cr.num_comp;
+    int component_count = components.component_count;
 
     /* Build sets directly — no intermediate bucketing */
-    PyObject *result = PyList_New(nc);
-    if (!result) { free(cr.labels); nid_free(&ctx); return NULL; }
+    PyObject *result = PyList_New(component_count);
+    if (!result) { free(components.labels); node_id_context_free(&context); return NULL; }
 
     /* Create all sets upfront */
-    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
-    if (!sets) { free(cr.labels); Py_DECREF(result); nid_free(&ctx); PyErr_NoMemory(); return NULL; }
-    for (int c = 0; c < nc; c++) {
-        sets[c] = PySet_New(NULL);
-        if (!sets[c]) {
-            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
-            free(sets); free(cr.labels); Py_DECREF(result); nid_free(&ctx);
+    PyObject **component_sets = (PyObject **)malloc((size_t)component_count * sizeof(PyObject *));
+    if (!component_sets) { free(components.labels); Py_DECREF(result); node_id_context_free(&context); PyErr_NoMemory(); return NULL; }
+    for (int component = 0; component < component_count; component++) {
+        component_sets[component] = PySet_New(NULL);
+        if (!component_sets[component]) {
+            for (int previous_component = 0; previous_component < component; previous_component++) Py_DECREF(component_sets[previous_component]);
+            free(component_sets); free(components.labels); Py_DECREF(result); node_id_context_free(&context);
             return NULL;
         }
     }
 
     /* Single pass: add each node to its component set */
-    for (int i = 0; i < n; i++)
-        PySet_Add(sets[cr.labels[i]], ctx.nid_items[i]);
+    for (int node = 0; node < node_count; node++)
+        PySet_Add(component_sets[components.labels[node]], context.node_id_items[node]);
 
-    for (int c = 0; c < nc; c++)
-        PyList_SET_ITEM(result, c, sets[c]);
+    for (int component = 0; component < component_count; component++)
+        PyList_SET_ITEM(result, component, component_sets[component]);
 
-    free(sets);
-    free(cr.labels);
-    nid_free(&ctx);
+    free(component_sets);
+    free(components.labels);
+    node_id_context_free(&context);
     return result;
 }
 
-PyObject *py_cc_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
-    if (!g) return NULL;
-    int n = g->nid.n;
-    if (n == 0) return PyList_New(0);
+PyObject *py_connected_components_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    int node_count = graph->node_ids.node_count;
+    if (node_count == 0) return PyList_New(0);
 
-    const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
-    const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
+    const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
+    if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
+    const uint8_t *node_mask; Py_buffer node_mask_buffer;
+    if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); return NULL; }
 
-    ComponentResult cr;
-    if (compute_components_masked(n, &g->nid.el, mask, nmask, &cr) < 0) {
-        release_mask(&nmbuf); release_mask(&mbuf); return NULL;
+    ComponentResult components;
+    if (compute_components_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &components) < 0) {
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;
     }
-    release_mask(&mbuf);
-    int nc = cr.num_comp;
+    release_mask(&edge_mask_buffer);
+    int component_count = components.component_count;
 
     /* Build sets, skipping masked nodes */
-    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
-    if (!sets) { free(cr.labels); release_mask(&nmbuf); PyErr_NoMemory(); return NULL; }
-    for (int c = 0; c < nc; c++) {
-        sets[c] = PySet_New(NULL);
-        if (!sets[c]) {
-            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
-            free(sets); free(cr.labels); release_mask(&nmbuf); return NULL;
+    PyObject **component_sets = (PyObject **)malloc((size_t)component_count * sizeof(PyObject *));
+    if (!component_sets) { free(components.labels); release_mask(&node_mask_buffer); PyErr_NoMemory(); return NULL; }
+    for (int component = 0; component < component_count; component++) {
+        component_sets[component] = PySet_New(NULL);
+        if (!component_sets[component]) {
+            for (int previous_component = 0; previous_component < component; previous_component++) Py_DECREF(component_sets[previous_component]);
+            free(component_sets); free(components.labels); release_mask(&node_mask_buffer); return NULL;
         }
     }
-    for (int i = 0; i < n; i++) {
-        if (nmask && nmask[i]) continue;
-        PySet_Add(sets[cr.labels[i]], g->nid.nid_items[i]);
+    for (int node = 0; node < node_count; node++) {
+        if (node_mask && node_mask[node]) continue;
+        PySet_Add(component_sets[components.labels[node]], graph->node_ids.node_id_items[node]);
     }
 
     /* Collect non-empty sets */
     PyObject *result = PyList_New(0);
     if (!result) {
-        for (int c = 0; c < nc; c++) Py_DECREF(sets[c]);
-        free(sets); free(cr.labels); release_mask(&nmbuf); return NULL;
+        for (int component = 0; component < component_count; component++) Py_DECREF(component_sets[component]);
+        free(component_sets); free(components.labels); release_mask(&node_mask_buffer); return NULL;
     }
-    for (int c = 0; c < nc; c++) {
-        if (PySet_GET_SIZE(sets[c]) > 0)
-            PyList_Append(result, sets[c]);
-        Py_DECREF(sets[c]);
+    for (int component = 0; component < component_count; component++) {
+        if (PySet_GET_SIZE(component_sets[component]) > 0)
+            PyList_Append(result, component_sets[component]);
+        Py_DECREF(component_sets[component]);
     }
-    free(sets); free(cr.labels);
-    release_mask(&nmbuf);
+    free(component_sets); free(components.labels);
+    release_mask(&node_mask_buffer);
     return result;
 }
 
-/* ── cc_branches_ctx(capsule, branch_ids[, excluded_edges, excluded_nodes])
+/* ── connected_components_with_branches_ctx(capsule, branch_ids[, excluded_edges, excluded_nodes])
  *    -> list[tuple[set[NodeId], set[BranchId]]]
  *
  * Connected components with branch IDs from a cached graph context.
@@ -420,66 +420,66 @@ PyObject *py_cc_ctx(PyObject *self, PyObject *args) {
  * excluded_nodes: removed from the output node sets but their edges
  *     still contribute to connectivity and branch ID sets.
  */
-PyObject *py_cc_branches_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *branch_ids_obj, *emask_obj = Py_None, *nmask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &branch_ids_obj, &emask_obj, &nmask_obj))
+PyObject *py_connected_components_with_branches_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *branch_ids_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &branch_ids_obj, &edge_mask_obj, &node_mask_obj))
         return NULL;
-    GraphCtx *g = get_graphctx(capsule);
-    if (!g) return NULL;
-    int n = g->nid.n;
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    int node_count = graph->node_ids.node_count;
 
-    PyObject *br_fast = PySequence_Fast(branch_ids_obj, "branch_ids must be a sequence");
-    if (!br_fast) return NULL;
-    Py_ssize_t br_len = PySequence_Fast_GET_SIZE(br_fast);
+    PyObject *branch_ids_fast = PySequence_Fast(branch_ids_obj, "branch_ids must be a sequence");
+    if (!branch_ids_fast) return NULL;
+    Py_ssize_t branch_id_count = PySequence_Fast_GET_SIZE(branch_ids_fast);
 
     /* Parse excluded-edges mask */
-    const uint8_t *emask; Py_buffer embuf;
-    if (parse_mask(emask_obj, g->nid.el.m, &emask, &embuf) < 0) {
-        Py_DECREF(br_fast); return NULL;
+    const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
+    if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) {
+        Py_DECREF(branch_ids_fast); return NULL;
     }
 
     /* Parse excluded-nodes mask (used only for output filtering) */
-    const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) {
-        release_mask(&embuf); Py_DECREF(br_fast); return NULL;
+    const uint8_t *node_mask; Py_buffer node_mask_buffer;
+    if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) {
+        release_mask(&edge_mask_buffer); Py_DECREF(branch_ids_fast); return NULL;
     }
 
     /* Run union-find with both edge and node exclusion — excluded nodes do NOT
        participate in connectivity (traversal stops at them). Their incident
        edges still contribute branch IDs to the CC of the non-excluded endpoint. */
-    ComponentResult cr;
-    if (compute_components_masked(n, &g->nid.el, emask, nmask, &cr) < 0) {
-        release_mask(&nmbuf); release_mask(&embuf); Py_DECREF(br_fast);
+    ComponentResult components;
+    if (compute_components_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &components) < 0) {
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(branch_ids_fast);
         return NULL;
     }
-    /* Keep embuf alive — reused for branch assignment below */
+    /* Keep edge_mask_buffer alive — reused for branch assignment below */
 
-    int num_comp = cr.num_comp;
+    int component_count = components.component_count;
 
     /* Bucket nodes by component */
-    int *sizes  = (int *)calloc(num_comp, sizeof(int));
-    int **buckets = (int **)malloc(num_comp * sizeof(int *));
-    int *offsets  = (int *)calloc(num_comp, sizeof(int));
+    int *sizes  = (int *)calloc(component_count, sizeof(int));
+    int **buckets = (int **)malloc(component_count * sizeof(int *));
+    int *offsets  = (int *)calloc(component_count, sizeof(int));
     if (!sizes || !buckets || !offsets) {
         free(sizes); free(buckets); free(offsets);
-        free(cr.labels); release_mask(&nmbuf); release_mask(&embuf);
-        Py_DECREF(br_fast);
+        free(components.labels); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+        Py_DECREF(branch_ids_fast);
         PyErr_NoMemory(); return NULL;
     }
-    for (int i = 0; i < n; i++) sizes[cr.labels[i]]++;
-    for (int c = 0; c < num_comp; c++) {
-        buckets[c] = (int *)malloc(sizes[c] * sizeof(int));
-        if (!buckets[c]) {
-            for (int j = 0; j < c; j++) free(buckets[j]);
+    for (int node = 0; node < node_count; node++) sizes[components.labels[node]]++;
+    for (int component = 0; component < component_count; component++) {
+        buckets[component] = (int *)malloc(sizes[component] * sizeof(int));
+        if (!buckets[component]) {
+            for (int previous_component = 0; previous_component < component; previous_component++) free(buckets[previous_component]);
             free(sizes); free(buckets); free(offsets);
-            free(cr.labels); release_mask(&nmbuf); release_mask(&embuf);
-            Py_DECREF(br_fast);
+            free(components.labels); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+            Py_DECREF(branch_ids_fast);
             PyErr_NoMemory(); return NULL;
         }
     }
-    for (int i = 0; i < n; i++) {
-        int c = cr.labels[i];
-        buckets[c][offsets[c]++] = i;
+    for (int node = 0; node < node_count; node++) {
+        int component = components.labels[node];
+        buckets[component][offsets[component]++] = node;
     }
 
     /* Build branch sets per component (skipping excluded edges).
@@ -490,134 +490,134 @@ PyObject *py_cc_branches_ctx(PyObject *self, PyObject *args) {
      * CPython PySet_Add hash-insert is the floor; no algorithmic improvement
      * possible without bypassing Python set objects entirely.
      */
-    PyObject **branch_sets = (PyObject **)calloc(num_comp, sizeof(PyObject *));
+    PyObject **branch_sets = (PyObject **)calloc(component_count, sizeof(PyObject *));
     if (!branch_sets) {
-        for (int c = 0; c < num_comp; c++) free(buckets[c]);
+        for (int component = 0; component < component_count; component++) free(buckets[component]);
         free(sizes); free(buckets); free(offsets);
-        free(cr.labels); release_mask(&nmbuf); release_mask(&embuf);
-        Py_DECREF(br_fast);
+        free(components.labels); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+        Py_DECREF(branch_ids_fast);
         PyErr_NoMemory(); return NULL;
     }
-    for (int c = 0; c < num_comp; c++)
-        branch_sets[c] = PySet_New(NULL);
+    for (int component = 0; component < component_count; component++)
+        branch_sets[component] = PySet_New(NULL);
 
-    EdgeList *el = &g->nid.el;
-    Py_ssize_t edge_branch_count = el->m < br_len ? el->m : br_len;
-    PyObject **br_items = PySequence_Fast_ITEMS(br_fast);
+    EdgeList *edges = &graph->node_ids.edges;
+    Py_ssize_t edge_branch_count = edges->edge_count < branch_id_count ? edges->edge_count : branch_id_count;
+    PyObject **branch_id_items = PySequence_Fast_ITEMS(branch_ids_fast);
 
-    for (Py_ssize_t i = 0; i < edge_branch_count; i++) {
-        if (emask && emask[i]) continue;
-        int u = EDGE_SRC(el, i);
+    for (Py_ssize_t edge_index = 0; edge_index < edge_branch_count; edge_index++) {
+        if (edge_mask && edge_mask[edge_index]) continue;
+        int first_node = EDGE_FIRST_ENDPOINT(edges, edge_index);
         /* Anchor branch_id to a non-excluded endpoint when possible.
-         * When nmask is NULL, this is just `u` (zero overhead). */
-        int anchor = (nmask && nmask[u]) ? EDGE_DST(el, i) : u;
-        int c = cr.labels[anchor];
-        PySet_Add(branch_sets[c], br_items[i]);
+         * When node_mask is NULL, this is just `first_node` (zero overhead). */
+        int anchor = (node_mask && node_mask[first_node]) ? EDGE_SECOND_ENDPOINT(edges, edge_index) : first_node;
+        int component = components.labels[anchor];
+        PySet_Add(branch_sets[component], branch_id_items[edge_index]);
     }
-    release_mask(&embuf);
-    Py_DECREF(br_fast);
+    release_mask(&edge_mask_buffer);
+    Py_DECREF(branch_ids_fast);
 
     /* Build result list with remapped node IDs, filtering excluded nodes */
     PyObject *result = PyList_New(0);
-    if (!result) goto cleanup_bcctx;
+    if (!result) goto cleanup;
 
-    for (int c = 0; c < num_comp; c++) {
+    for (int component = 0; component < component_count; component++) {
         PyObject *node_set = PySet_New(NULL);
-        for (int j = 0; j < sizes[c]; j++) {
-            int idx = buckets[c][j];
-            if (nmask && nmask[idx]) continue;
-            PySet_Add(node_set, g->nid.nid_items[idx]);
+        for (int member = 0; member < sizes[component]; member++) {
+            int idx = buckets[component][member];
+            if (node_mask && node_mask[idx]) continue;
+            PySet_Add(node_set, graph->node_ids.node_id_items[idx]);
         }
         /* Include component if it has any nodes or any branches */
-        if (PySet_GET_SIZE(node_set) > 0 || PySet_GET_SIZE(branch_sets[c]) > 0) {
-            PyObject *tup = PyTuple_Pack(2, node_set, branch_sets[c]);
-            PyList_Append(result, tup);
-            Py_DECREF(tup);
+        if (PySet_GET_SIZE(node_set) > 0 || PySet_GET_SIZE(branch_sets[component]) > 0) {
+            PyObject *pair = PyTuple_Pack(2, node_set, branch_sets[component]);
+            PyList_Append(result, pair);
+            Py_DECREF(pair);
         }
         Py_DECREF(node_set);
     }
 
-cleanup_bcctx:
-    free(cr.labels); free(sizes); free(offsets);
-    for (int c = 0; c < num_comp; c++) {
-        free(buckets[c]);
-        Py_DECREF(branch_sets[c]);
+cleanup:
+    free(components.labels); free(sizes); free(offsets);
+    for (int component = 0; component < component_count; component++) {
+        free(buckets[component]);
+        Py_DECREF(branch_sets[component]);
     }
     free(buckets); free(branch_sets);
-    release_mask(&nmbuf);
+    release_mask(&node_mask_buffer);
     return result;
 }
 
-PyObject *py_scc_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *mask_obj = Py_None, *nmask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &mask_obj, &nmask_obj)) return NULL;
-    GraphCtx *g = get_graphctx(capsule);
-    if (!g) return NULL;
-    int n = g->nid.n;
-    if (n == 0) return PyList_New(0);
+PyObject *py_strongly_connected_components_ctx(PyObject *self, PyObject *args) {
+    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    int node_count = graph->node_ids.node_count;
+    if (node_count == 0) return PyList_New(0);
 
-    if (!g->directed) {
+    if (!graph->directed) {
         PyErr_SetString(PyExc_TypeError,
             "strongly_connected_components requires a directed graph");
         return NULL;
     }
 
     /* No adjacency list => every node is its own SCC */
-    if (!g->has_adj) {
-        const uint8_t *nmask = NULL; Py_buffer nmbuf;
-        if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) return NULL;
+    if (!graph->has_adjacency) {
+        const uint8_t *node_mask = NULL; Py_buffer node_mask_buffer;
+        if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) return NULL;
         PyObject *result = PyList_New(0);
-        if (!result) { release_mask(&nmbuf); return NULL; }
-        for (int i = 0; i < n; i++) {
-            if (nmask && nmask[i]) continue;
-            PyObject *s = PySet_New(NULL);
-            PySet_Add(s, g->nid.nid_items[i]);
-            PyList_Append(result, s);
-            Py_DECREF(s);
+        if (!result) { release_mask(&node_mask_buffer); return NULL; }
+        for (int node = 0; node < node_count; node++) {
+            if (node_mask && node_mask[node]) continue;
+            PyObject *component_set = PySet_New(NULL);
+            PySet_Add(component_set, graph->node_ids.node_id_items[node]);
+            PyList_Append(result, component_set);
+            Py_DECREF(component_set);
         }
-        release_mask(&nmbuf);
+        release_mask(&node_mask_buffer);
         return result;
     }
 
-    const uint8_t *mask; Py_buffer mbuf;
-    if (parse_mask(mask_obj, g->nid.el.m, &mask, &mbuf) < 0) return NULL;
-    const uint8_t *nmask; Py_buffer nmbuf;
-    if (parse_mask(nmask_obj, n, &nmask, &nmbuf) < 0) { release_mask(&mbuf); return NULL; }
+    const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
+    if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
+    const uint8_t *node_mask; Py_buffer node_mask_buffer;
+    if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); return NULL; }
 
-    ComponentResult cr;
-    if (compute_scc_masked(n, &g->al, mask, nmask, &cr) < 0) {
-        release_mask(&nmbuf); release_mask(&mbuf); return NULL;
+    ComponentResult components;
+    if (compute_strongly_connected_components_masked(node_count, &graph->adjacency, edge_mask, node_mask, &components) < 0) {
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;
     }
-    release_mask(&mbuf);
-    int nc = cr.num_comp;
+    release_mask(&edge_mask_buffer);
+    int component_count = components.component_count;
 
     /* Build sets, skipping masked nodes */
-    PyObject **sets = (PyObject **)malloc((size_t)nc * sizeof(PyObject *));
-    if (!sets) { free(cr.labels); release_mask(&nmbuf); PyErr_NoMemory(); return NULL; }
-    for (int c = 0; c < nc; c++) {
-        sets[c] = PySet_New(NULL);
-        if (!sets[c]) {
-            for (int j = 0; j < c; j++) Py_DECREF(sets[j]);
-            free(sets); free(cr.labels); release_mask(&nmbuf); return NULL;
+    PyObject **component_sets = (PyObject **)malloc((size_t)component_count * sizeof(PyObject *));
+    if (!component_sets) { free(components.labels); release_mask(&node_mask_buffer); PyErr_NoMemory(); return NULL; }
+    for (int component = 0; component < component_count; component++) {
+        component_sets[component] = PySet_New(NULL);
+        if (!component_sets[component]) {
+            for (int previous_component = 0; previous_component < component; previous_component++) Py_DECREF(component_sets[previous_component]);
+            free(component_sets); free(components.labels); release_mask(&node_mask_buffer); return NULL;
         }
     }
-    for (int i = 0; i < n; i++) {
-        if (nmask && nmask[i]) continue;
-        PySet_Add(sets[cr.labels[i]], g->nid.nid_items[i]);
+    for (int node = 0; node < node_count; node++) {
+        if (node_mask && node_mask[node]) continue;
+        PySet_Add(component_sets[components.labels[node]], graph->node_ids.node_id_items[node]);
     }
 
     /* Collect non-empty sets */
     PyObject *result = PyList_New(0);
     if (!result) {
-        for (int c = 0; c < nc; c++) Py_DECREF(sets[c]);
-        free(sets); free(cr.labels); release_mask(&nmbuf); return NULL;
+        for (int component = 0; component < component_count; component++) Py_DECREF(component_sets[component]);
+        free(component_sets); free(components.labels); release_mask(&node_mask_buffer); return NULL;
     }
-    for (int c = 0; c < nc; c++) {
-        if (PySet_GET_SIZE(sets[c]) > 0)
-            PyList_Append(result, sets[c]);
-        Py_DECREF(sets[c]);
+    for (int component = 0; component < component_count; component++) {
+        if (PySet_GET_SIZE(component_sets[component]) > 0)
+            PyList_Append(result, component_sets[component]);
+        Py_DECREF(component_sets[component]);
     }
-    free(sets); free(cr.labels);
-    release_mask(&nmbuf);
+    free(component_sets); free(components.labels);
+    release_mask(&node_mask_buffer);
     return result;
 }
