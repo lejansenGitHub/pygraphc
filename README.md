@@ -424,6 +424,76 @@ view = g.without_edges([0])
 list(view.connected_components())  # [{1, 2, 3}] — still connected via edge 1
 ```
 
+### Edges with ports (multiport edges)
+
+> **Specification for the multiport core, implemented in this pull request.**
+> Everything below is the contract the implementation and its tests follow; it
+> is written down first so that the semantics can be reviewed, and changed on
+> request, before the code exists.
+
+An edge joins its **ports**, and every port sits at a node. A line is the
+two-port case; a three-winding transformer is an edge with three ports. Ports
+are addressed by their position in the edge, `(edge_id, port_index)`, never by
+node, so two ports of one edge at the same node stay distinguishable. pygraphc
+knows nothing about what a port is; which port is a transformer's primary is
+the caller's mapping.
+
+In a directed graph every port is either an **in-port** or an **out-port**,
+and every edge needs at least one of each. Reaching the node of any active
+in-port reaches the nodes of all active out-ports (OR semantics: each input
+feeds every output on its own).
+
+#### One rule decides everything: active ports
+
+A port is **active** when its edge, the port itself and its node are all
+unmasked. Every algorithm asks only this rule, so a change in masking
+semantics is a change in one place.
+
+- **Connection:** an edge joins all of its active ports to each other.
+  Directed: from every active in-port to every active out-port.
+- **Membership:** an edge belongs to a connected component when all of its
+  active ports are at nodes of that component. Active ports are always joined,
+  so an edge with at least one active port belongs to exactly one component;
+  an edge without an active port belongs to none. Masked ports play no part.
+
+#### Masking cases
+
+Masks combine as a union and their order does not matter. Each case has a
+named test.
+
+| # | Case | Connection | Membership |
+|---|------|------------|------------|
+| 1 | Edge masked | joins nothing; its nodes keep their other edges | none |
+| 2 | Some ports masked, two or more active | the active ports stay joined; a masked port only detaches its node from this edge | the component of the active ports |
+| 3 | Exactly one active port | joins nothing, never critical | the component of that port |
+| 4 | No active port | as case 1 | none |
+| 5 | Two-port line with one port masked | case 3: joins nothing, as if the line were masked | the component of the active end |
+| 6 | Node masked | the node leaves every result; its ports are inactive, the other ports of those edges stay joined | as cases 2 to 4 for the remaining ports |
+| 7 | Two ports of one edge at the same node, one masked | the node stays attached through the other port | unchanged |
+| 8 | All ports at one node | joins nothing, with or without masks | that node's component |
+| 9 | Directed edge left without an active in-port or out-port | transmits nothing | as for undirected edges |
+| 10 | Weighted path through an edge | enters through an active in-port (or any active port when undirected) and leaves through another active port; the cost is the entry port's weight plus the exit port's weight | — |
+| 11 | Critical edges, critical nodes, biconnected blocks | computed on active ports only; a masked port is never critical | — |
+| 12 | Tree-shaped edge with k ports in biconnected blocks | one block holding its k port nodes, as a bridge is its own two-node block | — |
+
+#### Results name edges, not node pairs
+
+Results that report edges report edge ids. A node pair cannot name a
+three-port edge and is ambiguous for parallel lines anyway, so the pair forms
+(`bridges()` as `(u, v)` tuples, `edge_indices(u, v)`) give way to edge ids
+and the separate `*_with_branch_ids` methods merge into the plain ones. This
+is a breaking change, taken before 1.0 on purpose; the changelog carries the
+mapping from each old method to its replacement.
+
+#### Open points
+
+- **Ports without a known node** are rejected at construction, as edges with
+  an unknown endpoint are today; "not connected" is expressed by masking the
+  port. Recommended, not yet decided.
+- **A "touching" relation** (an edge with a port, active or not, at a node of
+  a component it is not a member of, such as an open switch at the boundary)
+  is not part of this pull request.
+
 ### Node-masked views (exclude nodes without rebuilding)
 
 Exclude nodes without rebuilding the CSR. Traversal stops at excluded nodes — they break connectivity. For `connected_components_with_branch_ids`, incident edge branch IDs are still collected in the non-excluded endpoint's CC. Chainable with edge masks.
