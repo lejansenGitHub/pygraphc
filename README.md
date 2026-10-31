@@ -1535,3 +1535,44 @@ implementing; the D and O numbers refer to `docs/multiport-decisions.md`.
 | 20 | Leaving through the entry port | Never: a pass goes from one port to another. Without negative weights it could not shorten a path anyway. | — | user |
 | 21 | Passing an edge again right after leaving it through its negative port | Not allowed: in `(1, 2, 3)` with weights `[3, -1, 2]` the path from 1 to 3 costs 5, not `(3 − 1) + (−1 + 2) = 3`. | Allow it: each pass is legal on its own. | user |
 | 22 | Coming back to the negative port's node another way | Allowed: only the immediate second pass is banned, so a shortest path may visit a node twice (`[1, 2, 4, 2, 3]` in the test). | Ban every second pass through the same edge, which makes shortest paths a constrained, much harder problem. | Claude |
+
+### What the literature says about these cases
+
+A web search on 2026-10-31 checked each entry against hypergraph theory,
+hypergraph libraries and power system tools. Sources:
+- [DPP]: Dewar, Pike, Proos, *Connectivity in Hypergraphs*, arXiv:1611.07087.
+- [BS]: Bahmanian, Šajna, *Connection and separation in hypergraphs*, Theory and Applications of Graphs 2(2), 2015.
+- [GLNP]: Gallo, Longo, Nguyen, Pallottino, *Directed hypergraphs and applications*, Discrete Applied Mathematics 42, 1993.
+- Libraries and tools: HyperNetX, XGI, pandapower, PowerModels.jl, OpenDSS, and CIM (IEC 61970).
+
+**Supported**
+- **1–3:** an edge without an active port belongs to no component, and one with a single active port stays with its node.
+  - [BS]: empty edges do not affect connectivity.
+  - [DPP]: weak vertex deletion keeps the shrunken edge.
+  - CIM `Terminal.connected` and OpenDSS `Open` open a single terminal.
+- **8:** OR semantics is the "path" connectivity of [GLNP]. AND semantics would be their B-connectivity.
+- **12:** a multiport edge can be critical while lying on a cycle. These are the weak cut edges of [BS], Def. 3.15–3.18.
+- **13:** blocks never split at a multiport edge. [BS], Thm. 3.37 and 3.41: the blocks of a hypergraph are not the blocks of its incidence graph.
+- **15:** using each edge at most once is a Berge path: distinct nodes and distinct edges.
+- **17–18:** raising instead of answering partially matches networkx's `not_implemented_for`.
+- **19:** negative star impedances of three-winding transformers are a known artefact; the pair sums are the measured short-circuit impedances, which are positive.
+- **20:** no U-turn matches the walk definition of [DPP] and turn-restricted routing (pgRouting TRSP).
+
+**Mixed or without a convention**
+- **4:**
+  - Single-port edges are common: HyperNetX and XGI allow them and offer helpers that remove them.
+  - [GLNP] also allows a directed edge with no out-port.
+- **5:** networkx leaves a self-loop node out of every block. [BS] (Lemma 3.31) makes a single-node edge its own block, so that blocks cover every edge.
+- **6:** [DPP] keeps edges as multisets, which matches distinct ports at one node. [BS], XGI and HyperNetX merge repeated nodes.
+- **7:** networkx and XGI create unknown nodes. pygraphc rejects them because its node set is fixed.
+- **10:** per-port weights are common: HyperNetX incidence weights, CIM transformer ends. Switching the whole graph to per-port weights has no precedent.
+- **11:** pandapower uses the same entry + exit rule for three windings. A star is exact only up to three windings; CIM requires mesh impedances for more.
+- **16:** matching by node set follows HyperNetX and XGI. Ignoring direction departs from networkx's `has_edge(u, v)`.
+- **21–22:** banning only the immediate second pass computes a shortest *non-backtracking walk* in the star equivalent, not a shortest simple path. A detour that costs less than −2·w_n still counts the negative weight twice, which the test of entry 22 shows (4 instead of 5). The exact simple-path version is polynomial but needs T-join or matching algorithms (Schrijver, *Combinatorial Optimization*, ch. 29), not Dijkstra.
+
+**Contradicted, and corrected**
+- **14:** removing every critical edge whole gave wrong two-edge-connected components when critical edges share a cycle. Corrected in this pull request.
+
+**Naming:**
+- In circuit theory a *port* is a pair of terminals.
+- One attachment is a *terminal* in CIM and OpenDSS, an *incidence* in hypergraph papers, and a *member* in XGI.
