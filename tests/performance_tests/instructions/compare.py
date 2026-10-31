@@ -27,7 +27,7 @@ from performance_tests.instructions.scenarios import SCENARIOS
 from performance_tests.instructions.workflows import workflow_scenario_names
 
 DEFAULT_THRESHOLD = 0.005
-"""Below the layout noise of up to 1.1% on purpose: real code generation changes of 0.5 to 1% matter, and a label is cheap."""
+"""Below the layout noise of up to 1.1% on purpose: code generation changes of 0.5 to 1% matter."""
 
 
 def comparison_table(base: dict[str, int], head: dict[str, int], threshold: float) -> tuple[str, list[str]]:
