@@ -1248,8 +1248,9 @@ and is skipped otherwise.
   through the allocator, so a C change often needs review even when only the
   layout moved. The threshold stays below that noise on purpose, because real
   code generation changes of 0.5 to 1% matter. Every count that moved is in
-  the table, largest change first, with aligned columns; counts that round to
-  0.00% are only counted below it. A pull request labelled
+  one of two aligned tables, more instructions and fewer instructions, each
+  largest change first; counts that round to 0.00% are only counted below
+  them. A pull request labelled
   `accept-instruction-change` still gets the table but does not fail.
 
   What the counts cannot see: they measure portable work, compiled with GCC.
