@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # labeled and unlabeled: accept-instruction-change only takes effect in a
+    # new run, since a re-run keeps the labels of the event that started it.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 jobs:
   lint:
