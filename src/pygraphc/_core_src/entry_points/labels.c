@@ -1,4 +1,5 @@
 #include "entry_points.h"
+#include "../helpers/ports.h"
 #include "../helpers/parse.h"
 #include "../helpers/components.h"
 
@@ -17,8 +18,8 @@
  * smallest index of its component.
  */
 PyObject *py_component_labels_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
+    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *port_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &edge_mask_obj, &node_mask_obj, &port_mask_obj)) return NULL;
     GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
@@ -32,7 +33,16 @@ PyObject *py_component_labels_ctx(PyObject *self, PyObject *args) {
     if (!result || node_count == 0) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return result; }
 
     ComponentResult components;
-    if (compute_components_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &components) < 0) {
+    PortMask port_mask;
+    if (parse_port_mask(graph, port_mask_obj, edge_mask, &port_mask) < 0) {
+        Py_DECREF(result); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;
+    }
+    int status = graph->ports
+        ? compute_components_with_ports(node_count, &graph->node_ids.edges, graph->ports, edge_mask, &port_mask,
+                                        node_mask, &components)
+        : compute_components_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &components);
+    release_port_mask(&port_mask);
+    if (status < 0) {
         Py_DECREF(result); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;
     }
     release_mask(&edge_mask_buffer);

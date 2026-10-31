@@ -64,9 +64,6 @@ from pygraphc._core import topological_sort_ctx as _topological_sort_ctx
 from pygraphc._dag_learn import estimate_cpds as _estimate_cpds
 from pygraphc._dag_learn import hill_climb_k2 as _hill_climb_k2
 from pygraphc._dag_learn import k2_local_score as _k2_local_score
-from pygraphc._ports import port_component_labels as _port_component_labels
-from pygraphc._ports import port_connected_components as _port_connected_components
-from pygraphc._ports import port_connected_components_with_branch_ids as _port_connected_components_with_branch_ids
 from pygraphc.reduction import (
     Leaf,
     MultiGraph,
@@ -2028,28 +2025,28 @@ class PortGraph(Graph[NodeIdT, BranchIdT]):
     def connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Each connected component as a set of node ids; an edge joins its active ports."""
         self._require_undirected("connected_components")
-        yield from _port_connected_components(self._graph_capsule)
+        yield from _connected_components_ctx(self._graph_capsule)
 
     def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Each weakly connected component as a set of node ids, direction ignored."""
         self._require_directed("weakly_connected_components")
-        yield from _port_connected_components(self._graph_capsule)
+        yield from _connected_components_ctx(self._graph_capsule)
 
     def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
         """The connected component containing ``node_id``."""
         self._require_undirected("connected_component")
-        return _component_of_labels(self, node_id, _port_component_labels(self._graph_capsule))
+        return _component_of_labels(self, node_id, _component_labels_ctx(self._graph_capsule))
 
     def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
         """``(node ids, branch ids)`` per component; an edge belongs to the component of its active ports."""
         self._require_undirected("connected_components_with_branch_ids")
         if self._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-        yield from _port_connected_components_with_branch_ids(self._graph_capsule, self._branch_ids)
+        yield from _connected_components_with_branches_ctx(self._graph_capsule, self._branch_ids)
 
     def component_labels(self) -> memoryview:
         """The smallest node index of its component per node index, as an int32 view; direction ignored."""
-        return memoryview(_port_component_labels(self._graph_capsule)).cast("i")
+        return memoryview(_component_labels_ctx(self._graph_capsule)).cast("i")
 
     def bfs(self, source: NodeIdT) -> list[NodeIdT]:
         """Nodes in breadth-first order from ``source``; an edge leads from active (in-)ports to active (out-)ports."""
@@ -2083,7 +2080,8 @@ class PortGraphView(Generic[NodeIdT, BranchIdT]):
         )
 
     def _masks(self) -> tuple[bytearray, bytearray, bytearray]:
-        return self._excluded_edges, self._excluded_ports, self._excluded_nodes
+        """Edge, node and port masks, in the order the _core kernels take them."""
+        return self._excluded_edges, self._excluded_nodes, self._excluded_ports
 
     def without_edges(self, edge_indices: Collection[int]) -> PortGraphView[NodeIdT, BranchIdT]:
         """A further view with the given edges masked as well."""
@@ -2120,18 +2118,18 @@ class PortGraphView(Generic[NodeIdT, BranchIdT]):
     def connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Each connected component of the active graph as a set of node ids; masked nodes are left out."""
         self._graph._require_undirected("connected_components")
-        yield from _port_connected_components(self._graph._graph_capsule, *self._masks())
+        yield from _connected_components_ctx(self._graph._graph_capsule, *self._masks())
 
     def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Each weakly connected component of the active graph, direction ignored."""
         self._graph._require_directed("weakly_connected_components")
-        yield from _port_connected_components(self._graph._graph_capsule, *self._masks())
+        yield from _connected_components_ctx(self._graph._graph_capsule, *self._masks())
 
     def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
         """The connected component containing ``node_id``; a masked node raises ``ValueError``."""
         self._graph._require_undirected("connected_component")
         return _component_of_labels(
-            self._graph, node_id, _port_component_labels(self._graph._graph_capsule, *self._masks())
+            self._graph, node_id, _component_labels_ctx(self._graph._graph_capsule, *self._masks())
         )
 
     def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
@@ -2139,13 +2137,13 @@ class PortGraphView(Generic[NodeIdT, BranchIdT]):
         self._graph._require_undirected("connected_components_with_branch_ids")
         if self._graph._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-        yield from _port_connected_components_with_branch_ids(
+        yield from _connected_components_with_branches_ctx(
             self._graph._graph_capsule, self._graph._branch_ids, *self._masks()
         )
 
     def component_labels(self) -> memoryview:
         """The smallest node index of its component per node index; masked nodes are labelled -1."""
-        return memoryview(_port_component_labels(self._graph._graph_capsule, *self._masks())).cast("i")
+        return memoryview(_component_labels_ctx(self._graph._graph_capsule, *self._masks())).cast("i")
 
     def bfs(self, source: NodeIdT) -> list[NodeIdT]:
         """Nodes in breadth-first order from ``source``; an edge leads from active (in-)ports to active (out-)ports."""

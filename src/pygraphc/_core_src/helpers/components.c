@@ -1,22 +1,37 @@
 #include "components.h"
+#include "ports.h"
 #include "union_find.h"
 
 /*
- * Core routine: parse edges, run union-find, assign sequential component IDs.
- * edge_mask: if non-NULL, skip edges where edge_mask[edge_index] != 0.
- * Caller must free result.labels.
- * Returns 0 on success, -1 on error.
+ * Union-find over the edges and sequential component ids per node. Two-port
+ * edges are unioned from the edge list under two_port_edge_mask; with
+ * has_multiport_edges, every edge with other than two ports also joins its
+ * active ports (port_is_active). The function is instantiated for both values
+ * of has_multiport_edges, so graphs of two-port edges run the loop as before.
  */
-int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *edge_mask,
-                              const uint8_t *node_mask,
-                              ComponentResult *components) {
+static inline __attribute__((always_inline)) int components_of(
+    int node_count, EdgeList *edges, const uint8_t *two_port_edge_mask, const uint8_t *node_mask,
+    const PortList *ports, const uint8_t *edge_mask, const uint8_t *port_mask, ComponentResult *components,
+    const int has_multiport_edges) {
     UnionFind union_find;
     if (union_find_init(&union_find, node_count) < 0) { PyErr_NoMemory(); return -1; }
     for (Py_ssize_t edge_index = 0; edge_index < edges->edge_count; edge_index++) {
-        if (edge_mask && edge_mask[edge_index]) continue;
+        if (two_port_edge_mask && two_port_edge_mask[edge_index]) continue;
         int first_node = EDGE_FIRST_ENDPOINT(edges, edge_index), second_node = EDGE_SECOND_ENDPOINT(edges, edge_index);
         if (node_mask && (node_mask[first_node] || node_mask[second_node])) continue;
         union_find_union(&union_find, first_node, second_node);
+    }
+    if (has_multiport_edges) {
+        for (Py_ssize_t edge = 0; edge < edges->edge_count; edge++) {
+            int first_port = ports->port_offsets[edge], end_port = ports->port_offsets[edge + 1];
+            if (end_port - first_port == 2) continue;
+            int first_active_node = -1;
+            for (int port = first_port; port < end_port; port++) {
+                if (!port_is_active(ports, (int)edge, port, edge_mask, port_mask, node_mask)) continue;
+                if (first_active_node < 0) first_active_node = ports->port_nodes[port];
+                else union_find_union(&union_find, first_active_node, ports->port_nodes[port]);
+            }
+        }
     }
 
     /* labels + component_id_by_root in one allocation */
@@ -41,6 +56,24 @@ int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *ed
 
     union_find_free(&union_find);
     return 0;
+}
+
+/*
+ * Core routine: union-find over the edge list, sequential component IDs.
+ * edge_mask: if non-NULL, skip edges where edge_mask[edge_index] != 0.
+ * Caller must free result.labels.
+ * Returns 0 on success, -1 on error.
+ */
+int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *edge_mask,
+                              const uint8_t *node_mask,
+                              ComponentResult *components) {
+    return components_of(node_count, edges, edge_mask, node_mask, NULL, NULL, NULL, components, 0);
+}
+
+int compute_components_with_ports(int node_count, EdgeList *edges, const PortList *ports, const uint8_t *edge_mask,
+                                  const PortMask *port_mask, const uint8_t *node_mask, ComponentResult *components) {
+    return components_of(node_count, edges, two_port_edge_mask(port_mask, edge_mask), node_mask, ports, edge_mask,
+                         port_mask->ports, components, 1);
 }
 
 /* ── Strongly connected components (iterative Tarjan's, directed CSR) ── */
