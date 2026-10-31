@@ -246,6 +246,54 @@ def test_methods_of_later_stages_refuse_a_port_mask_on_two_port_edges() -> None:
         view.bridges()
 
 
+_METHODS_WITHOUT_PORT_MASKS = {
+    "with_edges": lambda view: view.with_edges([(1, 3)]),
+    "split_node": lambda view: view.split_node(2, 9, [1]),
+    "incident_edge_indices": lambda view: view.incident_edge_indices(2),
+    "outgoing_edge_indices": lambda view: view.outgoing_edge_indices(2),
+    "incoming_edge_indices": lambda view: view.incoming_edge_indices(2),
+    "neighbors": lambda view: view.neighbors(2),
+    "successors": lambda view: view.successors(2),
+    "predecessors": lambda view: view.predecessors(2),
+    "degree": lambda view: view.degree(2),
+    "out_degree": lambda view: view.out_degree(2),
+    "in_degree": lambda view: view.in_degree(2),
+    "all_edge_paths": lambda view: view.all_edge_paths(1, 3),
+    "bridges": lambda view: view.bridges(),
+    "bridges_with_branch_ids": lambda view: view.bridges_with_branch_ids(),
+    "articulation_points": lambda view: view.articulation_points(),
+    "biconnected_components": lambda view: list(view.biconnected_components()),
+    "strongly_connected_components": lambda view: list(view.strongly_connected_components()),
+    "topological_sort": lambda view: view.topological_sort(),
+    "dag_longest_path": lambda view: view.dag_longest_path(),
+    "quotient_edges": lambda view: view.quotient_edges(memoryview(bytes(12)).cast("i")),
+    "series_parallel_reduce": lambda view: view.series_parallel_reduce(bytes(3), bytes(3)),
+    "degrees": lambda view: view.degrees(),
+    "bcc_edge_labels": lambda view: view.bcc_edge_labels(),
+    "cycle_basis": lambda view: view.cycle_basis(),
+}
+
+
+@pytest.mark.parametrize("method_name", list(_METHODS_WITHOUT_PORT_MASKS))
+def test_methods_of_later_stages_refuse_every_port_mask(method_name: str) -> None:
+    """D19: each method whose kernel does not read port masks yet raises on a view with one."""
+    view = Graph([1, 2, 3], [(1, 2), (2, 3)], branch_ids=[10, 11]).without_ports([(0, 1)])
+
+    with pytest.raises(NotImplementedError, match=f"{method_name} does not read port masks"):
+        _METHODS_WITHOUT_PORT_MASKS[method_name](view)
+
+
+def test_pure_python_methods_refuse_multiport_edges() -> None:
+    """D19: methods that never reach a C kernel check for multiport edges themselves."""
+    graph = _three_port_edge_between_two_port_edges()
+
+    # --- Assert ---
+    with pytest.raises(NotImplementedError, match="is_multigraph"):
+        _ = graph.is_multigraph
+    with pytest.raises(NotImplementedError, match="split_node"):
+        graph.split_node(2, 9, [0])
+
+
 # ── Graphs of two-port edges follow the same rules ──
 
 
