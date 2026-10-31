@@ -2078,6 +2078,12 @@ class PortGraph(Graph[NodeIdT, BranchIdT]):
         lengths = self.shortest_path_lengths(weights, source)
         return max(lengths.values()) if lengths else 0.0
 
+    def shortest_path(self, weights: Sequence[float], source: NodeIdT, target: NodeIdT) -> list[NodeIdT]:
+        """The nodes of a cheapest path, bidirectional Dijkstra; one weight per port."""
+        _distance, path = _dijkstra_ctx(self._graph_capsule, weights, source, target)
+        result: list[NodeIdT] = path
+        return result
+
 
 class PortGraphView(Generic[NodeIdT, BranchIdT]):
     """A ``PortGraph`` with edges, ports and nodes masked; masks combine as a union in any order."""
@@ -2202,9 +2208,14 @@ class PortGraphView(Generic[NodeIdT, BranchIdT]):
         lengths = self.shortest_path_lengths(weights, source)
         return max(lengths.values()) if lengths else 0.0
 
+    def shortest_path(self, weights: Sequence[float], source: NodeIdT, target: NodeIdT) -> list[NodeIdT]:
+        """The nodes of a cheapest path, bidirectional Dijkstra; one weight per port."""
+        _distance, path = _dijkstra_ctx(self._graph._graph_capsule, weights, source, target, *self._masks())
+        result: list[NodeIdT] = path
+        return result
+
 
 _PORT_GRAPH_PLANNED = {
-    "shortest_path": "the traversal stage",
     "articulation_points": "the critical-elements stage",
     "biconnected_components": "the critical-elements stage",
     "two_edge_connected_components": "the critical-elements stage",

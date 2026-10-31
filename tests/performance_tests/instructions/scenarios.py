@@ -516,6 +516,14 @@ def _port_shortest_path_lengths() -> Measured:
     return lambda: graph.shortest_path_lengths(weights, 0)
 
 
+@register("port_shortest_path/random_ports_20k")
+def _port_shortest_path() -> Measured:
+    graph = _port_graph()
+    rng = random.Random(0)
+    weights = [rng.uniform(0.1, 10.0) for _ in range(graph.port_count)]
+    return lambda: graph.shortest_path(weights, 0, SIZE - 1)
+
+
 # ── Structure learning ──
 
 

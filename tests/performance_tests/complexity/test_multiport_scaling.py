@@ -32,6 +32,7 @@ OPERATIONS: dict[str, Operation] = {
     "masked_ports_view": lambda graph: lambda: list(graph.without_ports([(0, 0)]).connected_components()),
     "bfs": lambda graph: lambda: graph.bfs(0),
     "shortest_path_lengths": lambda graph: _shortest_path_lengths_with_unit_weights(graph),
+    "shortest_path": lambda graph: _shortest_path_with_unit_weights(graph),
 }
 
 
@@ -39,6 +40,12 @@ def _shortest_path_lengths_with_unit_weights(graph: Graph[int, int]) -> Callable
     """Build one weight per port outside the timed call."""
     weights = [1.0] * graph.port_count
     return lambda: graph.shortest_path_lengths(weights, 0)
+
+
+def _shortest_path_with_unit_weights(graph: Graph[int, int]) -> Callable[[], object]:
+    """From the first to the last node, with one weight per port built outside the timed call."""
+    weights = [1.0] * graph.port_count
+    return lambda: graph.shortest_path(weights, 0, graph.node_count - 1)
 
 
 def _prepare(operation: Operation, shape: Shape) -> Callable[[int], Callable[[], object]]:

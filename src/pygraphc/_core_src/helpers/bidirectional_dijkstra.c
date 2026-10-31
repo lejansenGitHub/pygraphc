@@ -32,15 +32,55 @@ static inline int bidirectional_reached(const int *heap_position, const uint8_t 
     return heap_position[node] != -1 || settled[node];
 }
 
+/* Relax the search state `to`, reached from `from` at distance `reach`, on the
+   side being expanded, and record a better meeting with the other side. */
+static inline __attribute__((always_inline)) void bidirectional_relax(
+    MinHeap *frontier, double *distance_near, int *predecessor_near, const uint8_t *settled_near,
+    const int *heap_position_near, const double *distance_far, const uint8_t *settled_far,
+    const int *heap_position_far, int expand_forward, int from, int to, double reach, double *best_weight,
+    int *meet_forward, int *meet_backward) {
+    if (bidirectional_reached(heap_position_far, settled_far, to) && reach + distance_far[to] < *best_weight) {
+        *best_weight = reach + distance_far[to];
+        *meet_forward = expand_forward ? from : to;
+        *meet_backward = expand_forward ? to : from;
+    }
+    if (!bidirectional_reached(heap_position_near, settled_near, to)) {
+        distance_near[to] = reach;
+        predecessor_near[to] = from;
+        int heap_slot = frontier->size++;
+        frontier->nodes[heap_slot] = to;
+        frontier->heap_position[to] = heap_slot;
+        min_heap_sift_up(frontier, heap_slot);
+    } else if (!settled_near[to] && reach < distance_near[to]) {
+        distance_near[to] = reach;
+        predecessor_near[to] = from;
+        min_heap_sift_up(frontier, frontier->heap_position[to]);
+    }
+}
+
+/* Drop the edge states (indices from node_count on) from a path of search states. */
+static void bidirectional_keep_nodes(BidirectionalPath *out, int node_count) {
+    int kept = 0;
+    for (int position = 0; position < out->path_length; position++)
+        if (out->path[position] < node_count) out->path[kept++] = out->path[position];
+    out->path_length = kept;
+}
+
 /* Bidirectional Dijkstra over the CSR adjacency. The forward search follows
    outgoing edges from source, the backward search incoming edges into target;
    undirected graphs use the same adjacency for both. The frontier with the
    smaller top key is expanded next, the best source-target weight seen over
    relaxed edges is tracked as the searches proceed, and the search stops once
-   a node has been settled by both. Returns -1 on error. */
-int bidirectional_dijkstra(int node_count, const AdjacencyList *adjacency, const double *edge_weights,
-                           const uint8_t *edge_mask, const uint8_t *node_mask,
-                           int directed, int source, int target, BidirectionalPath *out) {
+   a state has been settled by both. With has_multiport_edges, each edge with
+   three or more ports is a search state (node_count + e), entered through an
+   active port at its weight and left through each active exit port at its
+   weight (directed: forward in to out, backward out to in), never back to the
+   node it was entered from; a two-port edge then costs the sum of its two port
+   weights. Returns -1 on error. */
+static inline __attribute__((always_inline)) int bidirectional_search(
+    int node_count, int edge_count, const AdjacencyList *adjacency, const double *weights, const PortList *ports,
+    const uint8_t *two_port_edge_mask, const uint8_t *edge_mask, const uint8_t *port_mask, const uint8_t *node_mask,
+    int directed, int source, int target, BidirectionalPath *out, const int has_multiport_edges) {
     out->weight = HUGE_VAL;
     out->path = NULL;
     out->path_length = 0;
@@ -50,25 +90,26 @@ int bidirectional_dijkstra(int node_count, const AdjacencyList *adjacency, const
     const int *backward_edge_indices = directed ? adjacency->reverse_edge_indices : adjacency->edge_indices;
     if (!backward_offset) return 0;  /* directed graph without edges */
 
-    double *distance = (double *)malloc(2 * (size_t)node_count * sizeof(double));
-    int *predecessor = (int *)malloc(2 * (size_t)node_count * sizeof(int));
-    int *heap = (int *)malloc(2 * (size_t)node_count * sizeof(int));
-    int *heap_position = (int *)malloc(2 * (size_t)node_count * sizeof(int));
-    uint8_t *settled = (uint8_t *)calloc(2 * (size_t)node_count, 1);
+    size_t state_count = (size_t)node_count + (has_multiport_edges ? (size_t)edge_count : 0);
+    double *distance = (double *)malloc(2 * state_count * sizeof(double));
+    int *predecessor = (int *)malloc(2 * state_count * sizeof(int));
+    int *heap = (int *)malloc(2 * state_count * sizeof(int));
+    int *heap_position = (int *)malloc(2 * state_count * sizeof(int));
+    uint8_t *settled = (uint8_t *)calloc(2 * state_count, 1);
     if (!distance || !predecessor || !heap || !heap_position || !settled) {
         free(distance); free(predecessor); free(heap); free(heap_position); free(settled);
         PyErr_NoMemory();
         return -1;
     }
-    memset(heap_position, -1, 2 * (size_t)node_count * sizeof(int));
+    memset(heap_position, -1, 2 * state_count * sizeof(int));
 
-    double *distance_forward = distance, *distance_backward = distance + node_count;
-    int *predecessor_forward = predecessor, *predecessor_backward = predecessor + node_count;
-    int *heap_position_forward = heap_position, *heap_position_backward = heap_position + node_count;
-    uint8_t *settled_forward = settled, *settled_backward = settled + node_count;
+    double *distance_forward = distance, *distance_backward = distance + state_count;
+    int *predecessor_forward = predecessor, *predecessor_backward = predecessor + state_count;
+    int *heap_position_forward = heap_position, *heap_position_backward = heap_position + state_count;
+    uint8_t *settled_forward = settled, *settled_backward = settled + state_count;
 
     MinHeap heap_forward = {distance_forward, heap, heap_position_forward, 1};
-    MinHeap heap_backward = {distance_backward, heap + node_count, heap_position_backward, 1};
+    MinHeap heap_backward = {distance_backward, heap + state_count, heap_position_backward, 1};
     distance_forward[source] = 0.0; predecessor_forward[source] = -1;
     heap_forward.nodes[0] = source; heap_position_forward[source] = 0;
     distance_backward[target] = 0.0; predecessor_backward[target] = -1;
@@ -92,36 +133,50 @@ int bidirectional_dijkstra(int node_count, const AdjacencyList *adjacency, const
         const int *neighbors = expand_forward ? adjacency->neighbors : backward_neighbors;
         const int *edge_indices = expand_forward ? adjacency->edge_indices : backward_edge_indices;
 
-        int node = min_heap_pop(frontier);
-        settled_near[node] = 1;
-        if (bidirectional_reached(heap_position_far, settled_far, node) && distance_near[node] + distance_far[node] < best_weight) {
-            best_weight = distance_near[node] + distance_far[node];
-            meet_forward = node; meet_backward = node;
+        int state = min_heap_pop(frontier);
+        settled_near[state] = 1;
+        if (bidirectional_reached(heap_position_far, settled_far, state) && distance_near[state] + distance_far[state] < best_weight) {
+            best_weight = distance_near[state] + distance_far[state];
+            meet_forward = state; meet_backward = state;
         }
-        if (settled_far[node]) break;
+        if (settled_far[state]) break;
 
+        if (has_multiport_edges && state >= node_count) {
+            int edge = state - node_count;
+            int first_exit = (directed && expand_forward) ? ports->out_port_offsets[edge] : ports->port_offsets[edge];
+            int end_exit = (directed && !expand_forward) ? ports->out_port_offsets[edge] : ports->port_offsets[edge + 1];
+            int entry_node = predecessor_near[state];
+            for (int exit = first_exit; exit < end_exit; exit++) {
+                if (ports->port_nodes[exit] == entry_node) continue;
+                if (!port_is_active(ports, edge, exit, edge_mask, port_mask, node_mask)) continue;
+                bidirectional_relax(frontier, distance_near, predecessor_near, settled_near, heap_position_near,
+                                    distance_far, settled_far, heap_position_far, expand_forward, state,
+                                    ports->port_nodes[exit], distance_near[state] + weights[exit], &best_weight,
+                                    &meet_forward, &meet_backward);
+            }
+            continue;
+        }
+
+        int node = state;
         for (int slot = offset[node]; slot < offset[node + 1]; slot++) {
-            if (edge_mask && edge_mask[edge_indices[slot]]) continue;
             int neighbor = neighbors[slot];
-            if (node_mask && node_mask[neighbor]) continue;
-            double reach = distance_near[node] + edge_weights[edge_indices[slot]];
-            if (bidirectional_reached(heap_position_far, settled_far, neighbor) && reach + distance_far[neighbor] < best_weight) {
-                best_weight = reach + distance_far[neighbor];
-                meet_forward = expand_forward ? node : neighbor;
-                meet_backward = expand_forward ? neighbor : node;
+            int edge_index = edge_indices[slot];
+            double edge_weight;
+            if (has_multiport_edges && neighbor < 0) {
+                int edge = -1 - neighbor;
+                if (!port_is_active(ports, edge, edge_index, edge_mask, port_mask, node_mask)) continue;
+                neighbor = node_count + edge;
+                edge_weight = weights[edge_index];
+            } else {
+                if (two_port_edge_mask && two_port_edge_mask[edge_index]) continue;
+                if (node_mask && node_mask[neighbor]) continue;
+                edge_weight = has_multiport_edges
+                    ? weights[ports->port_offsets[edge_index]] + weights[ports->port_offsets[edge_index] + 1]
+                    : weights[edge_index];
             }
-            if (!bidirectional_reached(heap_position_near, settled_near, neighbor)) {
-                distance_near[neighbor] = reach;
-                predecessor_near[neighbor] = node;
-                int heap_slot = frontier->size++;
-                frontier->nodes[heap_slot] = neighbor;
-                frontier->heap_position[neighbor] = heap_slot;
-                min_heap_sift_up(frontier, heap_slot);
-            } else if (!settled_near[neighbor] && reach < distance_near[neighbor]) {
-                distance_near[neighbor] = reach;
-                predecessor_near[neighbor] = node;
-                min_heap_sift_up(frontier, frontier->heap_position[neighbor]);
-            }
+            bidirectional_relax(frontier, distance_near, predecessor_near, settled_near, heap_position_near,
+                                distance_far, settled_far, heap_position_far, expand_forward, node, neighbor,
+                                distance_near[node] + edge_weight, &best_weight, &meet_forward, &meet_backward);
         }
     }
 
@@ -129,10 +184,27 @@ int bidirectional_dijkstra(int node_count, const AdjacencyList *adjacency, const
     if (best_weight < HUGE_VAL) {
         out->weight = best_weight;
         status = bidirectional_build_path(predecessor_forward, predecessor_backward, meet_forward, meet_backward, out);
+        if (has_multiport_edges && status == 0) bidirectional_keep_nodes(out, node_count);
     }
 
     free(distance); free(predecessor); free(heap); free(heap_position); free(settled);
     return status;
+}
+
+int bidirectional_dijkstra(int node_count, const AdjacencyList *adjacency, const double *edge_weights,
+                           const uint8_t *edge_mask, const uint8_t *node_mask,
+                           int directed, int source, int target, BidirectionalPath *out) {
+    return bidirectional_search(node_count, 0, adjacency, edge_weights, NULL, edge_mask, edge_mask, NULL, node_mask,
+                                directed, source, target, out, 0);
+}
+
+int bidirectional_dijkstra_with_ports(int node_count, int edge_count, const AdjacencyList *adjacency,
+                                      const double *port_weights, const PortList *ports,
+                                      const uint8_t *two_port_edge_mask, const uint8_t *edge_mask,
+                                      const uint8_t *port_mask, const uint8_t *node_mask, int directed, int source,
+                                      int target, BidirectionalPath *out) {
+    return bidirectional_search(node_count, edge_count, adjacency, port_weights, ports, two_port_edge_mask, edge_mask,
+                                port_mask, node_mask, directed, source, target, out, 1);
 }
 
 /* Turn the node indices of a bidirectional result into a list of node IDs. */

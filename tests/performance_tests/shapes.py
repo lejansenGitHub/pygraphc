@@ -82,7 +82,7 @@ def port_chain(node_count: int) -> tuple[list[int], PortEdges]:
 
 
 def random_ports(node_count: int, seed: int = 0) -> tuple[list[int], PortEdges]:
-    """A spanning path of lines plus random edges with two to four ports."""
+    """A spanning path of two-port edges plus random edges with two to four ports."""
     rng = random.Random(seed)
     node_ids, edges = path(node_count)
     port_edges: PortEdges = list(edges)

@@ -249,6 +249,8 @@ def test_one_active_in_port_reaches_every_out_port() -> None:
     # --- Assert ---
     assert view.bfs(2) == [2, 3, 4]
     assert view.bfs(1) == [1]
+    assert view.shortest_path([1.0] * 4, 2, 4) == [2, 4]
+    assert view.shortest_path([1.0] * 4, 1, 4) == []
 
 
 def test_masking_case_9_directed_edge_without_an_active_in_port_transmits_nothing() -> None:
@@ -269,6 +271,8 @@ def test_path_through_a_multiport_edge_costs_entry_plus_exit() -> None:
     # --- Assert ---
     assert graph.shortest_path_lengths(weights, 1) == {1: 0.0, 2: 2.0, 3: 9.0, 4: 7.0, 5: 9.0}
     assert graph.shortest_path_lengths(weights, 3) == {3: 0.0, 2: 7.0, 4: 8.0, 1: 9.0, 5: 10.0}
+    assert graph.shortest_path(weights, 1, 5) == [1, 2, 4, 5]
+    assert graph.shortest_path(weights, 5, 3) == [5, 4, 3]
 
 
 def test_masking_case_10_paths_only_through_active_ports() -> None:
@@ -279,6 +283,8 @@ def test_masking_case_10_paths_only_through_active_ports() -> None:
     # --- Assert ---
     assert view.shortest_path_lengths(weights, 1) == {1: 0.0, 2: 2.0, 3: 9.0}
     assert view.shortest_path_lengths(weights, 4) == {4: 0.0, 5: 2.0}
+    assert view.shortest_path(weights, 1, 3) == [1, 2, 3]
+    assert view.shortest_path(weights, 1, 5) == []
 
 
 def test_bfs_under_an_edge_mask() -> None:

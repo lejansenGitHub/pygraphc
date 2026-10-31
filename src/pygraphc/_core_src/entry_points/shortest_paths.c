@@ -510,12 +510,14 @@ PyObject *py_multi_source_dijkstra_by_node_id(PyObject *self, PyObject *args) {
 }
 
 PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *weights_obj, *source_obj, *target_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "OOOO|OO", &capsule, &weights_obj, &source_obj, &target_obj, &edge_mask_obj, &node_mask_obj))
+    PyObject *capsule, *weights_obj, *source_obj, *target_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *port_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "OOOO|OOO", &capsule, &weights_obj, &source_obj, &target_obj, &edge_mask_obj, &node_mask_obj, &port_mask_obj))
         return NULL;
     GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
+    int edge_count = (int)graph->node_ids.edges.edge_count;
+    const PortList *ports = graph->ports;
 
     long source_node_id = PyLong_AsLong(source_obj), target_node_id = PyLong_AsLong(target_obj);
     if (PyErr_Occurred()) return NULL;
@@ -534,25 +536,32 @@ PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     }
 
     const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
-    if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
+    if (parse_mask(edge_mask_obj, edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
     const uint8_t *node_mask; Py_buffer node_mask_buffer;
     if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); return NULL; }
+    PortMask port_mask;
+    if (parse_port_mask(graph, port_mask_obj, edge_mask, &port_mask) < 0) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL; }
 
     if (node_mask && (node_mask[source] || node_mask[target])) {
-        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+        release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
         PyObject *empty_path = PyList_New(0);
         return Py_BuildValue("(dN)", HUGE_VAL, empty_path);
     }
 
     WeightList weights;
-    if (parse_weights(weights_obj, &weights, graph->node_ids.edges.edge_count) < 0) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL; }
-    if (!graph->has_adjacency) { free_weights(&weights); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); PyObject *empty_path = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, empty_path); }
+    if (parse_weights(weights_obj, &weights, ports ? ports->port_count : edge_count) < 0) { release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL; }
+    if (!graph->has_adjacency) { free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); PyObject *empty_path = PyList_New(0); return Py_BuildValue("(dN)", HUGE_VAL, empty_path); }
 
     BidirectionalPath bidirectional_path;
-    int failed = bidirectional_dijkstra(node_count, &graph->adjacency, weights.values, edge_mask, node_mask, graph->directed, source, target, &bidirectional_path) < 0;
+    int failed = (ports
+        ? bidirectional_dijkstra_with_ports(node_count, edge_count, &graph->adjacency, weights.values, ports,
+                                            two_port_edge_mask(&port_mask, edge_mask), edge_mask, port_mask.ports,
+                                            node_mask, graph->directed, source, target, &bidirectional_path)
+        : bidirectional_dijkstra(node_count, &graph->adjacency, weights.values, edge_mask, node_mask, graph->directed,
+                                 source, target, &bidirectional_path)) < 0;
     PyObject *path = failed ? NULL : bidirectional_path_to_list(&bidirectional_path, &graph->node_ids);
     free(bidirectional_path.path);
-    free_weights(&weights); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+    free_weights(&weights); release_port_mask(&port_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
     if (!path) return NULL;
     return Py_BuildValue("(dN)", bidirectional_path.weight, path);
 }
