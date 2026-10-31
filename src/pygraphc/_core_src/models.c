@@ -136,10 +136,6 @@ void free_port_list(PortList *ports) {
     free(ports->port_offsets);
     free(ports->port_nodes);
     free(ports->out_port_offsets);
-    free(ports->port_edges);
-    free(ports->port_is_out);
-    free(ports->incidence_offsets);
-    free(ports->incidence_ports);
 }
 
 void free_weights(WeightList *weights) {

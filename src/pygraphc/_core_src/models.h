@@ -113,12 +113,6 @@ typedef struct {
     int *port_offsets;      /* edge_count + 1: the ports of edge e are port_offsets[e] .. port_offsets[e + 1] - 1 */
     int *port_nodes;        /* port_count: the node index each port sits at */
     int *out_port_offsets;  /* edge_count, directed only (NULL otherwise): out-ports of e start here, in-ports before */
-    /* Read only by the stage-1 extension pygraphc._ports, removed together with it. */
-    int edge_count;
-    int *port_edges;
-    uint8_t *port_is_out;
-    int *incidence_offsets;
-    int *incidence_ports;
 } PortList;
 
 PYGRAPHC_INTERNAL void free_port_list(PortList *ports);

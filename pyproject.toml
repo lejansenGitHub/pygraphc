@@ -137,7 +137,7 @@ module = ["pytest.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["pygraphc._core", "pygraphc._dag_learn", "pygraphc._ports", "scipy.*", "numpy.*"]
+module = ["pygraphc._core", "pygraphc._dag_learn", "scipy.*", "numpy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
