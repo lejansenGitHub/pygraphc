@@ -72,13 +72,13 @@ static PyMethodDef methods[] = {
      "multi_source_dijkstra_by_node_id(node_ids, node_id_edges, weights, source_node_ids, cutoff) -> dict[NodeId, float]\n\n"
      "Multi-source Dijkstra with node-ID-based edges."},
     {"parse_graph", py_parse_graph, METH_VARARGS,
-     "parse_graph(node_ids, edges[, dst]) -> capsule\n\n"
-     "Parse graph once, return opaque capsule for reuse across algorithms."},
-    {"parse_terminal_graph", py_parse_terminal_graph, METH_VARARGS,
-     "parse_terminal_graph(node_ids, edges[, directed]) -> capsule\n\n"
-     "Parse a graph whose edges are tuples of terminals; directed edges are (u, v) or (in_nodes, out_nodes)."},
-    {"terminal_graph_shape", py_terminal_graph_shape, METH_VARARGS,
-     "terminal_graph_shape(capsule) -> (node_count, edge_count, terminal_count) as stored in C."},
+     "parse_graph(node_ids, edges[, dst, directed]) -> capsule\n\n"
+     "Parse a graph once, return an opaque capsule for reuse across algorithms. An edge is a tuple of node ids, one "
+     "per terminal; directed edges are (u, v) or (in_nodes, out_nodes)."},
+    {"graph_shape", py_graph_shape, METH_VARARGS,
+     "graph_shape(capsule) -> (node_count, edge_count, terminal_count) as stored in C."},
+    {"has_multi_terminal_edges", py_has_multi_terminal_edges, METH_VARARGS,
+     "has_multi_terminal_edges(capsule) -> bool: whether the graph has an edge of other than two terminals."},
     {"terminal_offsets", py_terminal_offsets, METH_VARARGS,
      "terminal_offsets(capsule) -> bytes\n\nint32 offsets: the terminals of edge e are offsets[e] .. offsets[e + 1] - 1."},
     {"terminal_nodes", py_terminal_nodes, METH_VARARGS,

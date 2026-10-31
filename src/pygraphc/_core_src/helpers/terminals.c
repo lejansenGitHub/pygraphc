@@ -1,205 +1,221 @@
-/* Edges with terminals: parsing, the adjacency list with multi-terminal entries and terminal masks. */
+/* Edges with terminals: parsing and terminal masks. */
 #include "terminals.h"
 #include "parse.h"
 
 /* ── Parsing ── */
 
+/*
+ * The terminal nodes parsed so far. While every edge has two terminals
+ * (directed: one in, one out), edge e has terminals 2e and 2e + 1, the
+ * offsets stay NULL and nodes is the edge list itself, interleaved; at the
+ * first edge that differs the offsets are written out and kept from then on.
+ * The state travels by value, so the parse loop keeps it in registers.
+ */
 typedef struct {
-    TerminalList *terminals;
+    int *nodes;
     int capacity;
-} TerminalBuilder;
+    int count;
+} TerminalNodes;
 
-static int append_terminal(TerminalBuilder *builder, int node) {
-    TerminalList *terminals = builder->terminals;
-    if (terminals->terminal_count == builder->capacity) {
-        int capacity = builder->capacity > 0 ? builder->capacity * 2 : 64;
-        int *terminal_nodes = (int *)realloc(terminals->terminal_nodes, (size_t)capacity * sizeof(int));
-        if (!terminal_nodes) { PyErr_NoMemory(); return -1; }
-        terminals->terminal_nodes = terminal_nodes;
-        builder->capacity = capacity;
+/* Room for `more` terminals; nodes is NULL (the old array freed) when memory runs out. */
+static __attribute__((noinline)) TerminalNodes grow_terminal_nodes(TerminalNodes terminal_nodes, Py_ssize_t more) {
+    Py_ssize_t capacity = terminal_nodes.capacity;
+    while (capacity < terminal_nodes.count + more) capacity *= 2;
+    int *nodes = (int *)realloc(terminal_nodes.nodes, (size_t)capacity * sizeof(int));
+    if (!nodes) { free(terminal_nodes.nodes); PyErr_NoMemory(); }
+    terminal_nodes.nodes = nodes;
+    terminal_nodes.capacity = (int)capacity;
+    return terminal_nodes;
+}
+
+/* Write the nodes of `length` node ids from nodes[at] on; the caller has made room. Returns 0, or -1 with an exception set. */
+static inline __attribute__((always_inline)) int write_nodes(int *nodes, int at, const IntMap *node_index_by_node_id,
+                                                             PyObject **items, Py_ssize_t length) {
+    for (Py_ssize_t position = 0; position < length; position++) {
+        long node_id = PyLong_AsLong(items[position]);
+        if (node_id == -1 && PyErr_Occurred()) return -1;
+        int node = intmap_get((IntMap *)node_index_by_node_id, node_id);
+        if (node < 0) { PyErr_SetString(PyExc_ValueError, "edge references unknown node ID"); return -1; }
+        nodes[at + position] = node;
     }
-    terminals->terminal_nodes[terminals->terminal_count++] = node;
     return 0;
 }
 
-static int node_of(const GraphContext *graph, PyObject *item, int *node_out) {
-    long node_id = PyLong_AsLong(item);
-    if (node_id == -1 && PyErr_Occurred()) return -1;
-    int node = graph->node_ids.node_count > 0
-        ? intmap_get((IntMap *)&graph->node_ids.node_index_by_node_id, node_id) : -1;
-    if (node < 0) { PyErr_SetString(PyExc_ValueError, "edge references unknown node ID"); return -1; }
-    *node_out = node;
-    return 0;
-}
-
-static int append_terminals_of(TerminalBuilder *builder, const GraphContext *graph, PyObject *node_ids_obj) {
+/*
+ * Append a sequence of node ids, at least one. Returns the new state; nodes
+ * is NULL (everything freed) or count is -1 (nodes kept) on error, with an
+ * exception set.
+ */
+static inline __attribute__((always_inline)) TerminalNodes append_sequence(TerminalNodes terminal_nodes,
+                                                                           const IntMap *node_index_by_node_id,
+                                                                           PyObject *node_ids_obj) {
     PyObject *node_ids_fast = PySequence_Fast(node_ids_obj, "the terminals of an edge must be a sequence of node ids");
-    if (!node_ids_fast) return -1;
-    Py_ssize_t count = PySequence_Fast_GET_SIZE(node_ids_fast);
-    if (count == 0) {
-        Py_DECREF(node_ids_fast);
+    if (!node_ids_fast) { terminal_nodes.count = -1; return terminal_nodes; }
+    Py_ssize_t length = PySequence_Fast_GET_SIZE(node_ids_fast);
+    if (length == 0) {
         PyErr_SetString(PyExc_ValueError, "an edge needs at least one terminal");
-        return -1;
-    }
-    PyObject **items = PySequence_Fast_ITEMS(node_ids_fast);
-    for (Py_ssize_t position = 0; position < count; position++) {
-        int node;
-        if (node_of(graph, items[position], &node) < 0 || append_terminal(builder, node) < 0) {
-            Py_DECREF(node_ids_fast);
-            return -1;
-        }
+        terminal_nodes.count = -1;
+    } else {
+        if (terminal_nodes.count + length > terminal_nodes.capacity) terminal_nodes = grow_terminal_nodes(terminal_nodes, length);
+        if (!terminal_nodes.nodes) { Py_DECREF(node_ids_fast); return terminal_nodes; }
+        if (write_nodes(terminal_nodes.nodes, terminal_nodes.count, node_index_by_node_id,
+                        PySequence_Fast_ITEMS(node_ids_fast), length) < 0)
+            terminal_nodes.count = -1;
+        else
+            terminal_nodes.count += (int)length;
     }
     Py_DECREF(node_ids_fast);
-    return 0;
+    return terminal_nodes;
 }
 
-/* A directed edge is (u, v), from u to v, or (in_nodes, out_nodes) with at least one of each. */
-static int append_directed_edge(TerminalBuilder *builder, const GraphContext *graph, PyObject *edge_obj, int edge) {
+/* The terminals of a directed edge given as (in_nodes, out_nodes); *out_start is its first out-terminal. */
+static __attribute__((noinline)) TerminalNodes append_in_and_out_terminals(TerminalNodes terminal_nodes,
+                                                                            const IntMap *node_index_by_node_id,
+                                                                            PyObject **sides, int *out_start) {
+    terminal_nodes = append_sequence(terminal_nodes, node_index_by_node_id, sides[0]);
+    if (!terminal_nodes.nodes || terminal_nodes.count < 0) return terminal_nodes;
+    *out_start = terminal_nodes.count;
+    return append_sequence(terminal_nodes, node_index_by_node_id, sides[1]);
+}
+
+/* A directed edge is (u, v), from u to v, or (in_nodes, out_nodes); *out_start is its first out-terminal. */
+static inline __attribute__((always_inline)) TerminalNodes append_directed_edge(TerminalNodes terminal_nodes,
+                                                                                const IntMap *node_index_by_node_id,
+                                                                                PyObject *edge_obj, int *out_start) {
     PyObject *edge_fast = PySequence_Fast(edge_obj, "a directed edge is (u, v) or (in_nodes, out_nodes)");
-    if (!edge_fast) return -1;
-    if (PySequence_Fast_GET_SIZE(edge_fast) != 2) {
-        Py_DECREF(edge_fast);
-        PyErr_SetString(PyExc_ValueError, "a directed edge is (u, v) or (in_nodes, out_nodes)");
-        return -1;
-    }
+    if (!edge_fast) { terminal_nodes.count = -1; return terminal_nodes; }
     PyObject **sides = PySequence_Fast_ITEMS(edge_fast);
-    int status = -1;
-    if (PyLong_Check(sides[0]) && PyLong_Check(sides[1])) {
-        int first_node, second_node;
-        if (node_of(graph, sides[0], &first_node) == 0 && node_of(graph, sides[1], &second_node) == 0 &&
-            append_terminal(builder, first_node) == 0) {
-            builder->terminals->out_terminal_offsets[edge] = builder->terminals->terminal_count;
-            status = append_terminal(builder, second_node);
+    int pair = PySequence_Fast_GET_SIZE(edge_fast) == 2;
+    if (pair && PyLong_Check(sides[0]) && PyLong_Check(sides[1])) {
+        if (terminal_nodes.count + 2 > terminal_nodes.capacity) terminal_nodes = grow_terminal_nodes(terminal_nodes, 2);
+        if (terminal_nodes.nodes) {
+            *out_start = terminal_nodes.count + 1;
+            if (write_nodes(terminal_nodes.nodes, terminal_nodes.count, node_index_by_node_id, sides, 2) < 0)
+                terminal_nodes.count = -1;
+            else
+                terminal_nodes.count += 2;
         }
-    } else if (!PyLong_Check(sides[0]) && !PyLong_Check(sides[1])) {
-        if (append_terminals_of(builder, graph, sides[0]) == 0) {
-            builder->terminals->out_terminal_offsets[edge] = builder->terminals->terminal_count;
-            status = append_terminals_of(builder, graph, sides[1]);
-        }
+    } else if (pair && !PyLong_Check(sides[0]) && !PyLong_Check(sides[1])) {
+        terminal_nodes = append_in_and_out_terminals(terminal_nodes, node_index_by_node_id, sides, out_start);
     } else {
         PyErr_SetString(PyExc_ValueError, "a directed edge is (u, v) or (in_nodes, out_nodes)");
+        terminal_nodes.count = -1;
     }
     Py_DECREF(edge_fast);
-    return status;
+    return terminal_nodes;
 }
 
-/* The edge list: endpoints of a two-terminal edge, (node of the first terminal, same node) for any other edge. */
-static int fill_edge_list(EdgeList *edges, const TerminalList *terminals) {
-    Py_ssize_t edge_count = edges->edge_count;
-    edges->first_endpoints = (int *)malloc((size_t)(edge_count > 0 ? edge_count : 1) * sizeof(int));
-    edges->second_endpoints = (int *)malloc((size_t)(edge_count > 0 ? edge_count : 1) * sizeof(int));
-    edges->owns_memory = 1;
-    if (!edges->first_endpoints || !edges->second_endpoints) { PyErr_NoMemory(); return -1; }
-    for (Py_ssize_t edge = 0; edge < edge_count; edge++) {
-        int first_terminal = terminals->terminal_offsets[edge];
-        int two_terminals = terminals->terminal_offsets[edge + 1] - first_terminal == 2;
-        edges->first_endpoints[edge] = terminals->terminal_nodes[first_terminal];
-        edges->second_endpoints[edge] = terminals->terminal_nodes[two_terminals ? first_terminal + 1 : first_terminal];
+/* Write out the implicit offsets of the edges before `edge`: edge e at 2e, its out-terminal at 2e + 1. */
+static __attribute__((noinline)) int write_out_offsets(Py_ssize_t edge_count, int edge, int directed, int **offsets_out,
+                                                       int **out_offsets_out) {
+    int *offsets = (int *)malloc(((size_t)edge_count + 1) * sizeof(int));
+    int *out_offsets = directed ? (int *)malloc(((size_t)edge_count + 1) * sizeof(int)) : NULL;
+    if (!offsets || (directed && !out_offsets)) { free(offsets); free(out_offsets); PyErr_NoMemory(); return -1; }
+    for (int earlier = 0; earlier < edge; earlier++) {
+        offsets[earlier] = 2 * earlier;
+        if (directed) out_offsets[earlier] = 2 * earlier + 1;
     }
+    *offsets_out = offsets;
+    *out_offsets_out = out_offsets;
     return 0;
+}
+
+/* The edge list of a graph with a terminal list: a two-terminal edge's endpoints, any other edge at the node of its first terminal twice. */
+static int write_edge_list(EdgeList *edges, const int *nodes, const int *offsets, Py_ssize_t edge_count) {
+    int *endpoints = (int *)malloc((size_t)(edge_count > 0 ? 2 * edge_count : 1) * sizeof(int));
+    if (!endpoints) { PyErr_NoMemory(); return -1; }
+    for (Py_ssize_t edge = 0; edge < edge_count; edge++) {
+        int first_terminal = offsets[edge];
+        int two_terminals = offsets[edge + 1] - first_terminal == 2;
+        endpoints[2 * edge] = nodes[first_terminal];
+        endpoints[2 * edge + 1] = nodes[two_terminals ? first_terminal + 1 : first_terminal];
+    }
+    edges->first_endpoints = endpoints;
+    edges->second_endpoints = NULL;
+    return 0;
+}
+
+/* The parsed terminals of all edges: the nodes, and the offsets once some edge is not a pair. */
+typedef struct {
+    TerminalNodes terminal_nodes;
+    int *offsets;
+    int *out_offsets;
+} ParsedTerminals;
+
+/*
+ * The parse loop, instantiated per value of `directed`. On error the result's
+ * nodes is NULL, everything freed, with an exception set.
+ */
+static inline __attribute__((always_inline)) ParsedTerminals parse_edge_items(
+    const IntMap *node_index_by_node_id, PyObject **edge_items, Py_ssize_t edge_count, const int directed) {
+    ParsedTerminals parsed = {{NULL, (int)(edge_count > 0 ? 2 * edge_count : 2), 0}, NULL, NULL};
+    parsed.terminal_nodes.nodes = (int *)malloc((size_t)parsed.terminal_nodes.capacity * sizeof(int));
+    if (!parsed.terminal_nodes.nodes) { PyErr_NoMemory(); return parsed; }
+    TerminalNodes terminal_nodes = parsed.terminal_nodes;
+    int *offsets = NULL, *out_offsets = NULL;
+    for (int edge = 0; edge < edge_count; edge++) {
+        int start = terminal_nodes.count, out_start = start + 1;
+        terminal_nodes = directed ? append_directed_edge(terminal_nodes, node_index_by_node_id, edge_items[edge], &out_start)
+                                  : append_sequence(terminal_nodes, node_index_by_node_id, edge_items[edge]);
+        if (!terminal_nodes.nodes || terminal_nodes.count < 0) break;
+        if (!offsets && (terminal_nodes.count - start != 2 || (directed && out_start != start + 1))
+            && write_out_offsets(edge_count, edge, directed, &offsets, &out_offsets) < 0) {
+            terminal_nodes.count = -1;
+            break;
+        }
+        if (offsets) {
+            offsets[edge] = start;
+            if (directed) out_offsets[edge] = out_start;
+        }
+    }
+    if (!terminal_nodes.nodes || terminal_nodes.count < 0) {
+        free(terminal_nodes.nodes); free(offsets); free(out_offsets);
+        parsed.terminal_nodes.nodes = NULL;
+        return parsed;
+    }
+    parsed.terminal_nodes = terminal_nodes;
+    parsed.offsets = offsets;
+    parsed.out_offsets = out_offsets;
+    return parsed;
 }
 
 int parse_terminal_edges(GraphContext *graph, PyObject *edges_obj) {
-    PyObject *edges_fast = PySequence_Fast(edges_obj, "edges must be a sequence");
+    EdgeList *edges = &graph->node_ids.edges;
+    const IntMap *node_index_by_node_id = &graph->node_ids.node_index_by_node_id;
+    if (graph->node_ids.node_count == 0) return 0;
+    int buffer_status = parse_edge_pair_buffer((IntMap *)node_index_by_node_id, edges_obj, edges);
+    if (buffer_status != 0) return buffer_status < 0 ? -1 : 0;
+
+    PyObject *edges_fast = PySequence_Fast(edges_obj, "edges must be a sequence or numpy array");
     if (!edges_fast) return -1;
-    int edge_count = (int)PySequence_Fast_GET_SIZE(edges_fast);
-    TerminalList *terminals = (TerminalList *)calloc(1, sizeof(TerminalList));
-    graph->terminals = terminals;
-    graph->node_ids.edges.edge_count = edge_count;
-    if (terminals) {
-        terminals->terminal_offsets = (int *)malloc(((size_t)edge_count + 1) * sizeof(int));
-        if (graph->directed) terminals->out_terminal_offsets = (int *)malloc(((size_t)edge_count + 1) * sizeof(int));
-    }
-    if (!terminals || !terminals->terminal_offsets || (graph->directed && !terminals->out_terminal_offsets)) {
-        Py_DECREF(edges_fast);
-        PyErr_NoMemory();
-        return -1;
-    }
-    TerminalBuilder builder = {terminals, 0};
+    Py_ssize_t edge_count = PySequence_Fast_GET_SIZE(edges_fast);
     PyObject **edge_items = PySequence_Fast_ITEMS(edges_fast);
-    for (int edge = 0; edge < edge_count; edge++) {
-        terminals->terminal_offsets[edge] = terminals->terminal_count;
-        int status = graph->directed ? append_directed_edge(&builder, graph, edge_items[edge], edge)
-                                     : append_terminals_of(&builder, graph, edge_items[edge]);
-        if (status < 0) { Py_DECREF(edges_fast); return -1; }
-    }
-    terminals->terminal_offsets[edge_count] = terminals->terminal_count;
+    ParsedTerminals parsed = graph->directed ? parse_edge_items(node_index_by_node_id, edge_items, edge_count, 1)
+                                             : parse_edge_items(node_index_by_node_id, edge_items, edge_count, 0);
     Py_DECREF(edges_fast);
-    return fill_edge_list(&graph->node_ids.edges, terminals);
-}
+    if (!parsed.terminal_nodes.nodes) return -1;
 
-/* ── Adjacency list ── */
-
-/*
- * Count (slots == NULL) or fill one direction of the adjacency list. Forward,
- * a two-terminal edge sits at its first endpoint (and, undirected, its second)
- * and an edge with three or more terminals at its in-terminals (undirected: all its
- * terminals); in reverse, at its second endpoint and its out-terminals.
- */
-static void place_slots(Py_ssize_t edge_count, const EdgeList *edges, const TerminalList *terminals, int directed, int reverse,
-                        int *next_slot, int *neighbors, int *edge_indices) {
-    for (Py_ssize_t edge = 0; edge < edge_count; edge++) {
-        int first_terminal = terminals->terminal_offsets[edge], end_terminal = terminals->terminal_offsets[edge + 1];
-        int terminal_count = end_terminal - first_terminal;
-        if (terminal_count == 2) {
-            int first_node = EDGE_FIRST_ENDPOINT(edges, edge), second_node = EDGE_SECOND_ENDPOINT(edges, edge);
-            int at = reverse ? second_node : first_node, neighbor = reverse ? first_node : second_node;
-            if (neighbors) { neighbors[next_slot[at]] = neighbor; edge_indices[next_slot[at]] = (int)edge; }
-            next_slot[at]++;
-            if (!directed) {
-                if (neighbors) { neighbors[next_slot[second_node]] = first_node; edge_indices[next_slot[second_node]] = (int)edge; }
-                next_slot[second_node]++;
-            }
-        } else if (terminal_count > 2) {
-            int from_terminal = directed && reverse ? terminals->out_terminal_offsets[edge] : first_terminal;
-            int to_terminal = directed && !reverse ? terminals->out_terminal_offsets[edge] : end_terminal;
-            for (int terminal = from_terminal; terminal < to_terminal; terminal++) {
-                int at = terminals->terminal_nodes[terminal];
-                if (neighbors) { neighbors[next_slot[at]] = -1 - (int)edge; edge_indices[next_slot[at]] = terminal; }
-                next_slot[at]++;
-            }
-        }
+    int *nodes = parsed.terminal_nodes.nodes, count = parsed.terminal_nodes.count;
+    edges->edge_count = edge_count;
+    edges->owns_memory = 1;
+    if (!parsed.offsets) {
+        edges->first_endpoints = nodes;
+        edges->second_endpoints = NULL;
+        return 0;
     }
-}
-
-/* One direction as CSR arrays; returns 0, or -1 with an exception set and nothing allocated. */
-static int build_direction(int node_count, const EdgeList *edges, const TerminalList *terminals, int directed, int reverse,
-                           int **offset_out, int **neighbors_out, int **edge_indices_out) {
-    int *offset = (int *)calloc((size_t)node_count + 1, sizeof(int));
-    if (!offset) { PyErr_NoMemory(); return -1; }
-    place_slots(edges->edge_count, edges, terminals, directed, reverse, offset + 1, NULL, NULL);
-    for (int node = 1; node <= node_count; node++) offset[node] += offset[node - 1];
-    size_t slot_count = (size_t)offset[node_count];
-    int *neighbors = (int *)malloc((slot_count > 0 ? slot_count : 1) * sizeof(int));
-    int *edge_indices = (int *)malloc((slot_count > 0 ? slot_count : 1) * sizeof(int));
-    int *next_slot = (int *)malloc(((size_t)node_count + 1) * sizeof(int));
-    if (!neighbors || !edge_indices || !next_slot) {
-        free(offset); free(neighbors); free(edge_indices); free(next_slot);
-        PyErr_NoMemory();
+    parsed.offsets[edge_count] = count;
+    TerminalList *terminals = (TerminalList *)malloc(sizeof(TerminalList));
+    if (!terminals || write_edge_list(edges, nodes, parsed.offsets, edge_count) < 0) {
+        free(terminals); free(nodes); free(parsed.offsets); free(parsed.out_offsets);
+        edges->edge_count = 0;
+        if (!PyErr_Occurred()) PyErr_NoMemory();
         return -1;
     }
-    memcpy(next_slot, offset, (size_t)node_count * sizeof(int));
-    place_slots(edges->edge_count, edges, terminals, directed, reverse, next_slot, neighbors, edge_indices);
-    free(next_slot);
-    *offset_out = offset;
-    *neighbors_out = neighbors;
-    *edge_indices_out = edge_indices;
-    return 0;
-}
-
-int build_terminal_adjacency(int node_count, const EdgeList *edges, const TerminalList *terminals, int directed,
-                         AdjacencyList *adjacency) {
-    adjacency->reverse_offset = NULL;
-    adjacency->reverse_neighbors = NULL;
-    adjacency->reverse_edge_indices = NULL;
-    if (build_direction(node_count, edges, terminals, directed, 0,
-                        &adjacency->offset, &adjacency->neighbors, &adjacency->edge_indices) < 0)
-        return -1;
-    if (directed && build_direction(node_count, edges, terminals, directed, 1, &adjacency->reverse_offset,
-                                    &adjacency->reverse_neighbors, &adjacency->reverse_edge_indices) < 0) {
-        free(adjacency->offset); free(adjacency->neighbors); free(adjacency->edge_indices);
-        return -1;
-    }
+    terminals->terminal_count = count;
+    terminals->terminal_offsets = parsed.offsets;
+    terminals->terminal_nodes = nodes;
+    terminals->out_terminal_offsets = parsed.out_offsets;
+    graph->terminals = terminals;
     return 0;
 }
 

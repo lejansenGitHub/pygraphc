@@ -3,62 +3,32 @@
 #include "../helpers/parse.h"
 #include "../helpers/terminals.h"
 
+/*
+ * Parse node ids and edges into a graph: one terminal parser for every edge
+ * (parse_terminal_edges), or src/dst arrays of edge endpoints. Directed edges
+ * are (u, v) or (in_nodes, out_nodes).
+ */
 PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_or_src, *dst_obj = Py_None;
     int directed = 0;
     if (!PyArg_ParseTuple(args, "OO|Op", &node_ids_obj, &edges_or_src, &dst_obj, &directed))
         return NULL;
 
-    GraphContext *graph = (GraphContext *)malloc(sizeof(GraphContext));
-    if (!graph) { PyErr_NoMemory(); return NULL; }
-    graph->has_adjacency = 0;
-    graph->directed = directed;
-    graph->terminals = NULL;
-
-    int status;
-    if (dst_obj != Py_None)
-        status = node_id_parse_split(node_ids_obj, edges_or_src, dst_obj, &graph->node_ids);
-    else
-        status = node_id_parse(node_ids_obj, edges_or_src, &graph->node_ids);
-    if (status < 0) { free(graph); return NULL; }
-
-    if (graph->node_ids.node_count > 0 && graph->node_ids.edges.edge_count > 0) {
-        if (build_adjacency(graph->node_ids.node_count, &graph->node_ids.edges, &graph->adjacency, directed) < 0) {
-            node_id_context_free(&graph->node_ids);
-            free(graph);
-            return NULL;
-        }
-        graph->has_adjacency = 1;
-    }
-
-    return PyCapsule_New(graph, "pygraphc.GraphCtx", graph_context_destructor);
-}
-
-static void free_terminal_graph(GraphContext *graph) {
-    if (graph->terminals) { free_terminal_list(graph->terminals); free(graph->terminals); }
-    node_id_context_free(&graph->node_ids);
-    free(graph);
-}
-
-PyObject *py_parse_terminal_graph(PyObject *self, PyObject *args) {
-    PyObject *node_ids_obj, *edges_obj;
-    int directed = 0;
-    if (!PyArg_ParseTuple(args, "OO|p", &node_ids_obj, &edges_obj, &directed)) return NULL;
-
     GraphContext *graph = (GraphContext *)calloc(1, sizeof(GraphContext));
     if (!graph) { PyErr_NoMemory(); return NULL; }
     graph->directed = directed;
-    PyObject *no_two_terminal_edges = PyTuple_New(0);
-    if (!no_two_terminal_edges) { free(graph); return NULL; }
-    int status = node_id_parse(node_ids_obj, no_two_terminal_edges, &graph->node_ids);
-    Py_DECREF(no_two_terminal_edges);
-    if (status < 0) { free(graph); return NULL; }
 
-    if (parse_terminal_edges(graph, edges_obj) < 0) { free_terminal_graph(graph); return NULL; }
+    if (dst_obj != Py_None) {
+        if (node_id_parse_split(node_ids_obj, edges_or_src, dst_obj, &graph->node_ids) < 0) { free(graph); return NULL; }
+    } else {
+        if (node_id_parse_nodes(node_ids_obj, &graph->node_ids) < 0) { free(graph); return NULL; }
+        if (parse_terminal_edges(graph, edges_or_src) < 0) { free_graph_context(graph); return NULL; }
+    }
+
     if (graph->node_ids.node_count > 0 && graph->node_ids.edges.edge_count > 0) {
-        if (build_terminal_adjacency(graph->node_ids.node_count, &graph->node_ids.edges, graph->terminals, directed,
-                                 &graph->adjacency) < 0) {
-            free_terminal_graph(graph);
+        if (build_adjacency(graph->node_ids.node_count, &graph->node_ids.edges, graph->terminals, &graph->adjacency,
+                            directed) < 0) {
+            free_graph_context(graph);
             return NULL;
         }
         graph->has_adjacency = 1;
@@ -66,32 +36,38 @@ PyObject *py_parse_terminal_graph(PyObject *self, PyObject *args) {
     return PyCapsule_New(graph, "pygraphc.GraphCtx", graph_context_destructor);
 }
 
-/* The parsed graph of a call that needs terminal numbering. */
-static GraphContext *terminal_graph_of(PyObject *capsule) {
-    GraphContext *graph = get_graph_context(capsule);
-    if (graph && !graph->terminals) {
-        PyErr_SetString(PyExc_TypeError, "expected a parsed graph with multi-terminal edges");
-        return NULL;
-    }
-    return graph;
-}
-
-PyObject *py_terminal_graph_shape(PyObject *self, PyObject *args) {
+PyObject *py_graph_shape(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphContext *graph = terminal_graph_of(capsule);
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
-    return Py_BuildValue("(inn)", graph->node_ids.node_count, graph->node_ids.edges.edge_count,
-                         (Py_ssize_t)graph->terminals->terminal_count);
+    Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
+    Py_ssize_t terminal_count = graph->terminals ? (Py_ssize_t)graph->terminals->terminal_count : 2 * edge_count;
+    return Py_BuildValue("(inn)", graph->node_ids.node_count, edge_count, terminal_count);
+}
+
+PyObject *py_has_multi_terminal_edges(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    return PyBool_FromLong(graph->terminals != NULL);
 }
 
 PyObject *py_terminal_offsets(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    GraphContext *graph = terminal_graph_of(capsule);
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
-    return PyBytes_FromStringAndSize((const char *)graph->terminals->terminal_offsets,
-                                     (graph->node_ids.edges.edge_count + 1) * (Py_ssize_t)sizeof(int));
+    Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
+    if (graph->terminals)
+        return PyBytes_FromStringAndSize((const char *)graph->terminals->terminal_offsets,
+                                         (edge_count + 1) * (Py_ssize_t)sizeof(int));
+    PyObject *result = PyBytes_FromStringAndSize(NULL, (edge_count + 1) * (Py_ssize_t)sizeof(int));
+    if (!result) return NULL;
+    int *terminal_offsets = (int *)PyBytes_AS_STRING(result);
+    for (Py_ssize_t edge_index = 0; edge_index <= edge_count; edge_index++) terminal_offsets[edge_index] = (int)(2 * edge_index);
+    return result;
 }
 
 PyObject *py_terminal_nodes(PyObject *self, PyObject *args) {

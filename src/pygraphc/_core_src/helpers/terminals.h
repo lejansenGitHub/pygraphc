@@ -5,23 +5,16 @@
 #include "../models.h"
 
 /*
- * Parse edges given as tuples of node ids, one per terminal, into graph->terminals and
- * graph->node_ids.edges; directed edges are (u, v) or (in_nodes, out_nodes).
- * A two-terminal edge keeps its endpoints in the edge list; any other edge sits
- * there as (node of its first terminal, same node), which joins nothing. The node
+ * Parse edges given as tuples of node ids, one per terminal, or as an
+ * (edge_count, 2) int buffer, into graph->node_ids.edges and, when some edge
+ * has other than two terminals, graph->terminals; directed edges are (u, v) or
+ * (in_nodes, out_nodes). While every edge has two terminals the terminal list
+ * stays implicit (edge e at terminals 2e and 2e + 1, the edge list holding its
+ * nodes); otherwise any edge of other than two terminals sits in the edge list
+ * as (node of its first terminal, same node), which joins nothing. The node
  * ids must already be parsed. Returns 0, or -1 with an exception set.
  */
 PYGRAPHC_INTERNAL int parse_terminal_edges(GraphContext *graph, PyObject *edges_obj);
-
-/*
- * Build the adjacency list of a graph with multi-terminal edges: a two-terminal edge as
- * in build_adjacency, an edge with three or more terminals as -1 - e at each of its
- * terminals (directed: in-terminals forward, out-terminals in reverse) with the terminal in
- * edge_indices, and a single-terminal edge not at all. Returns 0, or -1 with an
- * exception set.
- */
-PYGRAPHC_INTERNAL int build_terminal_adjacency(int node_count, const EdgeList *edges, const TerminalList *terminals, int directed,
-                                           AdjacencyList *adjacency);
 
 /* A parsed terminal mask and the edge mask two-terminal edges are traversed under. */
 typedef struct {

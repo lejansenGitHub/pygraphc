@@ -33,7 +33,7 @@ PyObject *py_dijkstra(PyObject *self, PyObject *args) {
     if (parse_weights(weights_obj, &weights, edges.edge_count) < 0) { free_edges(&edges); return NULL; }
 
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &edges, &adjacency, 0) < 0) {
+    if (build_adjacency(node_count, &edges, NULL, &adjacency, 0) < 0) {
         free_edges(&edges); free_weights(&weights); return NULL;
     }
     free_edges(&edges);
@@ -144,7 +144,7 @@ PyObject *py_shortest_path_lengths(PyObject *self, PyObject *args) {
     }
 
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &edges, &adjacency, 0) < 0) {
+    if (build_adjacency(node_count, &edges, NULL, &adjacency, 0) < 0) {
         free_edges(&edges); free_weights(&weights);
         Py_DECREF(result_dict); return NULL;
     }
@@ -241,7 +241,7 @@ PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
     }
 
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &edges, &adjacency, 0) < 0) {
+    if (build_adjacency(node_count, &edges, NULL, &adjacency, 0) < 0) {
         free_edges(&edges); free_weights(&weights);
         Py_DECREF(sources_fast); Py_DECREF(result_dict);
         return NULL;
@@ -357,7 +357,7 @@ PyObject *py_dijkstra_by_node_id(PyObject *self, PyObject *args) {
     WeightList weights;
     if (parse_weights(weights_obj, &weights, context.edges.edge_count) < 0) { node_id_context_free(&context); return NULL; }
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &context.edges, &adjacency, 0) < 0) { node_id_context_free(&context); free_weights(&weights); return NULL; }
+    if (build_adjacency(node_count, &context.edges, NULL, &adjacency, 0) < 0) { node_id_context_free(&context); free_weights(&weights); return NULL; }
 
     BidirectionalPath bidirectional_path;
     int failed = bidirectional_dijkstra(node_count, 0, &adjacency, weights.values, NULL, NULL, NULL, NULL, NULL, NULL, 0,
@@ -395,7 +395,7 @@ PyObject *py_shortest_path_lengths_by_node_id(PyObject *self, PyObject *args) {
     WeightList weights;
     if (parse_weights(weights_obj, &weights, context.edges.edge_count) < 0) { node_id_context_free(&context); Py_DECREF(result); return NULL; }
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &context.edges, &adjacency, 0) < 0) { node_id_context_free(&context); free_weights(&weights); Py_DECREF(result); return NULL; }
+    if (build_adjacency(node_count, &context.edges, NULL, &adjacency, 0) < 0) { node_id_context_free(&context); free_weights(&weights); Py_DECREF(result); return NULL; }
 
     double *distance = malloc(node_count*sizeof(double));
     int *heap = malloc(node_count*sizeof(int)), *heap_position = malloc(node_count*sizeof(int));
@@ -457,7 +457,7 @@ PyObject *py_multi_source_dijkstra_by_node_id(PyObject *self, PyObject *args) {
     WeightList weights;
     if (parse_weights(weights_obj, &weights, context.edges.edge_count) < 0) { Py_DECREF(sources_fast); node_id_context_free(&context); Py_DECREF(result); return NULL; }
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &context.edges, &adjacency, 0) < 0) { Py_DECREF(sources_fast); free_weights(&weights); node_id_context_free(&context); Py_DECREF(result); return NULL; }
+    if (build_adjacency(node_count, &context.edges, NULL, &adjacency, 0) < 0) { Py_DECREF(sources_fast); free_weights(&weights); node_id_context_free(&context); Py_DECREF(result); return NULL; }
 
     double *distance = malloc(node_count*sizeof(double));
     int *heap = malloc(node_count*sizeof(int)), *heap_position = malloc(node_count*sizeof(int));

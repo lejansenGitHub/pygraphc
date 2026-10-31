@@ -1,5 +1,6 @@
 /* Parsing helpers: Python objects and buffers into the data models. */
 #include "parse.h"
+#include "terminals.h"
 
 /*
  * Try the buffer protocol first (numpy int32 array with shape (edge_count, 2)).
@@ -95,7 +96,7 @@ int parse_edges(PyObject *edges_obj, EdgeList *edges) {
 
 /* ── Edge parsing with node-ID translation via C hash map ── */
 
-static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj, EdgeList *edges) {
+int parse_edge_pair_buffer(IntMap *node_index_by_node_id, PyObject *edges_obj, EdgeList *edges) {
     /* Fast path: buffer protocol (numpy int32/int64 array with shape (edge_count, 2)) */
     Py_buffer buffer;
     if (PyObject_GetBuffer(edges_obj, &buffer, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
@@ -109,12 +110,13 @@ static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj
             if (edge_count == 0) {
                 edges->first_endpoints = NULL; edges->second_endpoints = NULL;
                 PyBuffer_Release(&buffer);
-                return 0;
+                return 1;
             }
             edges->first_endpoints = (int *)malloc((size_t)edge_count * sizeof(int));
             edges->second_endpoints = (int *)malloc((size_t)edge_count * sizeof(int));
             if (!edges->first_endpoints || !edges->second_endpoints) {
                 free(edges->first_endpoints); free(edges->second_endpoints);
+                        edges->first_endpoints = edges->second_endpoints = NULL; edges->edge_count = 0;
                 PyBuffer_Release(&buffer);
                 PyErr_NoMemory();
                 return -1;
@@ -126,6 +128,7 @@ static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj
                     int second_index = intmap_get(node_index_by_node_id, (long)pairs[edge_index * 2 + 1]);
                     if (first_index < 0 || second_index < 0) {
                         free(edges->first_endpoints); free(edges->second_endpoints);
+                        edges->first_endpoints = edges->second_endpoints = NULL; edges->edge_count = 0;
                         PyBuffer_Release(&buffer);
                         PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
                         return -1;
@@ -140,6 +143,7 @@ static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj
                     int second_index = intmap_get(node_index_by_node_id, (long)pairs[edge_index * 2 + 1]);
                     if (first_index < 0 || second_index < 0) {
                         free(edges->first_endpoints); free(edges->second_endpoints);
+                        edges->first_endpoints = edges->second_endpoints = NULL; edges->edge_count = 0;
                         PyBuffer_Release(&buffer);
                         PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
                         return -1;
@@ -149,70 +153,15 @@ static int parse_edges_mapped(IntMap *node_index_by_node_id, PyObject *edges_obj
                 }
             }
             PyBuffer_Release(&buffer);
-            return 0;
+            return 1;
         }
         PyBuffer_Release(&buffer);
-        /* Fall through to slow path */
     } else {
         PyErr_Clear();
     }
-
-    /* Slow path: list of tuples */
-    PyObject *edges_fast = PySequence_Fast(edges_obj, "edges must be a sequence or numpy array");
-    if (!edges_fast) return -1;
-
-    Py_ssize_t edge_count = PySequence_Fast_GET_SIZE(edges_fast);
-    edges->edge_count = edge_count;
-    edges->owns_memory = 1;
-    if (edge_count == 0) {
-        edges->first_endpoints = NULL; edges->second_endpoints = NULL;
-        Py_DECREF(edges_fast);
-        return 0;
-    }
-
-    edges->first_endpoints = (int *)malloc((size_t)edge_count * sizeof(int));
-    edges->second_endpoints = (int *)malloc((size_t)edge_count * sizeof(int));
-    if (!edges->first_endpoints || !edges->second_endpoints) {
-        free(edges->first_endpoints); free(edges->second_endpoints);
-        Py_DECREF(edges_fast);
-        PyErr_NoMemory();
-        return -1;
-    }
-
-    PyObject **edge_items = PySequence_Fast_ITEMS(edges_fast);
-    for (Py_ssize_t edge_index = 0; edge_index < edge_count; edge_index++) {
-        PyObject *edge = edge_items[edge_index];
-        PyObject *edge_fast = PySequence_Fast(edge, "each edge must be a 2-tuple");
-        if (!edge_fast || PySequence_Fast_GET_SIZE(edge_fast) != 2) {
-            Py_XDECREF(edge_fast);
-            free(edges->first_endpoints); free(edges->second_endpoints);
-            Py_DECREF(edges_fast);
-            PyErr_SetString(PyExc_ValueError, "each edge must be a 2-tuple");
-            return -1;
-        }
-        PyObject **endpoint_items = PySequence_Fast_ITEMS(edge_fast);
-        long first_node_id = PyLong_AsLong(endpoint_items[0]);
-        long second_node_id = PyLong_AsLong(endpoint_items[1]);
-        Py_DECREF(edge_fast);
-        if (PyErr_Occurred()) {
-            free(edges->first_endpoints); free(edges->second_endpoints);
-            Py_DECREF(edges_fast);
-            return -1;
-        }
-        int first_index = intmap_get(node_index_by_node_id, first_node_id);
-        int second_index = intmap_get(node_index_by_node_id, second_node_id);
-        if (first_index < 0 || second_index < 0) {
-            free(edges->first_endpoints); free(edges->second_endpoints);
-            Py_DECREF(edges_fast);
-            PyErr_SetString(PyExc_ValueError, "edge references unknown node ID");
-            return -1;
-        }
-        edges->first_endpoints[edge_index] = first_index;
-        edges->second_endpoints[edge_index] = second_index;
-    }
-    Py_DECREF(edges_fast);
     return 0;
 }
+
 
 /* ── Edge parsing from two separate first/second endpoint sequences or 1D arrays ── */
 
@@ -325,7 +274,7 @@ static int parse_edges_mapped_split(IntMap *node_index_by_node_id, PyObject *fir
     return 0;
 }
 
-int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *context) {
+int node_id_parse_nodes(PyObject *node_ids_obj, NodeIdContext *context) {
     context->node_ids_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
     if (!context->node_ids_fast) return -1;
     context->node_count = (int)PySequence_Fast_GET_SIZE(context->node_ids_fast);
@@ -356,12 +305,28 @@ int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *co
         }
         intmap_put(&context->node_index_by_node_id, node_id, node);
     }
+    return 0;
+}
 
-    if (parse_edges_mapped(&context->node_index_by_node_id, edges_obj, &context->edges) < 0) {
-        intmap_free(&context->node_index_by_node_id);
+int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *context) {
+    if (node_id_parse_nodes(node_ids_obj, context) < 0) return -1;
+    GraphContext graph;
+    memset(&graph, 0, sizeof graph);
+    graph.node_ids = *context;
+    int status = parse_terminal_edges(&graph, edges_obj);
+    if (status == 0 && graph.terminals) {
+        free_terminal_list(graph.terminals);
+        free(graph.terminals);
+        free_edges(&graph.node_ids.edges);
+        PyErr_SetString(PyExc_ValueError, "each edge must be a pair of node ids");
+        status = -1;
+    }
+    if (status < 0) {
+        if (context->node_index_by_node_id.keys) intmap_free(&context->node_index_by_node_id);
         Py_DECREF(context->node_ids_fast);
         return -1;
     }
+    context->edges = graph.node_ids.edges;
     return 0;
 }
 

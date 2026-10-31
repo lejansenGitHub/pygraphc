@@ -5,8 +5,10 @@ case of the README table it checks. Throughout, a three-terminal edge joins node
 2, 3 and 4 between two two-terminal edges, unless a test builds its own graph.
 """
 
+import array
+
 import pytest
-from pygraphc._core import terminal_graph_shape  # noqa: PLC2701 — D1 checks what the C core stores
+from pygraphc._core import graph_shape, has_multi_terminal_edges  # noqa: PLC2701 — D1 checks what the C core stores
 
 from pygraphc import Graph
 
@@ -36,7 +38,7 @@ def test_multi_terminal_graph_holds_exactly_the_given_nodes_and_edges() -> None:
     """D1: the C core stores an edge as its terminals; a star expansion would add a node and replace the edge."""
     graph = _three_terminal_edge_between_two_terminal_edges()
 
-    nodes_in_c, edges_in_c, terminals_in_c = terminal_graph_shape(graph._graph_capsule)
+    nodes_in_c, edges_in_c, terminals_in_c = graph_shape(graph._graph_capsule)
 
     # --- Assert ---
     assert (graph.node_count, graph.edge_count) == (5, 3)
@@ -71,8 +73,29 @@ def test_a_graph_of_two_terminal_edges_keeps_no_terminal_list() -> None:
 
     # --- Assert ---
     assert graph.terminal_count == 4
-    with pytest.raises(TypeError, match="multi-terminal edges"):
-        terminal_graph_shape(graph._graph_capsule)
+    assert graph_shape(graph._graph_capsule) == (3, 2, 4)
+    assert not has_multi_terminal_edges(graph._graph_capsule)
+
+
+def _edge_buffer(pairs: list[tuple[int, int]]) -> memoryview:
+    """Edges as an int32 buffer of shape (edge_count, 2), the layout a numpy array has."""
+    flat = array.array("i", [node_id for pair in pairs for node_id in pair])
+    return memoryview(flat).cast("B").cast("i", shape=[len(pairs), 2])
+
+
+def test_an_edge_buffer_builds_the_same_graph_as_pairs() -> None:
+    """The (edge_count, 2) buffer input reads two-terminal edges directly."""
+    graph = Graph([1, 2, 3, 4], _edge_buffer([(1, 2), (2, 3)]))
+
+    # --- Assert ---
+    assert graph.terminal_count == 4
+    assert sorted(sorted(component) for component in graph.connected_components()) == [[1, 2, 3], [4]]
+
+
+def test_an_edge_buffer_with_an_unknown_node_raises() -> None:
+    """The buffer path cleans up after an unknown node instead of leaving a half-built edge list."""
+    with pytest.raises(ValueError, match="edge references unknown node ID"):
+        Graph([1, 2], _edge_buffer([(1, 9)]))
 
 
 def test_two_terminal_edge_errors_are_reported_as_before() -> None:
@@ -95,7 +118,7 @@ def test_directed_pair_keeps_its_meaning() -> None:
     """D4: (u, v) in a directed graph with a multi-terminal edge still gives terminal 0 at u and terminal 1 at v."""
     graph = Graph([1, 2, 3, 4], [(1, 2), ((2,), (3, 4))], directed=True)
 
-    assert terminal_graph_shape(graph._graph_capsule) == (4, 2, 5)
+    assert graph_shape(graph._graph_capsule) == (4, 2, 5)
 
 
 @pytest.mark.multi_terminal_edge_case

@@ -19,7 +19,15 @@ static inline int is_int64_format(const char *format, Py_ssize_t itemsize) {
 }
 
 PYGRAPHC_INTERNAL int parse_edges(PyObject *edges_obj, EdgeList *edges);
+/* Node ids and edges of pairs of node ids, through the terminal parser; any other edge raises. Returns 0, or -1 with an exception set. */
 PYGRAPHC_INTERNAL int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *context);
+/* The node ids of a graph and their index map, with no edges yet. Returns 0, or -1 with an exception set. */
+PYGRAPHC_INTERNAL int node_id_parse_nodes(PyObject *node_ids_obj, NodeIdContext *context);
+/*
+ * Edges given as an int32 or int64 buffer of shape (edge_count, 2): 1 when
+ * parsed, 0 when edges_obj is no such buffer, -1 with an exception set.
+ */
+PYGRAPHC_INTERNAL int parse_edge_pair_buffer(IntMap *node_index_by_node_id, PyObject *edges_obj, EdgeList *edges);
 PYGRAPHC_INTERNAL int node_id_parse_split(PyObject *node_ids_obj, PyObject *first_endpoints_obj, PyObject *second_endpoints_obj,
                                       NodeIdContext *context);
 PYGRAPHC_INTERNAL int parse_mask(PyObject *mask_obj, Py_ssize_t expected_length,

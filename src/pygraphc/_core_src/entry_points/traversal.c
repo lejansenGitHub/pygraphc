@@ -19,7 +19,7 @@ PyObject *py_bfs(PyObject *self, PyObject *args) {
     if (parse_edges(edges_obj, &edges) < 0) return NULL;
 
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &edges, &adjacency, 0) < 0) { free_edges(&edges); return NULL; }
+    if (build_adjacency(node_count, &edges, NULL, &adjacency, 0) < 0) { free_edges(&edges); return NULL; }
     free_edges(&edges);
 
     int *visited = (int *)calloc((size_t)node_count, sizeof(int));
@@ -80,7 +80,7 @@ PyObject *py_bfs_by_node_id(PyObject *self, PyObject *args) {
     }
 
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &context.edges, &adjacency, 0) < 0) { node_id_context_free(&context); return NULL; }
+    if (build_adjacency(node_count, &context.edges, NULL, &adjacency, 0) < 0) { node_id_context_free(&context); return NULL; }
 
     int *visited = calloc(node_count, sizeof(int)), *queue = malloc(node_count * sizeof(int));
     if (!visited || !queue) {
@@ -227,7 +227,7 @@ PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "OOO|iOOpp", &capsule, &source_obj, &targets_obj,
                           &cutoff, &edge_mask_obj, &node_mask_obj, &node_simple, &ignore_self_loops))
         return NULL;
-    GraphContext *graph = get_two_terminal_graph_context(capsule);
+    GraphContext *graph = require_two_terminal_edges(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;

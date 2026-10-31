@@ -19,7 +19,7 @@ PyObject *py_bridges(PyObject *self, PyObject *args) {
     if (edges.edge_count == 0) { free_edges(&edges); return result; }
 
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &edges, &adjacency, 0) < 0) {
+    if (build_adjacency(node_count, &edges, NULL, &adjacency, 0) < 0) {
         free_edges(&edges); Py_DECREF(result); return NULL;
     }
 
@@ -101,7 +101,7 @@ PyObject *py_articulation_points(PyObject *self, PyObject *args) {
     if (parse_edges(edges_obj, &edges) < 0) { Py_DECREF(result); return NULL; }
 
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &edges, &adjacency, 0) < 0) {
+    if (build_adjacency(node_count, &edges, NULL, &adjacency, 0) < 0) {
         free_edges(&edges); Py_DECREF(result); return NULL;
     }
     free_edges(&edges);
@@ -190,7 +190,7 @@ PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
 
     Py_ssize_t edge_count = edges.edge_count;
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &edges, &adjacency, 0) < 0) {
+    if (build_adjacency(node_count, &edges, NULL, &adjacency, 0) < 0) {
         free_edges(&edges); Py_DECREF(result); return NULL;
     }
     free_edges(&edges);
@@ -289,7 +289,7 @@ PyObject *py_bridges_by_node_id(PyObject *self, PyObject *args) {
     if (!result || node_count == 0 || context.edges.edge_count == 0) { node_id_context_free(&context); return result; }
 
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &context.edges, &adjacency, 0) < 0) { node_id_context_free(&context); Py_DECREF(result); return NULL; }
+    if (build_adjacency(node_count, &context.edges, NULL, &adjacency, 0) < 0) { node_id_context_free(&context); Py_DECREF(result); return NULL; }
 
     int *scratch = (int *)malloc(5 * (size_t)node_count * sizeof(int));
     if (!scratch) {
@@ -354,7 +354,7 @@ PyObject *py_articulation_points_by_node_id(PyObject *self, PyObject *args) {
     if (!result || node_count == 0) { node_id_context_free(&context); return result; }
 
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &context.edges, &adjacency, 0) < 0) { node_id_context_free(&context); Py_DECREF(result); return NULL; }
+    if (build_adjacency(node_count, &context.edges, NULL, &adjacency, 0) < 0) { node_id_context_free(&context); Py_DECREF(result); return NULL; }
 
     int *scratch = (int *)malloc(6 * (size_t)node_count * sizeof(int));
     if (!scratch) {
@@ -416,7 +416,7 @@ PyObject *py_biconnected_components_by_node_id(PyObject *self, PyObject *args) {
 
     Py_ssize_t edge_count = context.edges.edge_count;
     AdjacencyList adjacency;
-    if (build_adjacency(node_count, &context.edges, &adjacency, 0) < 0) { node_id_context_free(&context); Py_DECREF(result); return NULL; }
+    if (build_adjacency(node_count, &context.edges, NULL, &adjacency, 0) < 0) { node_id_context_free(&context); Py_DECREF(result); return NULL; }
 
     int *scratch = (int *)malloc(5 * (size_t)node_count * sizeof(int));
     int *edge_stack_scratch = (int *)malloc(2 * (size_t)edge_count * sizeof(int));

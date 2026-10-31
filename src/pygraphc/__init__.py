@@ -34,6 +34,8 @@ from pygraphc._core import dijkstra_ctx as _dijkstra_ctx
 from pygraphc._core import edge_indices_ctx as _edge_indices_ctx
 from pygraphc._core import graph_edge_count as _graph_edge_count
 from pygraphc._core import graph_node_count as _graph_node_count
+from pygraphc._core import graph_shape as _graph_shape
+from pygraphc._core import has_multi_terminal_edges as _has_multi_terminal_edges
 from pygraphc._core import in_degree_ctx as _in_degree_ctx
 from pygraphc._core import incident_edges_ctx as _incident_edges_ctx
 from pygraphc._core import incoming_edges_ctx as _incoming_edges_ctx
@@ -41,7 +43,6 @@ from pygraphc._core import multi_source_dijkstra_by_node_id as _multi_source_dij
 from pygraphc._core import multi_source_dijkstra_ctx as _multi_source_dijkstra_ctx
 from pygraphc._core import neighbors_ctx as _neighbors_ctx
 from pygraphc._core import parse_graph as _parse_graph
-from pygraphc._core import parse_terminal_graph as _parse_terminal_graph
 from pygraphc._core import predecessors_ctx as _predecessors_ctx
 from pygraphc._core import quotient_edges_ctx as _quotient_edges_ctx
 from pygraphc._core import series_parallel_reduce_ctx as _series_parallel_reduce_ctx
@@ -58,7 +59,6 @@ from pygraphc._core import sp_state_free as _sp_state_free
 from pygraphc._core import sp_state_log as _sp_state_log
 from pygraphc._core import sp_state_new as _sp_state_new
 from pygraphc._core import strongly_connected_components_ctx as _strongly_connected_components_ctx
-from pygraphc._core import terminal_graph_shape as _terminal_graph_shape
 from pygraphc._core import terminal_nodes as _terminal_nodes
 from pygraphc._core import terminal_offsets as _terminal_offsets
 from pygraphc._core import topological_sort_by_node_id as _topological_sort_by_node_id
@@ -879,19 +879,10 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         self._further_edge_indices_by_branch_id = None
         self._node_index_by_node_id = None
         self._directed = directed
-        self._has_multi_terminal_edges = False
         self._terminal_offsets = None
         self._edge_indices_by_terminal_node_indices = None
-        if dst is not None:
-            self._graph_capsule = _parse_graph(node_ids, edges_or_src, dst, directed)
-        else:
-            try:
-                self._graph_capsule = _parse_graph(node_ids, edges_or_src, None, directed)
-            except (TypeError, ValueError):
-                # The terminal parser shares the node id parser, so a two-terminal edge error raises again with its own
-                # message.
-                self._graph_capsule = _parse_terminal_graph(node_ids, edges_or_src, directed)
-                self._has_multi_terminal_edges = True
+        self._graph_capsule = _parse_graph(node_ids, edges_or_src, dst, directed)
+        self._has_multi_terminal_edges = _has_multi_terminal_edges(self._graph_capsule)
         if branch_ids is not None and len(branch_ids) != self.edge_count:
             raise ValueError(  # noqa: TRY003 — the two counts are the whole message
                 f"branch_ids length {len(branch_ids)} does not match edge count {self.edge_count}"
@@ -955,9 +946,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     @property
     def terminal_count(self) -> int:
         """Number of terminals over all edges; a two-terminal edge has two."""
-        if not self._has_multi_terminal_edges:
-            return 2 * self.edge_count
-        return int(_terminal_graph_shape(self._graph_capsule)[2])
+        return int(_graph_shape(self._graph_capsule)[2])
 
     def _terminals_of(self, edge_index: int) -> range:
         """The flat indices of an edge's terminals, as terminal masks and per-terminal weights number them."""

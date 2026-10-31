@@ -17,8 +17,8 @@
 
 /* graph.c */
 PYGRAPHC_INTERNAL PyObject *py_parse_graph(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_parse_terminal_graph(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_terminal_graph_shape(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_graph_shape(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_has_multi_terminal_edges(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_terminal_offsets(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_terminal_nodes(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_graph_is_directed(PyObject *self, PyObject *args);

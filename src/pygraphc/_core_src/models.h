@@ -98,7 +98,6 @@ typedef struct {
     int *reverse_edge_indices;  /* directed only: size edge_count, original edge indices */
 } AdjacencyList;
 
-PYGRAPHC_INTERNAL int build_adjacency(int node_count, EdgeList *edges, AdjacencyList *adjacency, int directed);
 PYGRAPHC_INTERNAL void free_adjacency(AdjacencyList *adjacency);
 
 /* ── Edges with terminals: an edge is its list of terminals, every terminal sits at a node ──
@@ -116,6 +115,18 @@ typedef struct {
 } TerminalList;
 
 PYGRAPHC_INTERNAL void free_terminal_list(TerminalList *terminals);
+
+/*
+ * The adjacency list of a graph (CSR, reverse CSR when directed). A
+ * two-terminal edge sits at both endpoints (directed: forward at its first,
+ * reverse at its second); with a terminal list, an edge with three or more
+ * terminals sits as -1 - e at each of its terminals (directed: in-terminals
+ * forward, out-terminals in reverse) with that terminal in edge_indices, and a
+ * single-terminal edge nowhere. terminals is NULL when every edge has two
+ * terminals. Returns 0, or -1 with an exception set.
+ */
+PYGRAPHC_INTERNAL int build_adjacency(int node_count, const EdgeList *edges, const TerminalList *terminals,
+                                      AdjacencyList *adjacency, int directed);
 
 /* Whether edge e has three or more terminals and so appears as -1 - e in the adjacency list. */
 static inline int is_multi_terminal_edge(const TerminalList *terminals, int edge) {
@@ -146,6 +157,8 @@ typedef struct {
 } GraphContext;
 
 PYGRAPHC_INTERNAL void graph_context_destructor(PyObject *capsule);
+/* Free a parsed graph: adjacency, terminal list, edges, node ids. */
+PYGRAPHC_INTERNAL void free_graph_context(GraphContext *graph);
 
 static inline GraphContext *get_graph_context(PyObject *capsule) {
     GraphContext *graph = (GraphContext *)PyCapsule_GetPointer(capsule, "pygraphc.GraphCtx");
@@ -154,7 +167,7 @@ static inline GraphContext *get_graph_context(PyObject *capsule) {
 }
 
 /* The parsed graph of a kernel that reads only two-terminal edges; a graph with multi-terminal edges raises. */
-static inline GraphContext *get_two_terminal_graph_context(PyObject *capsule) {
+static inline GraphContext *require_two_terminal_edges(PyObject *capsule) {
     GraphContext *graph = get_graph_context(capsule);
     if (graph && graph->terminals) {
         PyErr_SetString(PyExc_NotImplementedError, "not available on graphs with multi-terminal edges");
