@@ -495,6 +495,40 @@ named test.
 | 11 | Critical edges, critical nodes, biconnected blocks | computed on active ports only; a masked port is never critical | — |
 | 12 | Tree-shaped edge with k ports in biconnected blocks | one block holding its k port nodes, as a bridge is its own two-node block | — |
 
+#### Masking ports, edges and nodes
+
+Masks are views, as before, and they chain:
+
+```python
+graph = Graph([1, 2, 3, 4], [(1, 2), (2, 3, 4)])
+
+graph.without_edges([1])          # the three-port edge joins nothing (case 1)
+graph.without_ports([(1, 0)])     # its port at node 2 is detached; 3 and 4 stay joined (case 2)
+graph.without_nodes([3])          # node 3 leaves; ports at 2 and 4 stay joined (case 6)
+graph.without_ports([(1, 0)]).without_nodes([4])   # one active port left: joins nothing (case 3)
+```
+
+`without_ports` takes `(edge_index, port_index)` pairs. A line's port 0 is its
+first node and port 1 its second, so masking one port of a line detaches it
+like masking the line (case 5).
+
+#### Weights per port
+
+Weighted algorithms take one weight per port, in edge order and, within an
+edge, in port order. Passing through an edge from one port to another costs
+the entry port's weight plus the exit port's weight, which is how the star
+equivalent of a three-winding transformer is written down. A line keeps its
+single weight per edge: weights with one entry per edge are read as before,
+and the per-port form is only needed when a graph has an edge with more than
+two ports.
+
+#### Edges with a single port
+
+An undirected edge may have one port: it joins nothing and belongs to the
+component of its node (case 8), which is how a load or a feed-in modelled as
+an edge behaves. A directed edge needs at least one in-port and one out-port,
+so it has at least two ports.
+
 #### Methods that name edges by node pair
 
 `bridges()` returns node pairs and `edge_indices(u, v)` takes one. A pair cannot
