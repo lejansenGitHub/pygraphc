@@ -26,14 +26,34 @@ def test_unchanged_counts_are_left_out_and_counted() -> None:
     assert changed == ["moved"]
 
 
-def test_rows_are_sorted_by_the_size_of_the_change_and_aligned() -> None:
-    """Largest change first in either direction; every column starts at the same character."""
-    base = {"small_rise": 1000, "large_drop": 1000, "long_scenario_name/size": 1000}
-    head = {"small_rise": 1003, "large_drop": 900, "long_scenario_name/size": 1050}
+def _scenario_names(table_lines: list[str]) -> list[str]:
+    """The scenario column of the data rows among the given lines."""
+    return [line.split("|")[1].strip() for line in table_lines if line.startswith("| ") and "scenario" not in line]
+
+
+def test_slower_and_faster_counts_are_separate_tables_largest_change_first() -> None:
+    """More instructions in one table, fewer in the next, each ordered by the size of the change."""
+    base = {"small_rise": 1000, "large_rise": 1000, "small_drop": 1000, "large_drop": 1000}
+    head = {"small_rise": 1003, "large_rise": 1050, "small_drop": 998, "large_drop": 900}
 
     table, _changed = instruction_compare.comparison_table(base, head, 0.005)
-    lines = table.splitlines()[:5]
+    slower, faster = table.split("**Fewer instructions (faster): 2**")
 
-    assert [line.split("|")[1].strip() for line in lines[2:]] == ["large_drop", "long_scenario_name/size", "small_rise"]
-    assert len({len(line) for line in lines}) == 1
-    assert len({line.index("|", 2) for line in lines}) == 1
+    assert slower.startswith("**More instructions (slower): 2**")
+    assert _scenario_names(slower.splitlines()) == ["large_rise", "small_rise"]
+    assert _scenario_names(faster.splitlines()) == ["large_drop", "small_drop"]
+    assert "Measured on one side only" not in table
+
+
+def test_every_table_row_starts_its_columns_at_the_same_character() -> None:
+    """All tables share their column widths, so every row of every table lines up."""
+    base = {"rise": 1000, "long_scenario_name/size": 1000, "gone": 7}
+    head = {"rise": 1010, "long_scenario_name/size": 900, "brand_new": 3}
+
+    table, changed = instruction_compare.comparison_table(base, head, 0.005)
+    rows = [line for line in table.splitlines() if line.startswith("|")]
+
+    assert len({len(line) for line in rows}) == 1
+    assert len({line.index("|", 2) for line in rows}) == 1
+    assert "**Measured on one side only: 2**" in table
+    assert sorted(changed) == ["gone", "long_scenario_name/size", "rise"]
