@@ -9,7 +9,7 @@
  * fixpoint against a terminal set, emitting a flat operation log instead of
  * provenance trees. The caller folds the log into its own algebra.
  *
- * Edge slots 0..m-1 are the input edges in edge index order, the slots above
+ * Edge slots 0..edge_count-1 are the input edges in edge index order, the slots above
  * them are the virtual edges in creation order. The Python tier hands the
  * edges over sorted by edge id, so slot order is edge id order and "the
  * lowest edge id" is "the lowest slot" everywhere below.
@@ -33,7 +33,7 @@ typedef struct {
     int endpoint_v;
     int interior;    /* eliminated node of a series move, removed node of a pendant move */
     int leaf_edge;   /* input edge index of a leaf */
-    int absorber;    /* neighbour that absorbs the payload of a pendant move */
+    int absorber;    /* neighbor that absorbs the payload of a pendant move */
 } SPOperation;
 
 typedef struct {
@@ -98,36 +98,36 @@ typedef struct {
 } SPHandle;
 
 PYGRAPHC_INTERNAL void sp_free(SPState *state);
-PYGRAPHC_INTERNAL int sp_alloc(SPState *state, int n, Py_ssize_t edge_capacity);
+PYGRAPHC_INTERNAL int sp_alloc(SPState *state, int node_count, Py_ssize_t edge_capacity);
 PYGRAPHC_INTERNAL void sp_push(SPState *state, int node);
 PYGRAPHC_INTERNAL int sp_merge_parallel(SPState *state, int from_node, int to_node, const int *members, int count);
-PYGRAPHC_INTERNAL int sp_collect_parallels(SPState *state, int n, const uint8_t *protected_mask,
+PYGRAPHC_INTERNAL int sp_collect_parallels(SPState *state, int node_count, const uint8_t *protected_mask,
                                            SPPairEntry **entries_out, SPParallelCandidate **candidates_out,
                                            int *count_out);
-PYGRAPHC_INTERNAL int sp_merge_all_parallels(SPState *state, int n, const uint8_t *protected_mask);
+PYGRAPHC_INTERNAL int sp_merge_all_parallels(SPState *state, int node_count, const uint8_t *protected_mask);
 PYGRAPHC_INTERNAL int sp_describe_move(SPState *state, int node, const uint8_t *protected_mask,
                                        const uint8_t *pendant_keep_mask, const uint8_t *series_blocked_mask,
                                        int *parts);
 PYGRAPHC_INTERNAL int sp_apply_pendant(SPState *state, int node, int edge);
 PYGRAPHC_INTERNAL int sp_apply_series(SPState *state, int node, int first, int second,
-                                      int first_neighbour, int second_neighbour);
+                                      int first_neighbor, int second_neighbor);
 PYGRAPHC_INTERNAL int sp_gather_pair(SPState *state, int from_node, int to_node,
                                      const uint8_t *protected_mask, int *members);
 PYGRAPHC_INTERNAL int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const uint8_t *protected_mask,
                               const uint8_t *pendant_keep_mask, const uint8_t *series_blocked_mask);
 PYGRAPHC_INTERNAL int sp_load_edges(SPState *state, GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask);
-PYGRAPHC_INTERNAL int sp_drop_terminal_free(SPState *state, GraphContext *graph, int n, const uint8_t *edge_mask,
+PYGRAPHC_INTERNAL int sp_drop_terminal_free(SPState *state, GraphContext *graph, int node_count, const uint8_t *edge_mask,
                                             const uint8_t *node_mask, const uint8_t *terminal_mask);
-PYGRAPHC_INTERNAL void sp_enqueue_all_candidates(SPState *state, int n, const uint8_t *terminal_mask);
-PYGRAPHC_INTERNAL PyObject *sp_build_log(SPState *state, int n);
+PYGRAPHC_INTERNAL void sp_enqueue_all_candidates(SPState *state, int node_count, const uint8_t *terminal_mask);
+PYGRAPHC_INTERNAL PyObject *sp_build_log(SPState *state, int node_count);
 PYGRAPHC_INTERNAL void sp_release_masks(SPMasks *masks);
-PYGRAPHC_INTERNAL int sp_parse_masks(PyObject *terminal_obj, PyObject *protected_obj, PyObject *emask_obj,
-                                     PyObject *nmask_obj, PyObject *keep_obj, PyObject *blocked_obj,
-                                     int n, Py_ssize_t m, SPMasks *masks);
+PYGRAPHC_INTERNAL int sp_parse_masks(PyObject *terminal_obj, PyObject *protected_obj, PyObject *edge_mask_obj,
+                                     PyObject *node_mask_obj, PyObject *keep_obj, PyObject *blocked_obj,
+                                     int node_count, Py_ssize_t edge_count, SPMasks *masks);
 PYGRAPHC_INTERNAL void sp_handle_release(SPHandle *handle);
 PYGRAPHC_INTERNAL void sp_handle_destructor(PyObject *capsule);
 PYGRAPHC_INTERNAL SPHandle *get_sp_handle(PyObject *capsule);
-PYGRAPHC_INTERNAL int sp_check_edge(SPHandle *handle, int edge, int node, int neighbour);
+PYGRAPHC_INTERNAL int sp_check_edge(SPHandle *handle, int edge, int node, int neighbor);
 PYGRAPHC_INTERNAL int sp_check_distinct_edges(int edge_a, int edge_b);
 PYGRAPHC_INTERNAL int sp_check_node_removable(SPHandle *handle, int node);
 PYGRAPHC_INTERNAL int sp_check_members(SPHandle *handle, const int32_t *members, Py_ssize_t count,

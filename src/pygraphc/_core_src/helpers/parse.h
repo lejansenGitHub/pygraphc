@@ -6,25 +6,25 @@
 
 /* ── Buffer-format helpers ── */
 
-static inline int is_int32_format(const char *fmt, Py_ssize_t itemsize) {
-    if (itemsize != 4 || !fmt) return 0;
-    while (*fmt == '<' || *fmt == '>' || *fmt == '=' || *fmt == '!') fmt++;
-    return *fmt == 'i';
+static inline int is_int32_format(const char *format, Py_ssize_t itemsize) {
+    if (itemsize != 4 || !format) return 0;
+    while (*format == '<' || *format == '>' || *format == '=' || *format == '!') format++;
+    return *format == 'i';
 }
 
-static inline int is_int64_format(const char *fmt, Py_ssize_t itemsize) {
-    if (itemsize != 8 || !fmt) return 0;
-    while (*fmt == '<' || *fmt == '>' || *fmt == '=' || *fmt == '!') fmt++;
-    return *fmt == 'l' || *fmt == 'q';
+static inline int is_int64_format(const char *format, Py_ssize_t itemsize) {
+    if (itemsize != 8 || !format) return 0;
+    while (*format == '<' || *format == '>' || *format == '=' || *format == '!') format++;
+    return *format == 'l' || *format == 'q';
 }
 
-PYGRAPHC_INTERNAL int parse_edges(PyObject *edges_obj, EdgeList *el);
-PYGRAPHC_INTERNAL int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *ctx);
-PYGRAPHC_INTERNAL int node_id_parse_split(PyObject *node_ids_obj, PyObject *src_obj, PyObject *dst_obj,
-                                      NodeIdContext *ctx);
-PYGRAPHC_INTERNAL int parse_mask(PyObject *mask_obj, Py_ssize_t expected_len,
-                                 const uint8_t **mask_out, Py_buffer *mask_buf);
-PYGRAPHC_INTERNAL int parse_weights(PyObject *obj, WeightList *wl, Py_ssize_t expected_m);
-PYGRAPHC_INTERNAL int parse_labels(PyObject *labels_obj, int n, const int32_t **labels_out, Py_buffer *labels_buf);
+PYGRAPHC_INTERNAL int parse_edges(PyObject *edges_obj, EdgeList *edges);
+PYGRAPHC_INTERNAL int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *context);
+PYGRAPHC_INTERNAL int node_id_parse_split(PyObject *node_ids_obj, PyObject *first_endpoints_obj, PyObject *second_endpoints_obj,
+                                      NodeIdContext *context);
+PYGRAPHC_INTERNAL int parse_mask(PyObject *mask_obj, Py_ssize_t expected_length,
+                                 const uint8_t **mask_out, Py_buffer *mask_buffer);
+PYGRAPHC_INTERNAL int parse_weights(PyObject *weights_obj, WeightList *weights, Py_ssize_t expected_edge_count);
+PYGRAPHC_INTERNAL int parse_labels(PyObject *labels_obj, int node_count, const int32_t **labels_out, Py_buffer *labels_buffer);
 
 #endif
