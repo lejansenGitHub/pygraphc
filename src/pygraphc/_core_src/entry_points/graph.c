@@ -12,6 +12,7 @@ PyObject *py_parse_graph(PyObject *self, PyObject *args) {
     if (!graph) { PyErr_NoMemory(); return NULL; }
     graph->has_adjacency = 0;
     graph->directed = directed;
+    graph->ports = NULL;
 
     int status;
     if (dst_obj != Py_None)

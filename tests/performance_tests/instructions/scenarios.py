@@ -463,6 +463,45 @@ def _workflow_components_with_branch_ids() -> Measured:
     return gather_parse_and_label
 
 
+# ── Edges with ports ──
+
+
+def _port_graph(size: int = SIZE) -> Graph[int, int]:
+    node_ids, edges = shapes.random_ports(size)
+    return Graph(node_ids, edges, branch_ids=list(range(len(edges))))
+
+
+@register("parse_ports/random_ports_20k")
+def _parse_ports() -> Measured:
+    node_ids, edges = shapes.random_ports(SIZE)
+    return lambda: Graph(node_ids, edges)
+
+
+@register("port_connected_components/random_ports_20k")
+def _port_connected_components() -> Measured:
+    graph = _port_graph()
+    return lambda: list(graph.connected_components())
+
+
+@register("port_connected_components_with_branch_ids/random_ports_20k")
+def _port_connected_components_with_branch_ids() -> Measured:
+    graph = _port_graph()
+    return lambda: list(graph.connected_components_with_branch_ids())
+
+
+@register("port_component_labels/random_ports_20k")
+def _port_component_labels() -> Measured:
+    graph = _port_graph()
+    return graph.component_labels
+
+
+@register("port_connected_components_masked_ports/random_ports_20k")
+def _port_connected_components_masked_ports() -> Measured:
+    graph = _port_graph()
+    masked = [(edge_index, 0) for edge_index in range(SIZE - 1, graph.edge_count, 5)]
+    return lambda: list(graph.without_ports(masked).connected_components())
+
+
 # ── Structure learning ──
 
 

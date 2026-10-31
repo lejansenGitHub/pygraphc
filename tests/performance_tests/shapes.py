@@ -66,3 +66,25 @@ def directed_acyclic(node_count: int, edges_per_node: int = 3, seed: int = 0) ->
         if first != second:
             edges.append((min(first, second), max(first, second)))
     return list(range(node_count)), edges
+
+
+PortEdges = list[tuple[int, ...]]
+
+
+def wide_edge(node_count: int) -> tuple[list[int], PortEdges]:
+    """One edge with a port at every node: the number of ports of a single edge grows."""
+    return list(range(node_count)), [tuple(range(node_count))]
+
+
+def port_chain(node_count: int) -> tuple[list[int], PortEdges]:
+    """Three-port edges (2k, 2k + 1, 2k + 2) chained through their last port: depth in multiport edges."""
+    return list(range(node_count)), [(node_id, node_id + 1, node_id + 2) for node_id in range(0, node_count - 2, 2)]
+
+
+def random_ports(node_count: int, seed: int = 0) -> tuple[list[int], PortEdges]:
+    """A spanning path of lines plus random edges with two to four ports."""
+    rng = random.Random(seed)
+    node_ids, edges = path(node_count)
+    port_edges: PortEdges = list(edges)
+    port_edges += [tuple(rng.randrange(node_count) for _ in range(rng.randint(2, 4))) for _ in range(node_count // 2)]
+    return node_ids, port_edges

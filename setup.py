@@ -34,6 +34,17 @@ setup(
             extra_link_args=LINK_TIME_OPTIMIZATION,
         ),
         Extension(
+            "pygraphc._ports",
+            sources=[
+                *sorted(glob("src/pygraphc/_ports_src/*.c")),
+                f"{CORE_SOURCE_DIRECTORY}/models.c",
+                f"{CORE_SOURCE_DIRECTORY}/helpers/parse.c",
+            ],
+            depends=[*sorted(glob("src/pygraphc/_ports_src/*.h")), *core_files("*.h")],
+            extra_compile_args=[*compile_args(), *LINK_TIME_OPTIMIZATION],
+            extra_link_args=LINK_TIME_OPTIMIZATION,
+        ),
+        Extension(
             "pygraphc._dag_learn",
             sources=["src/pygraphc/_dag_learn.c"],
             extra_compile_args=compile_args(),

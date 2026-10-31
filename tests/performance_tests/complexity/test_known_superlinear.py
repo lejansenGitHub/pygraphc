@@ -2,7 +2,12 @@
 
 import pytest
 
-from performance_tests.complexity import test_directed_scaling, test_reduction_scaling, test_undirected_scaling
+from performance_tests.complexity import (
+    test_directed_scaling,
+    test_multiport_scaling,
+    test_reduction_scaling,
+    test_undirected_scaling,
+)
 from performance_tests.complexity.known_superlinear import KNOWN_SUPERLINEAR
 
 pytestmark = pytest.mark.performance
@@ -31,7 +36,12 @@ def _all_cases() -> set[str]:
     }
     folds = {f"tree_folds/{shape}" for shape in ("path", "two_hubs")}
     partitions = {f"scenario_and_partition/{shape}" for shape in ("meshed_feeders", "lattice")}
-    return undirected | parsing | directed | reduction | folds | partitions | {"all_edge_paths/path"}
+    multiport = {
+        f"ports/{operation}/{shape}"
+        for operation in [*test_multiport_scaling.OPERATIONS, "parse"]
+        for shape in test_multiport_scaling.SHAPES
+    }
+    return undirected | parsing | directed | reduction | folds | partitions | multiport | {"all_edge_paths/path"}
 
 
 def test_every_known_case_exists() -> None:

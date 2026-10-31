@@ -31,6 +31,16 @@ touches and how their tests came out.
 |---|----------|-------|
 | O1 | Ports whose node is unknown: rejected at construction, as edges with an unknown endpoint are today; "not connected" is a mask. | recommended, not decided |
 | O2 | A "touching" relation (an edge with a port at a node of a component it is not a member of). | not part of the first pull request |
+| O3 | What these mean on edges with ports: `neighbors`, `successors`, `predecessors`, `degree`, `in_degree`, `out_degree`, `incident_edge_indices`, `outgoing_edge_indices`, `incoming_edge_indices`, `is_multigraph`, `with_edges`, `split_node`, `all_edge_paths`, `cycle_basis`, `quotient_edges`, `degrees`, `bcc_edge_labels`, `series_parallel_reduce`, `series_parallel_state`. | open; until decided they raise `NotImplementedError` on a graph with multiport edges instead of answering |
+
+## Implementation notes
+
+Choices inside the decisions above, recorded so that they can be questioned.
+
+| Note | Serves |
+|------|--------|
+| The multiport kernels live in their own extension, `pygraphc._ports`, sharing only the data-model header with `_core`. Inside `_core` they changed how link-time optimization inlined the shared union-find, costing graphs of lines 1 to 3% in the component kernels; apart, `_core` compiles exactly as before. | D3 |
+| `Graph()` tries the unchanged line parser first and switches to the port parser only when that rejects the input; the port parser shares the node id parser, so errors on graphs of lines keep their message. A graph with a multiport edge is a `PortGraph`, a subclass of `Graph`, so the line methods stay as they were. | D3 |
 
 ## Rejected
 

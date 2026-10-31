@@ -61,6 +61,12 @@ from pygraphc._core import topological_sort_ctx as _topological_sort_ctx
 from pygraphc._dag_learn import estimate_cpds as _estimate_cpds
 from pygraphc._dag_learn import hill_climb_k2 as _hill_climb_k2
 from pygraphc._dag_learn import k2_local_score as _k2_local_score
+from pygraphc._ports import parse_port_graph as _parse_port_graph
+from pygraphc._ports import port_component_labels as _port_component_labels
+from pygraphc._ports import port_connected_components as _port_connected_components
+from pygraphc._ports import port_connected_components_with_branch_ids as _port_connected_components_with_branch_ids
+from pygraphc._ports import port_graph_shape as _port_graph_shape
+from pygraphc._ports import port_offsets as _port_offsets
 from pygraphc.reduction import (
     Leaf,
     MultiGraph,
@@ -102,6 +108,8 @@ __all__ = [
     "Partition",
     "PendantAction",
     "PendantPolicy",
+    "PortGraph",
+    "PortGraphView",
     "Reduced",
     "ReductionLog",
     "ReductionState",
@@ -745,9 +753,14 @@ def _connected_component_of(
     off a boundary, so it can only hold a straddling hit and no member is ever
     passed over.
     """
+    labels: bytes = _component_labels_ctx(graph._graph_capsule, excluded_edges, excluded_nodes)
+    return _component_of_labels(graph, node_id, labels)
+
+
+def _component_of_labels(graph: Graph[NodeIdT, BranchIdT], node_id: NodeIdT, labels: bytes) -> set[NodeIdT]:
+    """Members of ``node_id``'s component from one int32 label per node index, see ``_connected_component_of``."""
     node_ids = graph._node_ids
     node_index = _node_index_of(graph, node_id)
-    labels: bytes = _component_labels_ctx(graph._graph_capsule, excluded_edges, excluded_nodes)
     label_values = memoryview(labels).cast("i")
     label_value = label_values[node_index]
     if label_value == _EXCLUDED_LABEL:
@@ -791,6 +804,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         "_further_edge_indices_by_branch_id",
         "_node_index_by_node_id",
         "_directed",
+        "_port_offsets",
     )
 
     _node_ids: Sequence[NodeIdT]
@@ -800,6 +814,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     _further_edge_indices_by_branch_id: dict[BranchIdT, list[int]] | None
     _node_index_by_node_id: dict[NodeIdT, int] | None
     _directed: bool
+    _port_offsets: memoryview | None
 
     @overload
     def __init__(
@@ -842,7 +857,13 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         if dst is not None:
             self._graph_capsule = _parse_graph(node_ids, edges_or_src, dst, directed)
         else:
-            self._graph_capsule = _parse_graph(node_ids, edges_or_src, None, directed)
+            try:
+                self._graph_capsule = _parse_graph(node_ids, edges_or_src, None, directed)
+            except (TypeError, ValueError):
+                # The port parser shares the node id parser, so a line error raises again with its own message.
+                self._graph_capsule = _parse_port_graph(node_ids, edges_or_src, directed)
+                self.__class__ = PortGraph
+                self._port_offsets = None
         if branch_ids is not None and len(branch_ids) != self.edge_count:
             raise ValueError(  # noqa: TRY003 — the two counts are the whole message
                 f"branch_ids length {len(branch_ids)} does not match edge count {self.edge_count}"
@@ -1958,6 +1979,234 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         if not lengths:
             return 0.0
         return max(lengths.values())
+
+
+class PortGraph(Graph[NodeIdT, BranchIdT]):
+    """A ``Graph`` whose edges have ports: built by ``Graph()`` when an edge is not a pair of node ids.
+
+    An edge is a tuple of node ids, one per port, and the position in the
+    tuple is the port index; a directed edge is ``(u, v)`` or
+    ``(in_nodes, out_nodes)``. The C core stores every edge as its list of
+    ports, with no auxiliary nodes or edges. A port is active when its edge,
+    the port and its node are unmasked, and an edge joins its active ports;
+    see the README section *Edges with ports* and
+    ``docs/multiport-decisions.md`` for the full contract.
+    """
+
+    __slots__ = ()
+
+    @property
+    def edge_count(self) -> int:
+        """Number of edges, as given."""
+        return int(_port_graph_shape(self._graph_capsule)[1])
+
+    @property
+    def port_count(self) -> int:
+        """Number of ports over all edges."""
+        return int(_port_graph_shape(self._graph_capsule)[2])
+
+    def _port_offset_values(self) -> memoryview:
+        """int32 offsets: the ports of edge ``e`` are ``offsets[e]`` up to ``offsets[e + 1]``."""
+        if self._port_offsets is None:
+            self._port_offsets = memoryview(_port_offsets(self._graph_capsule)).cast("i")
+        return self._port_offsets
+
+    def _view(self) -> PortGraphView[NodeIdT, BranchIdT]:
+        return PortGraphView(self, bytearray(self.edge_count), bytearray(self.port_count), bytearray(self.node_count))
+
+    def without_edges(self, edge_indices: Collection[int]) -> PortGraphView[NodeIdT, BranchIdT]:  # type: ignore[override]
+        """View with the given edges masked: each joins nothing (masking case 1)."""
+        return self._view().without_edges(edge_indices)
+
+    def without_ports(self, ports: Collection[tuple[int, int]]) -> PortGraphView[NodeIdT, BranchIdT]:
+        """View with the given ``(edge_index, port_index)`` ports masked; the other ports of their edges stay joined."""
+        return self._view().without_ports(ports)
+
+    def without_nodes(self, node_ids: Collection[NodeIdT]) -> PortGraphView[NodeIdT, BranchIdT]:  # type: ignore[override]
+        """View with the given nodes masked: they leave every result and their ports are inactive."""
+        return self._view().without_nodes(node_ids)
+
+    def without_branches(self, branch_ids: Collection[BranchIdT]) -> PortGraphView[NodeIdT, BranchIdT]:  # type: ignore[override]
+        """View with every edge carrying one of the branch ids masked."""
+        return self._view().without_edges(self._edge_indices_of_branches(branch_ids))
+
+    def connected_components(self) -> Generator[set[NodeIdT], None, None]:
+        """Each connected component as a set of node ids; an edge joins its active ports."""
+        self._require_undirected("connected_components")
+        yield from _port_connected_components(self._graph_capsule)
+
+    def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
+        """Each weakly connected component as a set of node ids, direction ignored."""
+        self._require_directed("weakly_connected_components")
+        yield from _port_connected_components(self._graph_capsule)
+
+    def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
+        """The connected component containing ``node_id``."""
+        self._require_undirected("connected_component")
+        return _component_of_labels(self, node_id, _port_component_labels(self._graph_capsule))
+
+    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
+        """``(node ids, branch ids)`` per component; an edge belongs to the component of its active ports."""
+        self._require_undirected("connected_components_with_branch_ids")
+        if self._branch_ids is None:
+            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
+        yield from _port_connected_components_with_branch_ids(self._graph_capsule, self._branch_ids)
+
+    def component_labels(self) -> memoryview:
+        """The smallest node index of its component per node index, as an int32 view; direction ignored."""
+        return memoryview(_port_component_labels(self._graph_capsule)).cast("i")
+
+
+class PortGraphView(Generic[NodeIdT, BranchIdT]):
+    """A ``PortGraph`` with edges, ports and nodes masked; masks combine as a union in any order."""
+
+    __slots__ = ("_graph", "_excluded_edges", "_excluded_ports", "_excluded_nodes")
+
+    def __init__(
+        self,
+        graph: PortGraph[NodeIdT, BranchIdT],
+        excluded_edges: bytearray,
+        excluded_ports: bytearray,
+        excluded_nodes: bytearray,
+    ) -> None:
+        self._graph = graph
+        self._excluded_edges = excluded_edges
+        self._excluded_ports = excluded_ports
+        self._excluded_nodes = excluded_nodes
+
+    def _copy(self) -> PortGraphView[NodeIdT, BranchIdT]:
+        return PortGraphView(
+            self._graph,
+            bytearray(self._excluded_edges),
+            bytearray(self._excluded_ports),
+            bytearray(self._excluded_nodes),
+        )
+
+    def _masks(self) -> tuple[bytearray, bytearray, bytearray]:
+        return self._excluded_edges, self._excluded_ports, self._excluded_nodes
+
+    def without_edges(self, edge_indices: Collection[int]) -> PortGraphView[NodeIdT, BranchIdT]:
+        """A further view with the given edges masked as well."""
+        view = self._copy()
+        for edge_index in edge_indices:
+            view._excluded_edges[edge_index] = 1
+        return view
+
+    def without_ports(self, ports: Collection[tuple[int, int]]) -> PortGraphView[NodeIdT, BranchIdT]:
+        """A further view with the given ``(edge_index, port_index)`` ports masked as well."""
+        offsets = self._graph._port_offset_values()
+        view = self._copy()
+        for edge_index, port_index in ports:
+            first_port = offsets[edge_index]
+            if not 0 <= port_index < offsets[edge_index + 1] - first_port:
+                raise IndexError(f"edge {edge_index} has no port {port_index}")  # noqa: TRY003 — the indices are the message
+            view._excluded_ports[first_port + port_index] = 1
+        return view
+
+    def without_nodes(self, node_ids: Collection[NodeIdT]) -> PortGraphView[NodeIdT, BranchIdT]:
+        """A further view with the given nodes masked as well; unknown node ids are ignored."""
+        node_index_by_node_id = self._graph._get_node_index_by_node_id()
+        view = self._copy()
+        for node_id in node_ids:
+            node_index = node_index_by_node_id.get(node_id)
+            if node_index is not None:
+                view._excluded_nodes[node_index] = 1
+        return view
+
+    def without_branches(self, branch_ids: Collection[BranchIdT]) -> PortGraphView[NodeIdT, BranchIdT]:
+        """A further view with every edge carrying one of the branch ids masked as well."""
+        return self.without_edges(self._graph._edge_indices_of_branches(branch_ids))
+
+    def connected_components(self) -> Generator[set[NodeIdT], None, None]:
+        """Each connected component of the active graph as a set of node ids; masked nodes are left out."""
+        self._graph._require_undirected("connected_components")
+        yield from _port_connected_components(self._graph._graph_capsule, *self._masks())
+
+    def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
+        """Each weakly connected component of the active graph, direction ignored."""
+        self._graph._require_directed("weakly_connected_components")
+        yield from _port_connected_components(self._graph._graph_capsule, *self._masks())
+
+    def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
+        """The connected component containing ``node_id``; a masked node raises ``ValueError``."""
+        self._graph._require_undirected("connected_component")
+        return _component_of_labels(
+            self._graph, node_id, _port_component_labels(self._graph._graph_capsule, *self._masks())
+        )
+
+    def connected_components_with_branch_ids(self) -> Generator[tuple[set[NodeIdT], set[BranchIdT]], None, None]:
+        """``(node ids, branch ids)`` per component of the active graph, by the membership rule."""
+        self._graph._require_undirected("connected_components_with_branch_ids")
+        if self._graph._branch_ids is None:
+            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
+        yield from _port_connected_components_with_branch_ids(
+            self._graph._graph_capsule, self._graph._branch_ids, *self._masks()
+        )
+
+    def component_labels(self) -> memoryview:
+        """The smallest node index of its component per node index; masked nodes are labelled -1."""
+        return memoryview(_port_component_labels(self._graph._graph_capsule, *self._masks())).cast("i")
+
+
+_PORT_GRAPH_PLANNED = {
+    "bfs": "the traversal stage",
+    "shortest_path": "the traversal stage",
+    "shortest_path_lengths": "the traversal stage",
+    "multi_source_shortest_path_lengths": "the traversal stage",
+    "eccentricity": "the traversal stage",
+    "articulation_points": "the critical-elements stage",
+    "biconnected_components": "the critical-elements stage",
+    "two_edge_connected_components": "the critical-elements stage",
+    "nodes_on_simple_paths": "the critical-elements stage",
+    "bridges": "the critical-elements stage, as critical_edges()",
+    "bridges_with_branch_ids": "the critical-elements stage, as critical_edges()",
+    "edge_indices": "the critical-elements stage, as edge_indices_at()",
+    "strongly_connected_components": "the directed stage",
+    "topological_sort": "the directed stage",
+    "dag_longest_path": "the directed stage",
+}
+"""Methods a later stage of the multiport work implements on edges with ports."""
+
+_PORT_GRAPH_UNSPECIFIED = (
+    "is_multigraph",
+    "incident_edge_indices",
+    "outgoing_edge_indices",
+    "incoming_edge_indices",
+    "neighbors",
+    "successors",
+    "predecessors",
+    "degree",
+    "out_degree",
+    "in_degree",
+    "with_edges",
+    "split_node",
+    "all_edge_paths",
+    "quotient_edges",
+    "degrees",
+    "series_parallel_reduce",
+    "series_parallel_state",
+    "bcc_edge_labels",
+    "cycle_basis",
+)
+"""Methods whose meaning on edges with ports is not decided yet (``docs/multiport-decisions.md``, O3)."""
+
+
+def _unavailable_on_ports(name: str, reason: str) -> object:
+    def unavailable(*_arguments: object, **_keywords: object) -> object:
+        raise NotImplementedError(f"{name} is not available on graphs with multiport edges: {reason}")
+
+    unavailable.__name__ = name
+    return unavailable
+
+
+for _name, _stage in _PORT_GRAPH_PLANNED.items():
+    for _cls in (PortGraph, PortGraphView):
+        if _name != "edge_indices" or _cls is PortGraph:
+            setattr(_cls, _name, _unavailable_on_ports(_name, f"planned for {_stage}"))
+for _name in _PORT_GRAPH_UNSPECIFIED:
+    _unavailable = _unavailable_on_ports(_name, "its meaning there is not decided yet")
+    setattr(PortGraph, _name, property(_unavailable) if _name == "is_multigraph" else _unavailable)  # type: ignore[arg-type]  # a raising callable
+    setattr(PortGraphView, _name, _unavailable)
 
 
 def for_each_edge_excluded(

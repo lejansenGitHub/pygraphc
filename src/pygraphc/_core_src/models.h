@@ -95,6 +95,21 @@ typedef struct {
 PYGRAPHC_INTERNAL int build_adjacency(int node_count, EdgeList *edges, AdjacencyList *adjacency, int directed);
 PYGRAPHC_INTERNAL void free_adjacency(AdjacencyList *adjacency);
 
+/* ── Edges with ports: an edge is its list of ports, every port sits at a node ── */
+
+typedef struct {
+    int edge_count;
+    int port_count;
+    int *port_offsets;       /* edge_count + 1: the ports of edge e are port_offsets[e] .. port_offsets[e + 1] - 1 */
+    int *port_nodes;         /* port_count: the node index each port sits at */
+    int *port_edges;         /* port_count: the edge each port belongs to */
+    uint8_t *port_is_out;    /* port_count, directed only (NULL otherwise): 1 for an out-port, 0 for an in-port */
+    int *incidence_offsets;  /* node_count + 1: the ports at node v are incidence_ports[incidence_offsets[v] ..] */
+    int *incidence_ports;    /* port_count: port indices grouped by node */
+} PortList;
+
+PYGRAPHC_INTERNAL void free_port_list(PortList *ports);
+
 /* ── GraphContext: cached parsed graph for reuse across algorithms ── */
 
 typedef struct {
@@ -102,6 +117,7 @@ typedef struct {
     AdjacencyList adjacency;
     int           has_adjacency;
     int           directed;  /* 0 = undirected, 1 = directed */
+    PortList     *ports;     /* NULL for a graph of lines; set when an edge has other than two ports */
 } GraphContext;
 
 PYGRAPHC_INTERNAL void graph_context_destructor(PyObject *capsule);
