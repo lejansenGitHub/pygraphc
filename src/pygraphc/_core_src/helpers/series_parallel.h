@@ -3,10 +3,10 @@
 
 #include "../models.h"
 
-/* ── Terminal-preserving series-parallel reduction ──
+/* ── Node-preserving series-parallel reduction ──
  *
  * The structural loop of pygraphc.reduction: the three moves applied to a
- * fixpoint against a terminal set, emitting a flat operation log instead of
+ * fixpoint against a preserved node set, emitting a flat operation log instead of
  * provenance trees. The caller folds the log into its own algebra.
  *
  * Edge slots 0..edge_count-1 are the input edges in edge index order, the slots above
@@ -65,15 +65,15 @@ typedef struct { int first_slot; int start; int count; int from_node; int to_nod
 
 /* The four masks of a reduction, parsed together and released together. */
 typedef struct {
-    const uint8_t *terminal; const uint8_t *protect; const uint8_t *keep; const uint8_t *blocked;
+    const uint8_t *preserved; const uint8_t *protect; const uint8_t *keep; const uint8_t *blocked;
     const uint8_t *edge_mask; const uint8_t *node_mask;
-    Py_buffer terminal_buffer, protect_buffer, keep_buffer, blocked_buffer, edge_mask_buffer, node_mask_buffer;
+    Py_buffer preserved_buffer, protect_buffer, keep_buffer, blocked_buffer, edge_mask_buffer, node_mask_buffer;
     uint8_t *no_members;
 } SPMasks;
 
 /* ── The same reduction as primitives over an opaque state handle ──
  *
- * The incidence structure above, the terminal and protected masks and the
+ * The incidence structure above, the preserved node and protected masks and the
  * candidate queue live in a capsule, so a Python caller drives the fixpoint
  * itself: it asks for a move, applies it, and reads the log at the end. The
  * handle survives every move, so no graph is ever rebuilt between them.
@@ -87,7 +87,7 @@ typedef struct {
 typedef struct {
     SPState state;
     PyObject *owner;         /* graph capsule the state was built from */
-    uint8_t *terminal_mask;  /* owned copies, one byte per node index; a non-zero byte marks membership */
+    uint8_t *preserved_mask;  /* owned copies, one byte per node index; a non-zero byte marks membership */
     uint8_t *protected_mask;
     uint8_t *pendant_keep_mask;
     uint8_t *series_blocked_mask;
@@ -113,15 +113,15 @@ PYGRAPHC_INTERNAL int sp_apply_series(SPState *state, int node, int first, int s
                                       int first_neighbor, int second_neighbor);
 PYGRAPHC_INTERNAL int sp_gather_pair(SPState *state, int from_node, int to_node,
                                      const uint8_t *protected_mask, int *members);
-PYGRAPHC_INTERNAL int sp_move(SPState *state, int node, const uint8_t *terminal_mask, const uint8_t *protected_mask,
+PYGRAPHC_INTERNAL int sp_move(SPState *state, int node, const uint8_t *preserved_mask, const uint8_t *protected_mask,
                               const uint8_t *pendant_keep_mask, const uint8_t *series_blocked_mask);
 PYGRAPHC_INTERNAL int sp_load_edges(SPState *state, GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask);
-PYGRAPHC_INTERNAL int sp_drop_terminal_free(SPState *state, GraphContext *graph, int node_count, const uint8_t *edge_mask,
-                                            const uint8_t *node_mask, const uint8_t *terminal_mask);
-PYGRAPHC_INTERNAL void sp_enqueue_all_candidates(SPState *state, int node_count, const uint8_t *terminal_mask);
+PYGRAPHC_INTERNAL int sp_drop_components_without_preserved_nodes(SPState *state, GraphContext *graph, int node_count, const uint8_t *edge_mask,
+                                            const uint8_t *node_mask, const uint8_t *preserved_mask);
+PYGRAPHC_INTERNAL void sp_enqueue_all_candidates(SPState *state, int node_count, const uint8_t *preserved_mask);
 PYGRAPHC_INTERNAL PyObject *sp_build_log(SPState *state, int node_count);
 PYGRAPHC_INTERNAL void sp_release_masks(SPMasks *masks);
-PYGRAPHC_INTERNAL int sp_parse_masks(PyObject *terminal_obj, PyObject *protected_obj, PyObject *edge_mask_obj,
+PYGRAPHC_INTERNAL int sp_parse_masks(PyObject *preserved_obj, PyObject *protected_obj, PyObject *edge_mask_obj,
                                      PyObject *node_mask_obj, PyObject *keep_obj, PyObject *blocked_obj,
                                      int node_count, Py_ssize_t edge_count, SPMasks *masks);
 PYGRAPHC_INTERNAL void sp_handle_release(SPHandle *handle);

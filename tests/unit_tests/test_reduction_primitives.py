@@ -39,7 +39,7 @@ ENGINES: tuple[Literal["moves", "python", "rounds"], ...] = ("python", "moves", 
 
 
 def random_multigraph(seed: int) -> tuple[MultiGraph[int], set[int], set[int], bool]:
-    """A multigraph with self-loops and parallel edges plus its terminals, protected nodes and fold flag."""
+    """A multigraph with self-loops and parallel edges plus its preserved nodes, protected nodes and fold flag."""
     rng = random.Random(seed)
     node_count = rng.randint(4, 40)
     nodes = list(range(node_count))
@@ -53,9 +53,9 @@ def random_multigraph(seed: int) -> tuple[MultiGraph[int], set[int], set[int], b
             endpoints[edge_id] = endpoints[rng.choice(list(endpoints))]
         else:
             endpoints[edge_id] = (from_node, rng.randrange(node_count))
-    terminals = set(rng.sample(nodes, rng.randint(0, 4)))
+    preserved_nodes = set(rng.sample(nodes, rng.randint(0, 4)))
     protected = set(rng.sample(nodes, rng.randint(0, 2)))
-    return MultiGraph(nodes, endpoints), terminals, protected, rng.random() < 0.5
+    return MultiGraph(nodes, endpoints), preserved_nodes, protected, rng.random() < 0.5
 
 
 def _edge_key(edge_id: object) -> tuple[int, int]:
@@ -127,10 +127,10 @@ def canonical(reduced: Reduced[int]) -> object:
 def test_every_engine_agrees_on_the_canonical_properties(seed: int) -> None:
     """The monolith is the reference; a difference is a defect of a primitive, of the batch
     independence rule, or of the Python loop that drives them."""
-    graph, terminals, protected, fold_leaves = random_multigraph(seed)
-    reference = canonical(reduce(graph, terminals, protected, fold_leaves=fold_leaves, engine="c"))
+    graph, preserved_nodes, protected, fold_leaves = random_multigraph(seed)
+    reference = canonical(reduce(graph, preserved_nodes, protected, fold_leaves=fold_leaves, engine="c"))
     for engine in ENGINES:
-        reduced = reduce(graph, terminals, protected, fold_leaves=fold_leaves, engine=engine)
+        reduced = reduce(graph, preserved_nodes, protected, fold_leaves=fold_leaves, engine=engine)
         assert canonical(reduced) == reference, engine
 
 
@@ -138,26 +138,26 @@ def test_every_engine_agrees_on_the_canonical_properties(seed: int) -> None:
 def test_the_per_move_engine_reproduces_the_monolith_exactly(seed: int) -> None:
     """It asks for the same move the monolith would make next and applies it, so the operation log
     is the same log and the provenance trees must be identical in shape, not only in leaves."""
-    graph, terminals, protected, fold_leaves = random_multigraph(seed)
-    from_c = reduce(graph, terminals, protected, fold_leaves=fold_leaves, engine="c")
-    from_moves = reduce(graph, terminals, protected, fold_leaves=fold_leaves, engine="moves")
+    graph, preserved_nodes, protected, fold_leaves = random_multigraph(seed)
+    from_c = reduce(graph, preserved_nodes, protected, fold_leaves=fold_leaves, engine="c")
+    from_moves = reduce(graph, preserved_nodes, protected, fold_leaves=fold_leaves, engine="moves")
     assert strict(from_moves) == strict(from_c)
 
 
 def test_the_batched_engine_splits_a_series_then_pendant_into_two_pendants() -> None:
-    """The minimal divergence, on the path 0-1-2-3 with the terminal at node 1.
+    """The minimal divergence, on the path 0-1-2-3 with the preserved node at node 1.
 
     The monolith reaches node 2 while it still has degree two and merges it
     into an edge from 1 to 3, which the pendant move at 3 then drops whole.
     The batched engine deletes the pendants 0 and 3 first, which leaves node 2
     a pendant of its own. The material that left node 1 is the same either
     way, and so is every residual tree, because the residual is a bare
-    terminal; only the split of ``dropped`` differs.
+    preserved node; only the split of ``dropped`` differs.
     """
     graph = MultiGraph([0, 1, 2, 3], {0: (0, 1), 1: (1, 2), 2: (2, 3)})
 
-    from_c = reduce(graph, terminals={1}, engine="c")
-    from_rounds = reduce(graph, terminals={1}, engine="rounds")
+    from_c = reduce(graph, preserved_nodes={1}, engine="c")
+    from_rounds = reduce(graph, preserved_nodes={1}, engine="rounds")
 
     # --- Assert ---
     assert [(node, sorted(leaves(tree))) for node, tree in from_c.dropped] == [(1, [0]), (1, [1, 2])]
@@ -177,11 +177,11 @@ def test_the_series_batch_admits_no_two_adjacent_nodes() -> None:
     node_count = 130
     graph = MultiGraph(list(range(node_count)), {index: (index, index + 1) for index in range(node_count - 1)})
     kernel = graph._kernel
-    terminal_mask = bytearray(node_count)
-    terminal_mask[0] = terminal_mask[node_count - 1] = 1
+    preserved_mask = bytearray(node_count)
+    preserved_mask[0] = preserved_mask[node_count - 1] = 1
 
     rounds = 0
-    with kernel.graph.series_parallel_state(terminal_mask, bytes(node_count)) as state:
+    with kernel.graph.series_parallel_state(preserved_mask, bytes(node_count)) as state:
         first = state.batch_moves(ReductionState.SERIES)
         assert first is not None
         admitted = memoryview(first).cast("i")[::5].tolist()
@@ -198,7 +198,7 @@ def test_the_series_batch_admits_no_two_adjacent_nodes() -> None:
     # --- Assert ---
     assert admitted == list(range(1, node_count - 1, 2))
     assert rounds <= 10, f"{node_count} nodes took {rounds} rounds"
-    assert reduce(graph, terminals={0, node_count - 1}, engine="rounds").graph.nodes == [0, node_count - 1]
+    assert reduce(graph, preserved_nodes={0, node_count - 1}, engine="rounds").graph.nodes == [0, node_count - 1]
 
 
 def test_the_handle_carries_the_graph_it_was_built_from() -> None:
@@ -254,9 +254,9 @@ def test_a_move_naming_an_index_the_state_does_not_have_is_refused() -> None:
         assert state.apply_move(state.next_move()) == (2, 0)
 
 
-def test_a_fresh_state_has_applied_no_move_but_dropped_the_terminal_free_components() -> None:
+def test_a_fresh_state_has_applied_no_move_but_dropped_the_components_without_preserved_nodes() -> None:
     """Construction is not a move: it links the incidences, emits one leaf per edge and removes the
-    components that carry no terminal, which must happen before any move can apply."""
+    components that carry no preserved node, which must happen before any move can apply."""
     graph = pygraphc.Graph([0, 1, 2, 3], [(0, 1), (2, 3)])
     with graph.series_parallel_state(bytes([1, 0, 0, 0]), bytes(4)) as state:
         log = state.log()
@@ -325,15 +325,15 @@ def test_a_series_move_naming_one_edge_twice_is_refused() -> None:
         assert state.apply_move((ReductionState.SERIES, 1, 0, 1, 0, 2)) == (2, 0)
 
 
-def test_a_move_that_would_remove_a_terminal_is_refused() -> None:
-    """Terminals survive the reduction by contract and neither reporting primitive ever offers one,
-    so a pendant or series move naming a terminal node comes from the caller and must raise."""
+def test_a_move_that_would_remove_a_preserved_node_is_refused() -> None:
+    """Preserved nodes survive the reduction by contract and neither reporting primitive ever offers one,
+    so a pendant or series move naming a preserved node comes from the caller and must raise."""
     graph = pygraphc.Graph([0, 1, 2], [(0, 1), (1, 2)])
     with graph.series_parallel_state(bytes([1, 0, 1]), bytes(3)) as state:
         # --- Assert ---
-        with pytest.raises(ValueError, match="live non-terminal node"):
+        with pytest.raises(ValueError, match="live non-preserved node"):
             state.apply_move((ReductionState.PENDANT, 0, 0, -1, 1, -1))
-        with pytest.raises(ValueError, match="live non-terminal node"):
+        with pytest.raises(ValueError, match="live non-preserved node"):
             state.apply_batch(ReductionState.PENDANT, struct.pack("<5i", 2, 1, -1, 1, -1))
         assert state.apply_move(state.next_move()) == (2, 0)
         log = state.log()
