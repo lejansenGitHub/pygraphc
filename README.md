@@ -431,17 +431,36 @@ list(view.connected_components())  # [{1, 2, 3}] — still connected via edge 1
 > is written down first so that the semantics can be reviewed, and changed on
 > request, before the code exists.
 
-An edge joins its **ports**, and every port sits at a node. A line is the
-two-port case; a three-winding transformer is an edge with three ports. Ports
-are addressed by their position in the edge, `(edge_id, port_index)`, never by
-node, so two ports of one edge at the same node stay distinguishable. pygraphc
-knows nothing about what a port is; which port is a transformer's primary is
-the caller's mapping.
+An edge joins its **ports**, and every port sits at a node. An edge is written
+as a tuple of node ids: a pair is a line, exactly as before, and a longer tuple
+is an edge with that many ports. The position in the tuple is the port index,
+so ports are addressed as `(edge_index, port_index)`, never by node, and two
+ports of one edge at the same node stay distinguishable. pygraphc knows nothing
+about what a port is; which port is a transformer's primary is the caller's
+mapping.
 
-In a directed graph every port is either an **in-port** or an **out-port**,
-and every edge needs at least one of each. Reaching the node of any active
-in-port reaches the nodes of all active out-ports (OR semantics: each input
-feeds every output on its own).
+```python
+graph = Graph(
+    [1, 2, 3, 4, 5],
+    [(1, 2), (2, 3, 4), (4, 5)],   # a line, a three-port edge, a line
+)
+```
+
+**Directed graphs** keep the pair form unchanged: `(u, v)` is an edge from `u`
+to `v`, with no extra direction input. An edge with more ports is written as
+two tuples, its in-nodes and its out-nodes; its port indices run through the
+in-nodes first, then the out-nodes. Every edge needs at least one in-port and
+one out-port. Reaching the node of any active in-port reaches the nodes of all
+active out-ports (OR semantics: each input feeds every output on its own).
+
+```python
+Graph(node_ids, [(1, 2), ((1,), (2, 3)), ((4, 5), (6,))], directed=True)
+#                 1 -> 2   1 feeds 2 and 3   4 and 5 both feed 6
+```
+
+**Graphs of lines behave exactly as before.** Every existing call, input
+format and result keeps its meaning; edges with more ports only add to the
+interface.
 
 #### One rule decides everything: active ports
 
@@ -476,14 +495,16 @@ named test.
 | 11 | Critical edges, critical nodes, biconnected blocks | computed on active ports only; a masked port is never critical | — |
 | 12 | Tree-shaped edge with k ports in biconnected blocks | one block holding its k port nodes, as a bridge is its own two-node block | — |
 
-#### Results name edges, not node pairs
+#### Methods that name edges by node pair
 
-Results that report edges report edge ids. A node pair cannot name a
-three-port edge and is ambiguous for parallel lines anyway, so the pair forms
-(`bridges()` as `(u, v)` tuples, `edge_indices(u, v)`) give way to edge ids
-and the separate `*_with_branch_ids` methods merge into the plain ones. This
-is a breaking change, taken before 1.0 on purpose; the changelog carries the
-mapping from each old method to its replacement.
+`bridges()` returns node pairs and `edge_indices(u, v)` takes one. A pair cannot
+name an edge with more than two ports, so on a graph that has one, these
+methods raise an error naming their replacement instead of answering
+incompletely: `critical_edges()` returns the edge indices of every edge whose
+removal disconnects its component, lines and multiport edges alike, and
+`edge_indices_at(node_ids)` finds edges by their port nodes. On a graph of
+lines they behave as before, and the `*_with_branch_ids` methods stay as they
+are.
 
 #### Open points
 
