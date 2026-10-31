@@ -9,42 +9,43 @@ from dataclasses import dataclass
 from typing import Generic, NewType, TypeVar, overload
 
 from pygraphc._core import all_edge_paths_ctx as _all_edge_paths_ctx
-from pygraphc._core import ap_ctx as _ap_ctx
-from pygraphc._core import ap_nid as _ap_nid
-from pygraphc._core import bcc_ctx as _bcc_ctx
-from pygraphc._core import bcc_edge_labels_ctx as _bcc_edge_labels_ctx
-from pygraphc._core import bcc_nid as _bcc_nid
+from pygraphc._core import articulation_points_by_node_id as _articulation_points_by_node_id
+from pygraphc._core import articulation_points_ctx as _articulation_points_ctx
+from pygraphc._core import bfs_by_node_id as _bfs_by_node_id
 from pygraphc._core import bfs_ctx as _bfs_ctx
-from pygraphc._core import bfs_nid as _bfs_nid
+from pygraphc._core import biconnected_component_edge_labels_ctx as _biconnected_component_edge_labels_ctx
+from pygraphc._core import biconnected_components_by_node_id as _biconnected_components_by_node_id
+from pygraphc._core import biconnected_components_ctx as _biconnected_components_ctx
 from pygraphc._core import bridges_as_edge_indices_ctx as _bridges_as_edge_indices_ctx
+from pygraphc._core import bridges_by_node_id as _bridges_by_node_id
 from pygraphc._core import bridges_ctx as _bridges_ctx
-from pygraphc._core import bridges_nid as _bridges_nid
-from pygraphc._core import cc_branches_ctx as _cc_branches_ctx
-from pygraphc._core import cc_ctx as _cc_ctx
-from pygraphc._core import cc_nid as _cc_nid
-from pygraphc._core import cc_nid_split as _cc_nid_split
 from pygraphc._core import component_labels_ctx as _component_labels_ctx
-from pygraphc._core import connected_components_with_branches_remapped as _cc_branches_remapped
+from pygraphc._core import connected_components_by_node_id as _connected_components_by_node_id
+from pygraphc._core import connected_components_by_node_id_split as _connected_components_by_node_id_split
+from pygraphc._core import connected_components_ctx as _connected_components_ctx
+from pygraphc._core import connected_components_with_branches_ctx as _connected_components_with_branches_ctx
+from pygraphc._core import connected_components_with_branches_remapped as _connected_components_with_branches_remapped
 from pygraphc._core import cycle_basis_ctx as _cycle_basis_ctx
 from pygraphc._core import dag_longest_path_ctx as _dag_longest_path_ctx
 from pygraphc._core import degree_ctx as _degree_ctx
 from pygraphc._core import degrees_ctx as _degrees_ctx
+from pygraphc._core import dijkstra_by_node_id as _dijkstra_by_node_id
 from pygraphc._core import dijkstra_ctx as _dijkstra_ctx
-from pygraphc._core import dijkstra_nid as _dijkstra_nid
 from pygraphc._core import edge_indices_ctx as _edge_indices_ctx
 from pygraphc._core import graph_edge_count as _graph_edge_count
 from pygraphc._core import graph_node_count as _graph_node_count
 from pygraphc._core import in_degree_ctx as _in_degree_ctx
 from pygraphc._core import incident_edges_ctx as _incident_edges_ctx
 from pygraphc._core import incoming_edges_ctx as _incoming_edges_ctx
-from pygraphc._core import msdijk_ctx as _msdijk_ctx
-from pygraphc._core import msdijk_nid as _msdijk_nid
+from pygraphc._core import multi_source_dijkstra_by_node_id as _multi_source_dijkstra_by_node_id
+from pygraphc._core import multi_source_dijkstra_ctx as _multi_source_dijkstra_ctx
 from pygraphc._core import neighbors_ctx as _neighbors_ctx
 from pygraphc._core import parse_graph as _parse_graph
 from pygraphc._core import predecessors_ctx as _predecessors_ctx
 from pygraphc._core import quotient_edges_ctx as _quotient_edges_ctx
-from pygraphc._core import scc_ctx as _scc_ctx
 from pygraphc._core import series_parallel_reduce_ctx as _series_parallel_reduce_ctx
+from pygraphc._core import shortest_path_lengths_by_node_id as _shortest_path_lengths_by_node_id
+from pygraphc._core import shortest_path_lengths_ctx as _shortest_path_lengths_ctx
 from pygraphc._core import sp_apply_batch as _sp_apply_batch
 from pygraphc._core import sp_apply_move as _sp_apply_move
 from pygraphc._core import sp_apply_parallel as _sp_apply_parallel
@@ -54,10 +55,9 @@ from pygraphc._core import sp_pair_edges as _sp_pair_edges
 from pygraphc._core import sp_state_free as _sp_state_free
 from pygraphc._core import sp_state_log as _sp_state_log
 from pygraphc._core import sp_state_new as _sp_state_new
-from pygraphc._core import sssp_ctx as _sssp_ctx
-from pygraphc._core import sssp_nid as _sssp_nid
-from pygraphc._core import toposort_ctx as _toposort_ctx
-from pygraphc._core import toposort_nid as _toposort_nid
+from pygraphc._core import strongly_connected_components_ctx as _strongly_connected_components_ctx
+from pygraphc._core import topological_sort_by_node_id as _topological_sort_by_node_id
+from pygraphc._core import topological_sort_ctx as _topological_sort_ctx
 from pygraphc._dag_learn import estimate_cpds as _estimate_cpds
 from pygraphc._dag_learn import hill_climb_k2 as _hill_climb_k2
 from pygraphc._dag_learn import k2_local_score as _k2_local_score
@@ -179,9 +179,9 @@ def connected_components(
         connected_components(node_ids, src, dst)     — two flat lists of node IDs
     """
     if dst is not None:
-        yield from _cc_nid_split(node_ids, edges_or_src, dst)
+        yield from _connected_components_by_node_id_split(node_ids, edges_or_src, dst)
     else:
-        yield from _cc_nid(node_ids, edges_or_src)
+        yield from _connected_components_by_node_id(node_ids, edges_or_src)
 
 
 def connected_components_with_branch_ids(
@@ -197,7 +197,7 @@ def connected_components_with_branch_ids(
     # Branch variant still uses index-based edges internally
     idx = {nid: i for i, nid in enumerate(node_ids)}
     idx_edges = [(idx[u], idx[v]) for u, v in edges]
-    yield from _cc_branches_remapped(node_ids, idx_edges, branch_ids)
+    yield from _connected_components_with_branches_remapped(node_ids, idx_edges, branch_ids)
 
 
 def cycle_basis(
@@ -237,7 +237,7 @@ def bridges(
     edges: Sequence[tuple[NodeIdT, NodeIdT]],
 ) -> list[tuple[NodeIdT, NodeIdT]]:
     """Return bridge edges as (node_id, node_id) pairs."""
-    result: list[tuple[NodeIdT, NodeIdT]] = _bridges_nid(node_ids, edges)
+    result: list[tuple[NodeIdT, NodeIdT]] = _bridges_by_node_id(node_ids, edges)
     return result
 
 
@@ -246,7 +246,7 @@ def articulation_points(
     edges: Sequence[tuple[NodeIdT, NodeIdT]],
 ) -> set[NodeIdT]:
     """Return the set of articulation points."""
-    result: set[NodeIdT] = _ap_nid(node_ids, edges)
+    result: set[NodeIdT] = _articulation_points_by_node_id(node_ids, edges)
     return result
 
 
@@ -255,7 +255,7 @@ def biconnected_components(
     edges: Sequence[tuple[NodeIdT, NodeIdT]],
 ) -> Generator[set[NodeIdT], None, None]:
     """Yield each biconnected component as a set of node IDs."""
-    yield from _bcc_nid(node_ids, edges)
+    yield from _biconnected_components_by_node_id(node_ids, edges)
 
 
 def bfs(
@@ -264,7 +264,7 @@ def bfs(
     source: NodeIdT,
 ) -> list[NodeIdT]:
     """Return nodes visited in BFS order from source."""
-    result: list[NodeIdT] = _bfs_nid(node_ids, edges, source)
+    result: list[NodeIdT] = _bfs_by_node_id(node_ids, edges, source)
     return result
 
 
@@ -285,7 +285,7 @@ def shortest_path(
     ``array.array("d", ...)``) to hand it to C as is; a list of floats is
     converted element by element first, which costs more than the search.
     """
-    _dist, path = _dijkstra_nid(node_ids, edges, weights, source, target)
+    _dist, path = _dijkstra_by_node_id(node_ids, edges, weights, source, target)
     result: list[NodeIdT] = path
     return result
 
@@ -299,7 +299,7 @@ def shortest_path_lengths(
 ) -> dict[NodeIdT, float]:
     """Return {node_id: distance} for all nodes reachable from source."""
     c = cutoff if cutoff is not None else -1.0
-    result: dict[NodeIdT, float] = _sssp_nid(node_ids, edges, weights, source, c)
+    result: dict[NodeIdT, float] = _shortest_path_lengths_by_node_id(node_ids, edges, weights, source, c)
     return result
 
 
@@ -312,7 +312,7 @@ def multi_source_shortest_path_lengths(
 ) -> dict[NodeIdT, float]:
     """Return {node_id: distance} from nearest source to each reachable node."""
     c = cutoff if cutoff is not None else -1.0
-    result: dict[NodeIdT, float] = _msdijk_nid(node_ids, edges, weights, sources, c)
+    result: dict[NodeIdT, float] = _multi_source_dijkstra_by_node_id(node_ids, edges, weights, sources, c)
     return result
 
 
@@ -357,7 +357,7 @@ def topological_sort(
     Edges are treated as directed: (u, v) means u -> v.
     Raises ValueError if the graph contains a cycle.
     """
-    result: list[NodeIdT] = _toposort_nid(node_ids, edges)
+    result: list[NodeIdT] = _topological_sort_by_node_id(node_ids, edges)
     return result
 
 
@@ -1101,7 +1101,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     def connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each connected component as a set of original node IDs."""
         self._require_undirected("connected_components")
-        yield from _cc_ctx(self._ctx)
+        yield from _connected_components_ctx(self._ctx)
 
     def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the connected component containing ``node_id`` as a set of node IDs.
@@ -1127,12 +1127,12 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         self._require_undirected("connected_components_with_branch_ids")
         if self._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-        yield from _cc_branches_ctx(self._ctx, self._branch_ids)
+        yield from _connected_components_with_branches_ctx(self._ctx, self._branch_ids)
 
     def strongly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each strongly connected component as a set of node IDs."""
         self._require_directed("strongly_connected_components")
-        yield from _scc_ctx(self._ctx)
+        yield from _strongly_connected_components_ctx(self._ctx)
 
     def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each weakly connected component as a set of node IDs.
@@ -1140,7 +1140,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         Ignores edge direction — equivalent to undirected connected components.
         """
         self._require_directed("weakly_connected_components")
-        yield from _cc_ctx(self._ctx)
+        yield from _connected_components_ctx(self._ctx)
 
     def topological_sort(self) -> list[NodeIdT]:
         """Return nodes in topological order (Kahn's algorithm).
@@ -1148,7 +1148,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         Raises ValueError if the graph contains a cycle.
         """
         self._require_directed("topological_sort")
-        result: list[NodeIdT] = _toposort_ctx(self._ctx)
+        result: list[NodeIdT] = _topological_sort_ctx(self._ctx)
         return result
 
     def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
@@ -1174,13 +1174,13 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     def articulation_points(self) -> set[NodeIdT]:
         """Return the set of articulation points."""
         self._require_undirected("articulation_points")
-        result: set[NodeIdT] = _ap_ctx(self._ctx)
+        result: set[NodeIdT] = _articulation_points_ctx(self._ctx)
         return result
 
     def biconnected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each biconnected component as a set of node IDs."""
         self._require_undirected("biconnected_components")
-        yield from _bcc_ctx(self._ctx)
+        yield from _biconnected_components_ctx(self._ctx)
 
     def component_labels(self) -> memoryview:
         """Connected component label per node index as an int32 view, direction ignored.
@@ -1266,7 +1266,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         component, get -1.
         """
         self._require_undirected("bcc_edge_labels")
-        result: bytes = _bcc_edge_labels_ctx(self._ctx)
+        result: bytes = _biconnected_component_edge_labels_ctx(self._ctx)
         return memoryview(result).cast("i")
 
     def cycle_basis(self) -> list[list[NodeIdT]]:
@@ -1321,7 +1321,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     ) -> dict[NodeIdT, float]:
         """Return {node_id: distance} for all nodes reachable from source."""
         c = cutoff if cutoff is not None else -1.0
-        result: dict[NodeIdT, float] = _sssp_ctx(self._ctx, weights, source, c)
+        result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(self._ctx, weights, source, c)
         return result
 
     def multi_source_shortest_path_lengths(
@@ -1332,7 +1332,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     ) -> dict[NodeIdT, float]:
         """Return {node_id: distance} from nearest source to each reachable node."""
         c = cutoff if cutoff is not None else -1.0
-        result: dict[NodeIdT, float] = _msdijk_ctx(self._ctx, weights, sources, c)
+        result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(self._ctx, weights, sources, c)
         return result
 
     def eccentricity(self, weights: list[float], source: NodeIdT) -> float:
@@ -1354,7 +1354,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         mask = bytearray(self.edge_count)
         for idx in bridge_edge_indices:
             mask[idx] = 1
-        yield from _cc_ctx(self._ctx, mask)
+        yield from _connected_components_ctx(self._ctx, mask)
 
     def nodes_on_simple_paths(
         self,
@@ -1709,7 +1709,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     def connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each connected component as a set of original node IDs."""
         self._require_undirected("connected_components")
-        yield from _cc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        yield from _connected_components_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
     def connected_component(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the connected component containing ``node_id``, see ``Graph.connected_component``.
@@ -1732,7 +1732,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         self._require_undirected("connected_components_with_branch_ids")
         if self._graph._branch_ids is None:
             raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-        yield from _cc_branches_ctx(
+        yield from _connected_components_with_branches_ctx(
             self._graph._ctx,
             self._graph._branch_ids,
             self._excluded_edges,
@@ -1742,12 +1742,12 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     def strongly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each strongly connected component as a set of node IDs."""
         self._require_directed("strongly_connected_components")
-        yield from _scc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        yield from _strongly_connected_components_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
     def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each weakly connected component as a set of node IDs."""
         self._require_directed("weakly_connected_components")
-        yield from _cc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        yield from _connected_components_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
     def topological_sort(self) -> list[NodeIdT]:
         """Return nodes in topological order (Kahn's algorithm).
@@ -1755,7 +1755,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         Raises ValueError if the graph contains a cycle.
         """
         self._require_directed("topological_sort")
-        result: list[NodeIdT] = _toposort_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        result: list[NodeIdT] = _topological_sort_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
         return result
 
     def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
@@ -1769,13 +1769,13 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     def articulation_points(self) -> set[NodeIdT]:
         """Return the set of articulation points."""
         self._require_undirected("articulation_points")
-        result: set[NodeIdT] = _ap_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        result: set[NodeIdT] = _articulation_points_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
         return result
 
     def biconnected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each biconnected component as a set of node IDs."""
         self._require_undirected("biconnected_components")
-        yield from _bcc_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        yield from _biconnected_components_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
 
     def component_labels(self) -> memoryview:
         """Connected component label per node index as an int32 view, see ``Graph.component_labels``.
@@ -1821,7 +1821,9 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         Excluded edges and edges at an excluded node get -1.
         """
         self._require_undirected("bcc_edge_labels")
-        result: bytes = _bcc_edge_labels_ctx(self._graph._ctx, self._excluded_edges, self._excluded_nodes)
+        result: bytes = _biconnected_component_edge_labels_ctx(
+            self._graph._ctx, self._excluded_edges, self._excluded_nodes
+        )
         return memoryview(result).cast("i")
 
     def cycle_basis(self) -> list[list[NodeIdT]]:
@@ -1875,7 +1877,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     ) -> dict[NodeIdT, float]:
         """Return {node_id: distance} for all nodes reachable from source."""
         c = cutoff if cutoff is not None else -1.0
-        result: dict[NodeIdT, float] = _sssp_ctx(
+        result: dict[NodeIdT, float] = _shortest_path_lengths_ctx(
             self._graph._ctx,
             weights,
             source,
@@ -1893,7 +1895,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     ) -> dict[NodeIdT, float]:
         """Return {node_id: distance} from nearest source to each reachable node."""
         c = cutoff if cutoff is not None else -1.0
-        result: dict[NodeIdT, float] = _msdijk_ctx(
+        result: dict[NodeIdT, float] = _multi_source_dijkstra_ctx(
             self._graph._ctx,
             weights,
             sources,

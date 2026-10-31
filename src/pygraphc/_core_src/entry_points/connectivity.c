@@ -273,7 +273,7 @@ cleanup:
 
 /* ── connected_components (node-ID edges) ── */
 
-PyObject *py_cc_nid(PyObject *self, PyObject *args) {
+PyObject *py_connected_components_by_node_id(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj;
     if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
@@ -316,7 +316,7 @@ PyObject *py_cc_nid(PyObject *self, PyObject *args) {
 
 /* ── connected_components (node-ID, split endpoint sequences) ── */
 
-PyObject *py_cc_nid_split(PyObject *self, PyObject *args) {
+PyObject *py_connected_components_by_node_id_split(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *first_endpoints_obj, *second_endpoints_obj;
     if (!PyArg_ParseTuple(args, "OOO", &node_ids_obj, &first_endpoints_obj, &second_endpoints_obj)) return NULL;
 
@@ -359,7 +359,7 @@ PyObject *py_cc_nid_split(PyObject *self, PyObject *args) {
     return result;
 }
 
-PyObject *py_cc_ctx(PyObject *self, PyObject *args) {
+PyObject *py_connected_components_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
     GraphContext *graph = get_graph_context(capsule);
@@ -410,7 +410,7 @@ PyObject *py_cc_ctx(PyObject *self, PyObject *args) {
     return result;
 }
 
-/* ── cc_branches_ctx(capsule, branch_ids[, excluded_edges, excluded_nodes])
+/* ── connected_components_with_branches_ctx(capsule, branch_ids[, excluded_edges, excluded_nodes])
  *    -> list[tuple[set[NodeId], set[BranchId]]]
  *
  * Connected components with branch IDs from a cached graph context.
@@ -420,7 +420,7 @@ PyObject *py_cc_ctx(PyObject *self, PyObject *args) {
  * excluded_nodes: removed from the output node sets but their edges
  *     still contribute to connectivity and branch ID sets.
  */
-PyObject *py_cc_branches_ctx(PyObject *self, PyObject *args) {
+PyObject *py_connected_components_with_branches_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *branch_ids_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OO", &capsule, &branch_ids_obj, &edge_mask_obj, &node_mask_obj))
         return NULL;
@@ -548,7 +548,7 @@ cleanup:
     return result;
 }
 
-PyObject *py_scc_ctx(PyObject *self, PyObject *args) {
+PyObject *py_strongly_connected_components_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
     GraphContext *graph = get_graph_context(capsule);

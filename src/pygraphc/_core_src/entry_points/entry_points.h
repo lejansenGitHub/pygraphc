@@ -27,44 +27,44 @@ PYGRAPHC_INTERNAL PyObject *py_connected_components(PyObject *self, PyObject *ar
 PYGRAPHC_INTERNAL PyObject *py_connected_components_with_branches(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_connected_components_remapped(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_connected_components_with_branches_remapped(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_cc_nid(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_cc_nid_split(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_cc_ctx(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_cc_branches_ctx(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_scc_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_connected_components_by_node_id(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_connected_components_by_node_id_split(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_connected_components_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_connected_components_with_branches_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_strongly_connected_components_ctx(PyObject *self, PyObject *args);
 
 /* biconnectivity.c */
 PYGRAPHC_INTERNAL PyObject *py_bridges(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_articulation_points(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_biconnected_components(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_bridges_nid(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_ap_nid(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_bcc_nid(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_bridges_by_node_id(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_articulation_points_by_node_id(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_biconnected_components_by_node_id(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_bridges_ctx(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_ap_ctx(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_bcc_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_articulation_points_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_biconnected_components_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_bridges_as_edge_indices_ctx(PyObject *self, PyObject *args);
 
 /* traversal.c */
 PYGRAPHC_INTERNAL PyObject *py_bfs(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_bfs_nid(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_bfs_by_node_id(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_bfs_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args);
 
 /* shortest_paths.c */
 PYGRAPHC_INTERNAL PyObject *py_dijkstra(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_sssp_lengths(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_shortest_path_lengths(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_dijkstra_nid(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_sssp_nid(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_msdijk_nid(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_dijkstra_by_node_id(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_shortest_path_lengths_by_node_id(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_multi_source_dijkstra_by_node_id(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_sssp_ctx(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_msdijk_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_shortest_path_lengths_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_multi_source_dijkstra_ctx(PyObject *self, PyObject *args);
 
 /* cycles_dag.c */
-PYGRAPHC_INTERNAL PyObject *py_toposort_nid(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_toposort_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_topological_sort_by_node_id(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_topological_sort_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_cycle_basis_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_dag_longest_path_ctx(PyObject *self, PyObject *args);
 
@@ -81,7 +81,7 @@ PYGRAPHC_INTERNAL PyObject *py_edge_indices_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_component_labels_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_quotient_edges_ctx(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_degrees_ctx(PyObject *self, PyObject *args);
-PYGRAPHC_INTERNAL PyObject *py_bcc_edge_labels_ctx(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_biconnected_component_edge_labels_ctx(PyObject *self, PyObject *args);
 
 /* reduction.c */
 PYGRAPHC_INTERNAL PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject *keywords);

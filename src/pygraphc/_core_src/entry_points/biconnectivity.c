@@ -276,7 +276,7 @@ PyObject *py_biconnected_components(PyObject *self, PyObject *args) {
 
 /* ── bridges (node-ID edges) ── */
 
-PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
+PyObject *py_bridges_by_node_id(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj;
     if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
@@ -341,7 +341,7 @@ PyObject *py_bridges_nid(PyObject *self, PyObject *args) {
 
 /* ── articulation_points (node-ID edges) ── */
 
-PyObject *py_ap_nid(PyObject *self, PyObject *args) {
+PyObject *py_articulation_points_by_node_id(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj;
     if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
@@ -402,7 +402,7 @@ PyObject *py_ap_nid(PyObject *self, PyObject *args) {
 
 /* ── biconnected_components (node-ID edges) ── */
 
-PyObject *py_bcc_nid(PyObject *self, PyObject *args) {
+PyObject *py_biconnected_components_by_node_id(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj;
     if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
@@ -538,7 +538,7 @@ PyObject *py_bridges_ctx(PyObject *self, PyObject *args) {
     return result;
 }
 
-PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
+PyObject *py_articulation_points_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
     GraphContext *graph = get_graph_context(capsule);
@@ -598,7 +598,7 @@ PyObject *py_ap_ctx(PyObject *self, PyObject *args) {
     return result;
 }
 
-PyObject *py_bcc_ctx(PyObject *self, PyObject *args) {
+PyObject *py_biconnected_components_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
     GraphContext *graph = get_graph_context(capsule);

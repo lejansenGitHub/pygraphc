@@ -120,7 +120,7 @@ PyObject *py_dijkstra(PyObject *self, PyObject *args) {
 
 /* ── SSSP lengths (single source, all reachable, optional cutoff) ── */
 
-PyObject *py_sssp_lengths(PyObject *self, PyObject *args) {
+PyObject *py_shortest_path_lengths(PyObject *self, PyObject *args) {
     int node_count, source;
     double cutoff;
     PyObject *edges_obj, *weights_obj;
@@ -325,7 +325,7 @@ PyObject *py_multi_source_dijkstra(PyObject *self, PyObject *args) {
 
 /* ── dijkstra (node-ID edges) ── */
 
-PyObject *py_dijkstra_nid(PyObject *self, PyObject *args) {
+PyObject *py_dijkstra_by_node_id(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj, *weights_obj, *source_obj, *target_obj;
     if (!PyArg_ParseTuple(args, "OOOOO", &node_ids_obj, &edges_obj, &weights_obj, &source_obj, &target_obj))
         return NULL;
@@ -368,9 +368,9 @@ PyObject *py_dijkstra_nid(PyObject *self, PyObject *args) {
     return result;
 }
 
-/* ── sssp_lengths (node-ID edges) ── */
+/* ── shortest_path_lengths (node-ID edges) ── */
 
-PyObject *py_sssp_nid(PyObject *self, PyObject *args) {
+PyObject *py_shortest_path_lengths_by_node_id(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj, *weights_obj, *source_obj;
     double cutoff;
     if (!PyArg_ParseTuple(args, "OOOOd", &node_ids_obj, &edges_obj, &weights_obj, &source_obj, &cutoff))
@@ -433,7 +433,7 @@ PyObject *py_sssp_nid(PyObject *self, PyObject *args) {
 
 /* ── multi_source_dijkstra (node-ID edges) ── */
 
-PyObject *py_msdijk_nid(PyObject *self, PyObject *args) {
+PyObject *py_multi_source_dijkstra_by_node_id(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj, *weights_obj, *sources_obj;
     double cutoff;
     if (!PyArg_ParseTuple(args, "OOOOd", &node_ids_obj, &edges_obj, &weights_obj, &sources_obj, &cutoff))
@@ -556,7 +556,7 @@ PyObject *py_dijkstra_ctx(PyObject *self, PyObject *args) {
     return Py_BuildValue("(dN)", bidirectional_path.weight, path);
 }
 
-PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
+PyObject *py_shortest_path_lengths_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *weights_obj, *source_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     double cutoff;
     if (!PyArg_ParseTuple(args, "OOOd|OO", &capsule, &weights_obj, &source_obj, &cutoff, &edge_mask_obj, &node_mask_obj))
@@ -627,7 +627,7 @@ PyObject *py_sssp_ctx(PyObject *self, PyObject *args) {
     return result;
 }
 
-PyObject *py_msdijk_ctx(PyObject *self, PyObject *args) {
+PyObject *py_multi_source_dijkstra_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *weights_obj, *sources_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     double cutoff;
     if (!PyArg_ParseTuple(args, "OOOd|OO", &capsule, &weights_obj, &sources_obj, &cutoff, &edge_mask_obj, &node_mask_obj))

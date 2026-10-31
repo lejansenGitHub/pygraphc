@@ -141,14 +141,14 @@ PyObject *py_degrees_ctx(PyObject *self, PyObject *args) {
     return result;
 }
 
-/* bcc_edge_labels_ctx(capsule[, edge_mask, node_mask]) -> bytes of int32[edge_count]
+/* biconnected_component_edge_labels_ctx(capsule[, edge_mask, node_mask]) -> bytes of int32[edge_count]
  *
  * Biconnected component id of every edge, numbered in the order the
  * components complete in the depth-first search. A bridge is a singleton
  * component. Masked edges, edges at an excluded node and self-loops get -1.
- * Same iterative Tarjan as bcc_ctx with an edge stack of edge indices.
+ * Same iterative Tarjan as biconnected_components_ctx with an edge stack of edge indices.
  */
-PyObject *py_bcc_edge_labels_ctx(PyObject *self, PyObject *args) {
+PyObject *py_biconnected_component_edge_labels_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
     GraphContext *graph = get_graph_context(capsule);

@@ -61,7 +61,7 @@ PyObject *py_bfs(PyObject *self, PyObject *args) {
 
 /* ── bfs (node-ID edges) ── */
 
-PyObject *py_bfs_nid(PyObject *self, PyObject *args) {
+PyObject *py_bfs_by_node_id(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj, *source_obj;
     if (!PyArg_ParseTuple(args, "OOO", &node_ids_obj, &edges_obj, &source_obj)) return NULL;
 
