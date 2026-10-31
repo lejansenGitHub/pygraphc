@@ -235,9 +235,10 @@ def _with_edges() -> Measured:
     return lambda: graph.with_edges(added, list(range(10**6, 10**6 + len(added))))
 
 
-@register("for_each_edge_excluded/path_2k")
+@register("for_each_edge_excluded/path_500")
 def _for_each_edge_excluded() -> Measured:
-    graph = _graph(shapes.path, 2_000)
+    """Quadratic by design (one component search per edge), so a short path shows every change."""
+    graph = _graph(shapes.path, 500)
     return lambda: list(for_each_edge_excluded(graph, "connected_components"))
 
 
@@ -282,12 +283,6 @@ def _feeder_multigraph(size: int) -> tuple[MultiGraph[int], set[int]]:
     return MultiGraph(node_ids, dict(enumerate(edges))), terminals
 
 
-@register("reduce_c/meshed_feeders_20k")
-def _reduce_c() -> Measured:
-    graph, terminals = _feeder_multigraph(SIZE)
-    return lambda: reduce(graph, terminals, engine="c")
-
-
 @register("reduce_python/meshed_feeders_5k")
 def _reduce_python() -> Measured:
     graph, terminals = _feeder_multigraph(5_000)
@@ -321,9 +316,9 @@ def _partition_from_components() -> Measured:
     return lambda: Partition.from_components(graph, active)
 
 
-@register("tree_folds/meshed_feeders_20k")
+@register("tree_folds/meshed_feeders_5k")
 def _tree_folds() -> Measured:
-    graph, terminals = _feeder_multigraph(SIZE)
+    graph, terminals = _feeder_multigraph(5_000)
     reduced = reduce(graph, terminals)
     trees = list(reduced.provenance.values())
     all_closed = dict.fromkeys(graph.endpoints, True)

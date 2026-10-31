@@ -5,6 +5,8 @@ phases with ``timer.phase(name)``. ``InstructionTimer`` keeps that interface
 and switches callgrind's collection on and off around each phase instead of
 reading a clock, so every phase of every workflow is compared against the
 merge base like any other scenario, named ``workflow/<workflow>/<phase>``.
+Setup phases (generating the input) run unmeasured: they exercise Python's
+random module, not pygraphc.
 """
 
 import ctypes
@@ -46,6 +48,8 @@ def run_workflow(name: str, marker: ctypes.CDLL, record: Callable[[str], None]) 
         def phase(self, phase_name: str, *, setup: bool = False) -> Generator[None, None, None]:
             if setup:
                 self.setup_phases.add(phase_name)
+                yield
+                return
             marker.start_measure()
             try:
                 yield
