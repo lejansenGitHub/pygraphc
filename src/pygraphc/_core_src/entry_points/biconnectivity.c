@@ -569,7 +569,8 @@ failed:
 static inline __attribute__((always_inline)) int tarjan_search(
     const GraphContext *graph, const uint8_t *two_port_edge_mask, const uint8_t *edge_mask, const uint8_t *port_mask,
     const uint8_t *node_mask, PyObject *result, const int mode, const int has_multiport_edges) {
-    const AdjacencyList *adjacency = &graph->adjacency;
+    const int *slot_offsets = graph->adjacency.offset, *slot_neighbors = graph->adjacency.neighbors;
+    const int *slot_edge_indices = graph->adjacency.edge_indices;
     const PortList *ports = graph->ports;
     int node_count = graph->node_ids.node_count;
     int edge_count = (int)graph->node_ids.edges.edge_count;
@@ -597,13 +598,13 @@ static inline __attribute__((always_inline)) int tarjan_search(
         if (discovery_time[start] != -1) continue;
         if (node_mask && node_mask[start]) continue;
         int stack_top = 0;
-        stack[0] = start; stack_next_slot[0] = adjacency->offset[start];
+        stack[0] = start; stack_next_slot[0] = slot_offsets[start];
         discovery_time[start] = low_link[start] = timer++; parent_link[start] = -1;
         if (counts_children) child_count[start] = 0;
         while (stack_top >= 0) {
             int state = stack[stack_top];
             int is_edge_state = has_multiport_edges && state >= node_count;
-            int end_slot = is_edge_state ? ports->port_offsets[state - node_count + 1] : adjacency->offset[state + 1];
+            int end_slot = is_edge_state ? ports->port_offsets[state - node_count + 1] : slot_offsets[state + 1];
             if (stack_next_slot[stack_top] < end_slot) {
                 int slot = stack_next_slot[stack_top]++;
                 int neighbor, link;
@@ -613,8 +614,8 @@ static inline __attribute__((always_inline)) int tarjan_search(
                     neighbor = ports->port_nodes[slot];
                     link = edge_count + slot;
                 } else {
-                    neighbor = adjacency->neighbors[slot];
-                    int edge_index = adjacency->edge_indices[slot];
+                    neighbor = slot_neighbors[slot];
+                    int edge_index = slot_edge_indices[slot];
                     if (has_multiport_edges && neighbor < 0) {
                         int edge = -1 - neighbor;
                         if (!port_is_active(ports, edge, edge_index, edge_mask, port_mask, node_mask)) continue;
@@ -630,11 +631,11 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 if (discovery_time[neighbor] == -1) {
                     if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
                     discovery_time[neighbor] = low_link[neighbor] = timer++; parent_link[neighbor] = link;
-                    if (counts_children) child_count[neighbor] = 0;
+                    if (counts_children) { child_count[neighbor] = 0; if (!has_multiport_edges) child_count[state]++; }
                     stack[++stack_top] = neighbor;
                     stack_next_slot[stack_top] = (has_multiport_edges && neighbor >= node_count)
-                        ? ports->port_offsets[neighbor - node_count] : adjacency->offset[neighbor];
-                } else if (discovery_time[neighbor] < discovery_time[state]) {
+                        ? ports->port_offsets[neighbor - node_count] : slot_offsets[neighbor];
+                } else if (!collects_links || discovery_time[neighbor] < discovery_time[state]) {
                     if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
                     if (low_link[state] > discovery_time[neighbor]) low_link[state] = discovery_time[neighbor];
                 }
@@ -651,7 +652,7 @@ static inline __attribute__((always_inline)) int tarjan_search(
             int parent_is_edge_state = has_multiport_edges && parent >= node_count;
             int subtree_holds_node = !is_edge_state || child_count[state] > 0;
             if (low_link[parent] > low_link[state]) low_link[parent] = low_link[state];
-            if (counts_children && subtree_holds_node) child_count[parent]++;
+            if (has_multiport_edges && subtree_holds_node) child_count[parent]++;
             if (mode == REPORT_BRIDGE_PAIRS || mode == REPORT_CRITICAL_EDGES) {
                 if (!is_edge_state && !parent_is_edge_state && low_link[state] > discovery_time[parent] &&
                     (mode == REPORT_BRIDGE_PAIRS ? report_bridge_pair(graph, parent_link[state], result)
@@ -671,11 +672,12 @@ static inline __attribute__((always_inline)) int tarjan_search(
             } else if (!parent_is_edge_state && low_link[state] >= discovery_time[parent]) {
                 PyObject *block = PySet_New(NULL);
                 if (!block) goto failed;
+                PyObject *const *node_id_items = graph->node_ids.node_id_items;
                 while (link_top > 0) {
                     link_top--;
                     int from = link_from[link_top], to = link_to[link_top];
-                    if (from < node_count) PySet_Add(block, graph->node_ids.node_id_items[from]);
-                    if (to < node_count) PySet_Add(block, graph->node_ids.node_id_items[to]);
+                    if (!has_multiport_edges || from < node_count) PySet_Add(block, node_id_items[from]);
+                    if (!has_multiport_edges || to < node_count) PySet_Add(block, node_id_items[to]);
                     if (from == parent && to == state) break;
                 }
                 int append_status = (!has_multiport_edges || PySet_GET_SIZE(block) >= 2) ? PyList_Append(result, block) : 0;

@@ -425,6 +425,25 @@ PyObject *py_connected_components_ctx(PyObject *self, PyObject *args) {
  * excluded_nodes: removed from the output node sets but their edges
  *     still contribute to connectivity and branch ID sets.
  */
+/*
+ * Add each edge's branch id to the branch set of the component it belongs to
+ * (first_active_port_node). Instantiated per presence of masks: without one,
+ * every port is active and each edge sits in the edge list at the node of its
+ * first port, so it belongs to the component of its first endpoint.
+ */
+static inline __attribute__((always_inline)) void add_branch_ids(
+    const GraphContext *graph, const int *labels, PyObject **branch_sets, PyObject **branch_id_items,
+    Py_ssize_t edge_branch_count, const uint8_t *edge_mask, const uint8_t *port_mask, const uint8_t *node_mask,
+    const int has_masks) {
+    const EdgeList *edges = &graph->node_ids.edges;
+    for (Py_ssize_t edge_index = 0; edge_index < edge_branch_count; edge_index++) {
+        int member_node = has_masks ? first_active_port_node(graph, (int)edge_index, edge_mask, port_mask, node_mask)
+                                    : EDGE_FIRST_ENDPOINT(edges, edge_index);
+        if (has_masks && member_node < 0) continue;
+        PySet_Add(branch_sets[labels[member_node]], branch_id_items[edge_index]);
+    }
+}
+
 PyObject *py_connected_components_with_branches_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *branch_ids_obj, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *port_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "OO|OOO", &capsule, &branch_ids_obj, &edge_mask_obj, &node_mask_obj, &port_mask_obj))
@@ -517,10 +536,10 @@ PyObject *py_connected_components_with_branches_ctx(PyObject *self, PyObject *ar
     Py_ssize_t edge_branch_count = edges->edge_count < branch_id_count ? edges->edge_count : branch_id_count;
     PyObject **branch_id_items = PySequence_Fast_ITEMS(branch_ids_fast);
 
-    for (Py_ssize_t edge_index = 0; edge_index < edge_branch_count; edge_index++) {
-        int member_node = first_active_port_node(graph, (int)edge_index, edge_mask, port_mask.ports, node_mask);
-        if (member_node >= 0) PySet_Add(branch_sets[components.labels[member_node]], branch_id_items[edge_index]);
-    }
+    if (edge_mask || port_mask.ports || node_mask)
+        add_branch_ids(graph, components.labels, branch_sets, branch_id_items, edge_branch_count, edge_mask, port_mask.ports, node_mask, 1);
+    else
+        add_branch_ids(graph, components.labels, branch_sets, branch_id_items, edge_branch_count, NULL, NULL, NULL, 0);
     release_port_mask(&port_mask);
     release_mask(&edge_mask_buffer);
     Py_DECREF(branch_ids_fast);
