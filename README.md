@@ -1274,3 +1274,26 @@ and is skipped otherwise.
 ```bash
 cd tests && pytest performance_tests/complexity -v   # or instructions, experience
 ```
+
+### Finding where an instruction count moved
+
+The instruction tier in CI says *that* a count moved; `dev_helpers/compare_profiles.py`
+says *where*. It builds a base revision and your working tree (uncommitted
+changes included) in a Linux container, measures the chosen scenarios with the
+same harness as CI, and reports, for every count beyond 0.5%, the source files
+and functions whose own instructions changed most:
+
+```bash
+python dev_helpers/compare_profiles.py --only bridges,articulation_points            # against origin/main
+python dev_helpers/compare_profiles.py --only bridges --base HEAD~1                   # against any revision
+python dev_helpers/compare_profiles.py --only bridges --platform linux/amd64          # emulated x86-64, slow
+```
+
+`--only` takes the same comma-separated substrings as `compare.py`. The report
+and a per-line annotation of every measurement land in `profiles/comparison/`
+(git ignores `profiles/`). It needs podman or docker, nothing else; it runs on
+macOS too, natively on the machine's architecture unless `--platform` says
+otherwise. Use it as soon as a count or a timing rises, before calling a
+change noise. The counts come from the container's compiler, so they can
+differ from CI's by layout effects of up to a few percent: CI decides whether
+a count moved, this shows why.
