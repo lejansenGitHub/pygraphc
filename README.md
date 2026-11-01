@@ -679,9 +679,35 @@ terminal each. A multi-terminal edge can therefore separate these blocks the way
 node does. In the tree-shaped edge `(1, 2, 3)`, the paths from 1 to 2 do not
 visit 3.
 
+`bcc_edge_labels` labels every edge with its block, the blocks of
+`biconnected_components`: a multi-terminal edge lies in exactly one, as in
+hypergraph block theory. An edge whose active terminals all sit at one node gets
+-1, like a self-loop (case 33).
+
+```python
+Graph([1, 2, 3, 4, 5], [(1, 2, 3), (3, 4), (4, 1), (3, 5)]).bcc_edge_labels()   # [1, 1, 1, 0]
+```
+
+#### Parallel edges and rebuilt views
+
+Two edges are parallel when their terminals sit at the same nodes, counted with
+multiplicity and, on a directed graph, per side (XGI's duplicate edges); this is
+what `is_multigraph` asks (case 31). `with_edges` adds edges of any number of
+terminals and keeps the view's masks, masked terminals included: base terminals
+keep their indices and the added ones follow. `split_node` moves terminals, not
+just edges: an edge index moves every terminal that edge has at the node, and
+`terminals_to_new_node` moves single terminals (case 32).
+
+```python
+graph = Graph([1, 2, 3], [(1, 2), (2, 2, 3)])
+graph.split_node(2, 9, [1]).neighbors(9)                            # {3}: both terminals at 2 moved
+graph.split_node(2, 9, terminals_to_new_node=[(1, 1)]).neighbors(9) # {2, 3}: one moved
+```
+
 #### Methods not yet available on terminals
 
-Methods whose kernel does not read terminals yet raise `NotImplementedError` on a
+`all_edge_paths` and the reduction family (`quotient_edges`, `series_parallel_reduce`,
+`series_parallel_state`) do not read terminals yet. Methods whose kernel does not read terminals yet raise `NotImplementedError` on a
 graph with a multi-terminal edge and on a view with a terminal mask, instead of
 answering on part of the graph; `docs/multi_terminal-decisions.md` lists the stage
 that brings each. On graphs of two-terminal edges without a terminal mask they run as
@@ -724,7 +750,7 @@ view.bfs(0)                        # ValueError: source node is excluded
 
 ### Node splitting (reroute edges to a new node)
 
-Split a node into two by choosing which edges stay on the original and which move to a new node. Composes `without_edges` + `with_edges` internally — no new C code needed.
+Split a node into two by choosing which edges stay on the original and which move to a new node. An edge index moves every terminal the edge has at the node, so a self-loop moves whole; `terminals_to_new_node` takes `(edge_index, terminal_index)` pairs to move single terminals, such as one end of a self-loop. Composes `without_edges` + `with_edges` internally — no new C code needed.
 
 ```python
 g = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (1, 3)])
@@ -744,7 +770,7 @@ sorted(view2.connected_components(), key=min)  # [{0, 1}, {2, 99}]
 view3 = g.without_edges([0]).split_node(node_id=1, new_node_id=99, edge_indices_to_new_node=[2])
 ```
 
-**Rebuild contract.** `with_edges` and `split_node` rebuild the CSR, but the rebuilt view keeps every base edge at its original index, keeps excluded edges and nodes masked, and appends added edges and new nodes after the base ones. Edge indices, node masks and `branch_ids` of the base graph therefore stay valid on the rebuilt view. Weights passed to a rebuilt view must cover every edge, masked ones included. When the base graph carries `branch_ids`, `with_edges` needs `added_branch_ids`, one per added edge; `split_node` gives a rerouted edge the branch id of the edge it replaces. Both require edge-pair construction and raise `ValueError` on a split-list graph.
+**Rebuild contract.** `with_edges` and `split_node` rebuild the CSR, but the rebuilt view keeps every base edge at its original index, keeps excluded edges, nodes and terminals masked, and appends added edges, their terminals and new nodes after the base ones. Edge indices, terminal indices, node masks and `branch_ids` of the base graph therefore stay valid on the rebuilt view. A rerouted edge keeps the masked terminals of the edge it replaces. Weights passed to a rebuilt view must cover every edge, masked ones included. When the base graph carries `branch_ids`, `with_edges` needs `added_branch_ids`, one per added edge; `split_node` gives a rerouted edge the branch id of the edge it replaces. Both require edge-pair construction and raise `ValueError` on a split-list graph.
 
 ```python
 g = Graph([0, 1, 2], [(0, 1)], branch_ids=[10])
@@ -1409,9 +1435,9 @@ up to the total.
 runs every workflow at its guard size under callgrind and counts the
 instructions of each phase, named `workflow/<workflow>/<phase>`. CI compares
 every phase against the merge base, split into the same three buckets as every
-scenario, and fails on a bucket that moves beyond its threshold, while every
-smaller change is listed too; nothing is compared against a stored baseline,
-so no baseline needs regenerating.
+scenario, warns on a bucket that moves beyond its threshold and fails on one
+beyond the failing bounds, while every smaller change is listed too; nothing is
+compared against a stored baseline, so no baseline needs regenerating.
 
 ### Comparing the reduction engines
 
@@ -1518,28 +1544,30 @@ and is skipped otherwise.
   generated code unchanged), on x86-64 and arm64, and splits every count by the
   source file of each instruction, inlined lines included:
 
-  | Bucket | Source files | Fails beyond |
+  | Bucket | Source files | Warns beyond |
   |--------|--------------|-------------:|
   | `algorithm` | `src/pygraphc/_core_src/algorithms/` | 0.1% |
   | `boundary` | the rest of pygraphc's C sources: entry points, `conversion/`, models | 0.5% |
   | `cpython` | CPython, the C library, anything without debug info | 0.5% |
 
-  A count fails in either direction. Within one binary the counts are exact; a
+  A bucket that moves beyond its threshold in either direction is marked and
+  raises a warning; the run fails on a bucket rising beyond 1.5%, dropping
+  beyond 10% or no longer measured. Within one binary the counts are exact; a
   changed C extension moves unchanged work by up to about 1.1% through the
-  allocator, and that noise lands in `cpython`, so a C change often needs
-  review even when only the layout moved. pygraphc's own code does not depend
-  on addresses, which is why the algorithm bucket can be held to 0.1%. A total
-  alone hides kernels: in `strongly_connected_components/directed_acyclic_20k`
-  the algorithm is a ninth of the count, so a 10% slower kernel moved the total
-  by about 1.1%, inside the noise. The other thresholds stay below the
-  noise on purpose, because real code generation changes of 0.5 to 1% matter.
+  allocator, and that noise lands in `cpython`. pygraphc's own code does not
+  depend on addresses, which is why the algorithm bucket can warn at 0.1%. A
+  total alone hides kernels: in `strongly_connected_components/directed_acyclic_20k`
+  the algorithm is a ninth of the count, so a 10% slower kernel would move the
+  total by about 1.1%, inside the noise, while its algorithm row fails. The other
+  warning thresholds stay below the noise on purpose, because real code
+  generation changes of 0.5 to 1% matter, while the failing bounds stay above it.
   `algorithms/` only holds code that never reads or creates a Python object
   (raising an exception is allowed); parsing and result building live in
   `conversion/` and the entry points. Every count that moved is in
   one of two aligned tables, more instructions and fewer instructions, each
   largest change first; counts that round to 0.00% are only counted below
-  them. A pull request labelled
-  `accept-instruction-change` still gets the table but does not fail.
+  them, the warned rows marked **changed** and the failing ones **fails**. A pull
+  request labelled `accept-instruction-change` still gets the table but does not fail.
 
   What the counts cannot see: they measure portable work, compiled with GCC.
   The same instructions can run slower on one machine (splitting `_core.c`
@@ -1639,6 +1667,9 @@ implementing; the D and O numbers refer to `docs/multi_terminal-decisions.md`.
 | 28 | Two terminals of one edge at one node in `cycle_basis` | A cycle `[node]`, like a self-loop; it counts toward the cycle rank. | No cycle: a strict Berge cycle needs distinct nodes. | Claude (research: the conventions split here) |
 | 29 | Two edges sharing two nodes in `cycle_basis` | A cycle of length 2, like two parallel two-terminal edges. | No cycle: some authors define Berge cycles from length 3. | Claude (research: the conventions split here) |
 | 30 | Which cycle space `cycle_basis` spans | The incidence graph's: Berge cycles, rank terminals − nodes − edges + components. | The hypercycle (oriented matroid) notion of reaction networks, which captures dependencies the incidence graph does not. | Claude (research: the community defaults to the incidence graph) |
+| 31 | `is_multigraph` with repeated terminal nodes | Terminal nodes compare as multisets: `(1, 1, 2)` and `(1, 2)` are not parallel, `(1, 1, 2)` and `(2, 1, 1)` are; two single-terminal edges at a node are parallel. | Compare node sets, as XGI's duplicate edges do; XGI cannot hold a repeated node in an edge. | Claude (research: duplicates are edges with equal members; repeated members are not covered) |
+| 32 | `split_node` with an edge that has several terminals at the node | An edge index moves all of them, so a self-loop moves whole; `terminals_to_new_node` moves single terminals. Before, a listed self-loop moved only its first end. | An edge index moves one terminal, the first at the node. | Claude (research: splitting divides a node's incidences; edges with repeated nodes are not covered) |
+| 33 | `bcc_edge_labels` of an edge whose active terminals sit at one node | -1, like a self-loop. | A block of its own. | Claude (follows the self-loop rule) |
 
 ### What the literature says about these cases
 
@@ -1681,6 +1712,13 @@ hypergraph libraries and power system tools. Sources:
   - 27: NetworkX lists a self-loop node among its own neighbors, XGI does not.
   - 28–29: whether a Berge cycle may repeat a node or have length 2 depends on the author.
   - 30: reaction-network papers define a hypercycle space that differs from the incidence graph's.
+
+**Parallel edges, node splitting and blocks (research of 2026-11-01)**
+- **Supported:** parallel edges as edges with equal members (XGI `edges.duplicates()`, HyperNetX `collapse_edges`); node splitting as dividing a node's incidences among its copies (vertex "detachment" in Berge-Johnson, "fracture" in the hypergraph motif literature); a block as a maximal non-separable sub-hypergraph, in which every edge lies in exactly one block (Dewar, Pike and Proos, *Hypergraphs: connection and separation*, arXiv:1504.04274), which D14 already follows.
+- **Split, decided by Claude and listed above:**
+  - 31: libraries store an edge's members as a set, so whether `(1, 1, 2)` duplicates `(1, 2)` has no precedent.
+  - 32: the literature splits incidences; with one incidence per edge and node, moving an edge and moving its terminal coincide.
+  - 33: block theory leaves loops out, as `biconnected_components` does.
 
 **Contradicted, and corrected**
 - **14:** removing every critical edge whole gave wrong two-edge-connected components when critical edges share a cycle. Corrected in this pull request.

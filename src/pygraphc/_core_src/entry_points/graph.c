@@ -71,6 +71,26 @@ PyObject *py_terminal_offsets(PyObject *self, PyObject *args) {
     return result;
 }
 
+PyObject *py_out_terminal_offsets(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
+    if (!graph) return NULL;
+    if (!graph->directed) {
+        PyErr_SetString(PyExc_TypeError, "out-terminals exist on directed graphs only");
+        return NULL;
+    }
+    Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
+    if (graph->terminals)
+        return PyBytes_FromStringAndSize((const char *)graph->terminals->out_terminal_offsets,
+                                         edge_count * (Py_ssize_t)sizeof(int));
+    PyObject *result = PyBytes_FromStringAndSize(NULL, edge_count * (Py_ssize_t)sizeof(int));
+    if (!result) return NULL;
+    int *out_terminal_offsets = (int *)PyBytes_AS_STRING(result);
+    for (Py_ssize_t edge_index = 0; edge_index < edge_count; edge_index++) out_terminal_offsets[edge_index] = (int)(2 * edge_index + 1);
+    return result;
+}
+
 PyObject *py_terminal_nodes(PyObject *self, PyObject *args) {
     PyObject *capsule;
     if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;

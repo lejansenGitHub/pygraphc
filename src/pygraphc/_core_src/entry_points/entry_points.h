@@ -20,6 +20,7 @@ PYGRAPHC_INTERNAL PyObject *py_parse_graph(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_graph_shape(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_has_multi_terminal_edges(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_terminal_offsets(PyObject *self, PyObject *args);
+PYGRAPHC_INTERNAL PyObject *py_out_terminal_offsets(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_terminal_nodes(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_graph_edge_count(PyObject *self, PyObject *args);
 PYGRAPHC_INTERNAL PyObject *py_graph_node_count(PyObject *self, PyObject *args);

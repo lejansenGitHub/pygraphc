@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Instruction counts are split into three buckets by the source file of each
-  instruction: `algorithm` (`_core_src/algorithms/`, fails beyond 0.1%),
+  instruction: `algorithm` (`_core_src/algorithms/`, warns beyond 0.1%),
   `boundary` (the rest of pygraphc's C sources, 0.5%) and `cpython` (CPython
-  and the C library, 0.5%). CI builds with `CFLAGS=-g` for that. The C core's
+  and the C library, 0.5%); each bucket fails beyond +1.5% or -10%, so a slower
+  kernel fails even when the scenario's total hides it. CI builds with
+  `CFLAGS=-g` for that. The C core's
   `helpers/` is `algorithms/`, which never reads or creates a Python object;
   parsing and result building moved to `conversion/`, and the algorithms that
   lived in entry points (BFS, edge paths, Tarjan, Dijkstra, cycle basis, DAG

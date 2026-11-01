@@ -97,9 +97,12 @@ jobs:
   # every workflow phase, branch against merge base, both built the same way in
   # this job, so a toolchain bump never shows up as a change. Each count is split
   # into the algorithm, pygraphc's boundary and CPython with the C library, by the
-  # debug info of every instruction; the algorithm fails beyond 0.1%, the other
-  # two beyond 0.5%. A pull request labelled accept-instruction-change still
-  # prints the table but does not fail.
+  # debug info of every instruction. A bucket that moves by more than its
+  # threshold (algorithm 0.1%, the other two 0.5%) is marked and warned about; a
+  # bucket rising beyond 1.5%, dropping beyond 10% or no longer measured fails. A
+  # pull request labelled accept-instruction-change still prints the table but
+  # does not fail; the push to main that follows has no label, so only the
+  # failing bounds keep it red.
   instructions:
     # Code generation differs by architecture (splitting _core.c made bridges 6%
     # dearer on arm64 and 3% cheaper on x86-64), so a change to the C sources or

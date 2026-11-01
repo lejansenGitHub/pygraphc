@@ -25,9 +25,16 @@
  *   every state, edge states included, so a multi-terminal edge can separate them
  *   as a node does; without multi-terminal edges they are the blocks. A simple path
  *   visits each node and each multi-terminal edge at most once, so the block-cut
- *   tree of these blocks gives the nodes on simple paths.
+ *   tree of these blocks gives the nodes on simple paths;
+ * - edge labels: the blocks, as a block id per edge in the order the blocks close
+ *   (D27). The link stack holds (link, edge) instead of (state, neighbor); a block
+ *   closed below an edge state without a child node holds one node and labels
+ *   nothing, so an edge whose active terminals all sit at one node keeps -1 like a
+ *   self-loop.
  */
-typedef enum { TARJAN_CRITICAL_EDGES, TARJAN_CRITICAL_NODES, TARJAN_BLOCKS, TARJAN_SIMPLE_PATH_BLOCKS } TarjanMode;
+typedef enum {
+    TARJAN_CRITICAL_EDGES, TARJAN_CRITICAL_NODES, TARJAN_BLOCKS, TARJAN_SIMPLE_PATH_BLOCKS, TARJAN_EDGE_LABELS
+} TarjanMode;
 
 /* What one search found; only the arrays of its mode are set, the others are NULL. */
 typedef struct {
@@ -41,10 +48,10 @@ typedef struct {
 } TarjanReport;
 
 /*
- * Run the search on an undirected graph with an adjacency list. Two-terminal edges
- * are traversed under two_terminal_edge_mask; edge_mask and terminal_mask decide
- * which terminals of multi-terminal edges are active. Returns 0, or -1 with
- * MemoryError set and nothing to release.
+ * Run the search in a mode other than edge labels on an undirected graph with an
+ * adjacency list. Two-terminal edges are traversed under two_terminal_edge_mask;
+ * edge_mask and terminal_mask decide which terminals of multi-terminal edges are
+ * active. Returns 0, or -1 with MemoryError set and nothing to release.
  */
 PYGRAPHC_INTERNAL int tarjan_report(const GraphContext *graph, const uint8_t *two_terminal_edge_mask,
                                     const uint8_t *edge_mask, const uint8_t *terminal_mask, const uint8_t *node_mask,
@@ -52,12 +59,12 @@ PYGRAPHC_INTERNAL int tarjan_report(const GraphContext *graph, const uint8_t *tw
 PYGRAPHC_INTERNAL void release_tarjan_report(TarjanReport *report);
 
 /*
- * Biconnected component id of every edge into labels (edge_count entries), numbered
- * in the order the components complete in the depth-first search; a bridge is a
- * singleton component. Masked edges, edges at a masked node and self-loops get -1.
- * Graphs of two-terminal edges only. Returns 0, or -1 with MemoryError set.
+ * The edge labels of the search into labels (edge_count entries): a block id per
+ * edge, -1 for a masked edge, an edge at a masked node and a self-loop. Masks as for
+ * tarjan_report. Returns 0, or -1 with MemoryError set.
  */
-PYGRAPHC_INTERNAL int biconnected_edge_labels(const GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask,
-                                              int32_t *labels);
+PYGRAPHC_INTERNAL int tarjan_edge_labels(const GraphContext *graph, const uint8_t *two_terminal_edge_mask,
+                                         const uint8_t *edge_mask, const uint8_t *terminal_mask, const uint8_t *node_mask,
+                                         int32_t *labels);
 
 #endif

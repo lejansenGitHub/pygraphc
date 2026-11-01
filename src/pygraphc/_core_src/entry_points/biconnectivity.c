@@ -4,9 +4,18 @@
 #include "../conversion/parse_terminals.h"
 #include "../algorithms/biconnectivity.h"
 
-/* The empty result of a mode: a set of critical nodes, (blocks, edge indices by block), or a list. */
-static PyObject *empty_result(TarjanMode mode) {
+/* The int32 labels of every edge, all -1 until a search writes them. */
+static PyObject *edge_label_bytes(const GraphContext *graph) {
+    Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
+    PyObject *labels = PyBytes_FromStringAndSize(NULL, edge_count * (Py_ssize_t)sizeof(int32_t));
+    if (labels) memset(PyBytes_AS_STRING(labels), -1, (size_t)edge_count * sizeof(int32_t));
+    return labels;
+}
+
+/* The empty result of a mode: a set of critical nodes, (blocks, edge indices by block), edge labels, or a list. */
+static PyObject *empty_result(const GraphContext *graph, TarjanMode mode) {
     if (mode == TARJAN_CRITICAL_NODES) return PySet_New(NULL);
+    if (mode == TARJAN_EDGE_LABELS) return edge_label_bytes(graph);
     if (mode == TARJAN_SIMPLE_PATH_BLOCKS) return Py_BuildValue("(NN)", PyList_New(0), PyDict_New());
     return PyList_New(0);
 }
@@ -107,7 +116,14 @@ failed:
 static PyObject *tarjan_result(const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask,
                                const uint8_t *terminal_mask, const uint8_t *node_mask, TarjanMode mode,
                                int names_node_pairs) {
-    if (graph->node_ids.node_count == 0 || !graph->has_adjacency) return empty_result(mode);
+    if (graph->node_ids.node_count == 0 || !graph->has_adjacency) return empty_result(graph, mode);
+    if (mode == TARJAN_EDGE_LABELS) {
+        PyObject *labels = edge_label_bytes(graph);
+        if (labels && tarjan_edge_labels(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask,
+                                         (int32_t *)PyBytes_AS_STRING(labels)) < 0)
+            Py_CLEAR(labels);
+        return labels;
+    }
     TarjanReport report;
     if (tarjan_report(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, mode, &report) < 0) return NULL;
     PyObject *result = mode == TARJAN_CRITICAL_EDGES ? critical_edge_list(graph, &report, names_node_pairs)
@@ -156,7 +172,7 @@ static PyObject *tarjan_entry(PyObject *args, TarjanMode mode, int names_node_pa
         PyErr_SetString(PyExc_TypeError, "critical edges, critical nodes and blocks are not defined for directed graphs");
         return NULL;
     }
-    if (graph->node_ids.node_count == 0 || !graph->has_adjacency) return empty_result(mode);
+    if (graph->node_ids.node_count == 0 || !graph->has_adjacency) return empty_result(graph, mode);
 
     const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
     if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
@@ -176,3 +192,4 @@ PyObject *py_critical_edges_ctx(PyObject *self, PyObject *args) { return tarjan_
 PyObject *py_articulation_points_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, TARJAN_CRITICAL_NODES, 0); }
 PyObject *py_biconnected_components_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, TARJAN_BLOCKS, 0); }
 PyObject *py_simple_path_blocks_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, TARJAN_SIMPLE_PATH_BLOCKS, 0); }
+PyObject *py_biconnected_component_edge_labels_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, TARJAN_EDGE_LABELS, 0); }

@@ -46,7 +46,20 @@ OPERATIONS: dict[str, Operation] = {
     "masked_degrees": lambda graph: graph.without_terminals([(0, 0)]).degrees,
     "cycle_basis": lambda graph: graph.cycle_basis,
     "masked_view_degree": lambda graph: _degree_of_the_last_node_in_a_masked_view(graph),
+    "bcc_edge_labels": lambda graph: graph.bcc_edge_labels,
+    "masked_bcc_edge_labels": lambda graph: graph.without_terminals([(0, 0)]).bcc_edge_labels,
+    "is_multigraph": lambda graph: lambda: graph.is_multigraph,
+    "with_edges": lambda graph: (
+        lambda: graph.without_terminals([(0, 0)]).with_edges([(0, graph.node_count)], [graph.edge_count])
+    ),
+    "split_node": lambda graph: _split_node_zero(graph),
 }
+
+
+def _split_node_zero(graph: Graph[int, int]) -> Callable[[], object]:
+    """Move the terminals of one edge at node 0 to a new node; the rebuild is the cost."""
+    edge_indices = graph.incident_edge_indices(0)[:1]
+    return lambda: graph.split_node(0, graph.node_count, edge_indices)
 
 
 def _degree_of_the_last_node_in_a_masked_view(graph: Graph[int, int]) -> Callable[[], object]:

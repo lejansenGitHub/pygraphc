@@ -24,6 +24,8 @@ static int allocate_report(TarjanReport *report, TarjanMode mode, int edge_count
     } else if (mode == TARJAN_CRITICAL_NODES) {
         report->critical_nodes = (int *)malloc((state_count > 0 ? state_count : 1) * sizeof(int));
         if (report->critical_nodes) return 0;
+    } else if (mode == TARJAN_EDGE_LABELS) {
+        return 0;
     } else {
         report->block_offsets = (int *)malloc((state_count + 1) * sizeof(int));
         report->block_states = (int *)malloc((link_capacity > 0 ? 2 * link_capacity : 1) * sizeof(int));
@@ -63,13 +65,33 @@ static inline __attribute__((always_inline)) void close_block(
 }
 
 /*
+ * Push a link: (state, neighbor), or for edge labels (link, its edge), a terminal
+ * link's edge being its edge state's; without multi-terminal edges a link is its
+ * edge, so only the link is kept.
+ */
+static inline __attribute__((always_inline)) void push_link(int *link_from, int *link_to, int *link_top, int state,
+                                                            int neighbor, int link, int node_count, int edge_count,
+                                                            const TarjanMode mode, const int has_multi_terminal_edges) {
+    if (mode == TARJAN_EDGE_LABELS) {
+        link_from[*link_top] = link;
+        if (has_multi_terminal_edges)
+            link_to[*link_top] = link >= edge_count ? (state >= node_count ? state : neighbor) - node_count : link;
+    } else {
+        link_from[*link_top] = state;
+        link_to[*link_top] = neighbor;
+    }
+    (*link_top)++;
+}
+
+/*
  * One search in one mode, instantiated for every mode and both values of
  * has_multi_terminal_edges, so graphs of two-terminal edges run it without the
- * edge-state branches.
+ * edge-state branches. labels is set in edge-label mode only.
  */
 static inline __attribute__((always_inline)) int tarjan_search(
     const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask, const uint8_t *terminal_mask,
-    const uint8_t *node_mask, TarjanReport *report, const TarjanMode mode, const int has_multi_terminal_edges) {
+    const uint8_t *node_mask, TarjanReport *report, int32_t *labels, const TarjanMode mode,
+    const int has_multi_terminal_edges) {
     const int *slot_offsets = graph->adjacency.offset, *slot_neighbors = graph->adjacency.neighbors;
     const int *slot_edge_indices = graph->adjacency.edge_indices;
     const TerminalList *terminals = graph->terminals;
@@ -78,10 +100,13 @@ static inline __attribute__((always_inline)) int tarjan_search(
     size_t state_count = (size_t)node_count + (has_multi_terminal_edges ? (size_t)edge_count : 0);
     size_t link_capacity = (size_t)edge_count + (has_multi_terminal_edges ? (size_t)terminals->terminal_count : 0);
 
-    const int collects_links = mode == TARJAN_BLOCKS || mode == TARJAN_SIMPLE_PATH_BLOCKS;
+    const int closes_blocks = mode == TARJAN_BLOCKS || mode == TARJAN_SIMPLE_PATH_BLOCKS;
+    const int collects_links = closes_blocks || mode == TARJAN_EDGE_LABELS;
+    const size_t link_columns = (mode == TARJAN_EDGE_LABELS && !has_multi_terminal_edges) ? 1 : 2;
     const int marks_edge_states = has_multi_terminal_edges && mode == TARJAN_CRITICAL_EDGES;
-    int *scratch = (int *)malloc((collects_links ? 7 : 6) * state_count * sizeof(int));
-    int *link_stack = collects_links ? (int *)malloc(2 * (link_capacity > 0 ? link_capacity : 1) * sizeof(int)) : NULL;
+    int *scratch = (int *)malloc((closes_blocks ? 7 : 6) * state_count * sizeof(int));
+    int *link_stack = collects_links
+        ? (int *)malloc(link_columns * (link_capacity > 0 ? link_capacity : 1) * sizeof(int)) : NULL;
     uint8_t *critical_edge_states = marks_edge_states ? (uint8_t *)calloc((size_t)edge_count + 1, 1) : NULL;
     if (!scratch || (collects_links && !link_stack) || (marks_edge_states && !critical_edge_states)
         || allocate_report(report, mode, edge_count, state_count, link_capacity) < 0) {
@@ -92,12 +117,12 @@ static inline __attribute__((always_inline)) int tarjan_search(
     int *discovery_time = scratch, *low_link = scratch + state_count, *stack = scratch + 2 * state_count;
     int *stack_next_slot = scratch + 3 * state_count, *parent_link = scratch + 4 * state_count;
     int *child_count = scratch + 5 * state_count;
-    int *block_stamp = collects_links ? scratch + 6 * state_count : NULL;
-    int *link_from = link_stack, *link_to = link_stack ? link_stack + link_capacity : NULL;
+    int *block_stamp = closes_blocks ? scratch + 6 * state_count : NULL;
+    int *link_from = link_stack, *link_to = (link_stack && link_columns == 2) ? link_stack + link_capacity : NULL;
     memset(discovery_time, -1, state_count * sizeof(int));
-    if (collects_links) memset(block_stamp, -1, state_count * sizeof(int));
+    if (closes_blocks) memset(block_stamp, -1, state_count * sizeof(int));
     const int counts_children = mode == TARJAN_CRITICAL_NODES || has_multi_terminal_edges;
-    int timer = 0, link_top = 0, closure = 0;
+    int timer = 0, link_top = 0, closure = 0, block_id = 0;
 
     for (int start = 0; start < node_count; start++) {
         if (discovery_time[start] != -1) continue;
@@ -134,14 +159,18 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 }
                 if (link == parent_link[state]) continue;
                 if (discovery_time[neighbor] == -1) {
-                    if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
+                    if (collects_links)
+                        push_link(link_from, link_to, &link_top, state, neighbor, link, node_count, edge_count, mode,
+                                  has_multi_terminal_edges);
                     discovery_time[neighbor] = low_link[neighbor] = timer++; parent_link[neighbor] = link;
                     if (counts_children) { child_count[neighbor] = 0; if (!has_multi_terminal_edges) child_count[state]++; }
                     stack[++stack_top] = neighbor;
                     stack_next_slot[stack_top] = (has_multi_terminal_edges && neighbor >= node_count)
                         ? terminals->terminal_offsets[neighbor - node_count] : slot_offsets[neighbor];
                 } else if (!collects_links || discovery_time[neighbor] < discovery_time[state]) {
-                    if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
+                    if (collects_links)
+                        push_link(link_from, link_to, &link_top, state, neighbor, link, node_count, edge_count, mode,
+                                  has_multi_terminal_edges);
                     if (low_link[state] > discovery_time[neighbor]) low_link[state] = discovery_time[neighbor];
                 }
                 continue;
@@ -169,6 +198,16 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 if (!parent_is_edge_state && parent_link[parent] != -1 && subtree_holds_node &&
                     low_link[state] >= discovery_time[parent])
                     report->critical_nodes[report->critical_node_count++] = parent;
+            } else if (mode == TARJAN_EDGE_LABELS) {
+                if (!parent_is_edge_state && low_link[state] >= discovery_time[parent]) {
+                    while (link_top > 0) {
+                        link_top--;
+                        if (subtree_holds_node)
+                            labels[has_multi_terminal_edges ? link_to[link_top] : link_from[link_top]] = (int32_t)block_id;
+                        if (link_from[link_top] == parent_link[state]) break;
+                    }
+                    block_id += subtree_holds_node;
+                }
             } else if (mode == TARJAN_SIMPLE_PATH_BLOCKS && has_multi_terminal_edges) {
                 if (low_link[state] >= discovery_time[parent])
                     close_block(report, link_from, link_to, &link_top, parent, state, node_count, block_stamp, closure++, 1, 0);
@@ -183,82 +222,47 @@ static inline __attribute__((always_inline)) int tarjan_search(
     return 0;
 }
 
+/*
+ * Both instantiations of one mode. Each mode gets its own non-inlined search below:
+ * inlined together into one function, the instantiations share one register
+ * allocation, and adding a mode cost the others up to seven instructions per node
+ * (GCC 13, x86-64).
+ */
+static inline __attribute__((always_inline)) int search_in_mode(
+    const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask, const uint8_t *terminal_mask,
+    const uint8_t *node_mask, TarjanReport *report, int32_t *labels, const TarjanMode mode) {
+    if (!graph->terminals)
+        return tarjan_search(graph, two_terminal_edge_mask, NULL, NULL, node_mask, report, labels, mode, 0);
+    return tarjan_search(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, report, labels, mode, 1);
+}
+
+#define SEARCH_PARAMETERS const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask, \
+                          const uint8_t *terminal_mask, const uint8_t *node_mask, TarjanReport *report, int32_t *labels
+#define SEARCH_ARGUMENTS graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, report, labels
+static __attribute__((noinline)) int search_critical_edges(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, TARJAN_CRITICAL_EDGES); }
+static __attribute__((noinline)) int search_critical_nodes(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, TARJAN_CRITICAL_NODES); }
+static __attribute__((noinline)) int search_blocks(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, TARJAN_BLOCKS); }
+static __attribute__((noinline)) int search_simple_path_blocks(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, TARJAN_SIMPLE_PATH_BLOCKS); }
+static __attribute__((noinline)) int search_edge_labels(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, TARJAN_EDGE_LABELS); }
+#undef SEARCH_PARAMETERS
+#undef SEARCH_ARGUMENTS
+
 int tarjan_report(const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask,
                   const uint8_t *terminal_mask, const uint8_t *node_mask, TarjanMode mode, TarjanReport *report) {
     memset(report, 0, sizeof *report);
-    switch (mode) {
-    case TARJAN_CRITICAL_EDGES:
-        return graph->terminals
-            ? tarjan_search(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, report, TARJAN_CRITICAL_EDGES, 1)
-            : tarjan_search(graph, two_terminal_edge_mask, NULL, NULL, node_mask, report, TARJAN_CRITICAL_EDGES, 0);
-    case TARJAN_CRITICAL_NODES:
-        return graph->terminals
-            ? tarjan_search(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, report, TARJAN_CRITICAL_NODES, 1)
-            : tarjan_search(graph, two_terminal_edge_mask, NULL, NULL, node_mask, report, TARJAN_CRITICAL_NODES, 0);
-    case TARJAN_SIMPLE_PATH_BLOCKS:
-        return graph->terminals
-            ? tarjan_search(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, report, TARJAN_SIMPLE_PATH_BLOCKS, 1)
-            : tarjan_search(graph, two_terminal_edge_mask, NULL, NULL, node_mask, report, TARJAN_SIMPLE_PATH_BLOCKS, 0);
-    default:
-        return graph->terminals
-            ? tarjan_search(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, report, TARJAN_BLOCKS, 1)
-            : tarjan_search(graph, two_terminal_edge_mask, NULL, NULL, node_mask, report, TARJAN_BLOCKS, 0);
-    }
+    int (*search)(const GraphContext *, const uint8_t *, const uint8_t *, const uint8_t *, const uint8_t *, TarjanReport *,
+                  int32_t *) =
+        mode == TARJAN_CRITICAL_EDGES ? search_critical_edges
+        : mode == TARJAN_CRITICAL_NODES ? search_critical_nodes
+        : mode == TARJAN_SIMPLE_PATH_BLOCKS ? search_simple_path_blocks
+        : search_blocks;
+    return search(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, report, NULL);
 }
 
-int biconnected_edge_labels(const GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask, int32_t *labels) {
-    int node_count = graph->node_ids.node_count;
-    Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
-    memset(labels, -1, (size_t)edge_count * sizeof(int32_t));
-    if (!graph->has_adjacency) return 0;
-    const AdjacencyList *adjacency = &graph->adjacency;
-    int *scratch = (int *)malloc(5 * (size_t)node_count * sizeof(int));
-    int *edge_stack = (int *)malloc((size_t)edge_count * sizeof(int));
-    if (!scratch || !edge_stack) { free(scratch); free(edge_stack); PyErr_NoMemory(); return -1; }
-    int *discovery_time = scratch, *low_link = scratch + node_count, *stack = scratch + 2*node_count;
-    int *stack_next_slot = scratch + 3*node_count, *parent_edge = scratch + 4*node_count;
-    memset(discovery_time, -1, (size_t)node_count * sizeof(int));
-    int timer = 0, edge_stack_top = 0, component_id = 0;
-
-    for (int start = 0; start < node_count; start++) {
-        if (discovery_time[start] != -1) continue;
-        if (node_mask && node_mask[start]) continue;
-        int stack_top = 0;
-        stack[0] = start; stack_next_slot[0] = adjacency->offset[start];
-        discovery_time[start] = low_link[start] = timer++; parent_edge[start] = -1;
-        while (stack_top >= 0) {
-            int node = stack[stack_top];
-            if (stack_next_slot[stack_top] < adjacency->offset[node + 1]) {
-                int slot = stack_next_slot[stack_top]++;
-                int neighbor = adjacency->neighbors[slot], edge_index = adjacency->edge_indices[slot];
-                if (edge_mask && edge_mask[edge_index]) continue;
-                if (node_mask && node_mask[neighbor]) continue;
-                if (edge_index == parent_edge[node]) continue;
-                if (discovery_time[neighbor] == -1) {
-                    edge_stack[edge_stack_top++] = edge_index;
-                    discovery_time[neighbor] = low_link[neighbor] = timer++; parent_edge[neighbor] = edge_index;
-                    stack[++stack_top] = neighbor; stack_next_slot[stack_top] = adjacency->offset[neighbor];
-                } else if (discovery_time[neighbor] < discovery_time[node]) {
-                    edge_stack[edge_stack_top++] = edge_index;
-                    if (low_link[node] > discovery_time[neighbor]) low_link[node] = discovery_time[neighbor];
-                }
-            } else {
-                if (stack_top > 0) {
-                    int parent = stack[stack_top-1];
-                    if (low_link[parent] > low_link[node]) low_link[parent] = low_link[node];
-                    if (low_link[node] >= discovery_time[parent]) {
-                        while (edge_stack_top > 0) {
-                            int popped_edge = edge_stack[--edge_stack_top];
-                            labels[popped_edge] = (int32_t)component_id;
-                            if (popped_edge == parent_edge[node]) break;
-                        }
-                        component_id++;
-                    }
-                }
-                stack_top--;
-            }
-        }
-    }
-    free(scratch); free(edge_stack);
-    return 0;
+int tarjan_edge_labels(const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask,
+                       const uint8_t *terminal_mask, const uint8_t *node_mask, int32_t *labels) {
+    TarjanReport report;
+    memset(&report, 0, sizeof report);
+    memset(labels, -1, (size_t)graph->node_ids.edges.edge_count * sizeof(int32_t));
+    return search_edge_labels(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, &report, labels);
 }

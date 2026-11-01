@@ -44,6 +44,9 @@ static PyMethodDef methods[] = {
      "has_multi_terminal_edges(capsule) -> bool: whether the graph has an edge of other than two terminals."},
     {"terminal_offsets", py_terminal_offsets, METH_VARARGS,
      "terminal_offsets(capsule) -> bytes\n\nint32 offsets: the terminals of edge e are offsets[e] .. offsets[e + 1] - 1."},
+    {"out_terminal_offsets", py_out_terminal_offsets, METH_VARARGS,
+     "out_terminal_offsets(capsule) -> bytes\n\nint32 first out-terminal of every edge of a directed graph; "
+     "its in-terminals come before."},
     {"terminal_nodes", py_terminal_nodes, METH_VARARGS,
      "terminal_nodes(capsule) -> bytes\n\nint32 node index of every terminal, in terminal order; edge e of a graph of "
      "two-terminal edges has terminals 2e and 2e + 1."},
@@ -124,9 +127,9 @@ static PyMethodDef methods[] = {
      "degrees_ctx(capsule[, edge_mask, node_mask]) -> bytes\n\n"
      "int32 incidence degree per node index under the masks, self-loops counted twice, 0 for an excluded node."},
     {"biconnected_component_edge_labels_ctx", py_biconnected_component_edge_labels_ctx, METH_VARARGS,
-     "biconnected_component_edge_labels_ctx(capsule[, edge_mask, node_mask]) -> bytes\n\n"
+     "biconnected_component_edge_labels_ctx(capsule[, edge_mask, node_mask, terminal_mask]) -> bytes\n\n"
      "int32 biconnected component id per edge index; bridges are singleton components,\n"
-     "masked edges, edges at excluded nodes and self-loops get -1."},
+     "masked edges, edges at excluded nodes, self-loops and edges joining no two nodes get -1."},
     {"sp_state_new", py_sp_state_new, METH_VARARGS,
      "sp_state_new(capsule, preserved_mask, protected_mask[, edge_mask, node_mask,\n"
      "             pendant_keep_mask, series_blocked_mask]) -> state capsule\n\n"

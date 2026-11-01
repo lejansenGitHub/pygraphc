@@ -60,8 +60,8 @@ def build_marker(directory: Path) -> Path:
 BUCKETS = ("algorithm", "boundary", "cpython")
 
 BUCKET_THRESHOLDS = {"algorithm": 0.001, "boundary": 0.005, "cpython": 0.005}
-"""The algorithm bucket is exact for unchanged code; the others sit below the layout noise of up to 1.1% on
-purpose, since code generation changes of 0.5 to 1% matter."""
+"""Warning thresholds. The algorithm bucket is exact for unchanged code; the others sit below the layout noise
+of up to 1.1% on purpose, since code generation changes of 0.5 to 1% matter."""
 
 
 def bucket_rows(counts: dict[str, dict[str, int]]) -> dict[str, int]:

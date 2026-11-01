@@ -1,7 +1,6 @@
 #include "entry_points.h"
 #include "../conversion/parse_terminals.h"
 #include "../conversion/parse.h"
-#include "../algorithms/biconnectivity.h"
 #include "../algorithms/labels.h"
 
 /* ── Label kernels: int32 byte arrays instead of Python containers ──
@@ -112,32 +111,5 @@ PyObject *py_degrees_ctx(PyObject *self, PyObject *args) {
         joined_terminal_degrees(graph, two_terminal_edge_mask(&terminal_mask, edge_mask), edge_mask, terminal_mask.terminals,
                                 node_mask, (int32_t *)PyBytes_AS_STRING(result));
     release_terminal_mask(&terminal_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
-    return result;
-}
-
-/* biconnected_component_edge_labels_ctx(capsule[, edge_mask, node_mask]) -> bytes of int32[edge_count] */
-PyObject *py_biconnected_component_edge_labels_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = require_two_terminal_edges(capsule);
-    if (!graph) return NULL;
-    int node_count = graph->node_ids.node_count;
-    Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
-
-    PyObject *result = PyBytes_FromStringAndSize(NULL, edge_count * (Py_ssize_t)sizeof(int32_t));
-    if (!result) return NULL;
-    int32_t *labels = (int32_t *)PyBytes_AS_STRING(result);
-    if (node_count == 0 || edge_count == 0 || !graph->has_adjacency) {
-        memset(labels, -1, (size_t)edge_count * sizeof(int32_t));
-        return result;
-    }
-
-    const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
-    if (parse_mask(edge_mask_obj, edge_count, &edge_mask, &edge_mask_buffer) < 0) { Py_DECREF(result); return NULL; }
-    const uint8_t *node_mask; Py_buffer node_mask_buffer;
-    if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL; }
-    int status = biconnected_edge_labels(graph, edge_mask, node_mask, labels);
-    release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
-    if (status < 0) { Py_DECREF(result); return NULL; }
     return result;
 }
