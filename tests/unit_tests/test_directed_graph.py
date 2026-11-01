@@ -1,5 +1,7 @@
 """Tests for directed graph support in pygraphc."""
 
+import gc
+
 import pytest
 
 import pygraphc
@@ -697,6 +699,30 @@ def test_scc_long_chain():
     graph = Graph(node_ids, edges, directed=True)
     result = list(graph.strongly_connected_components())
     assert len(result) == n  # every node is its own SCC
+
+
+def test_scc_yields_reverse_topological_order():
+    """A component comes before every component that reaches it."""
+    graph = Graph([1, 2, 3, 4], [(1, 2), (2, 1), (2, 3), (4, 1)], directed=True)
+    assert list(graph.strongly_connected_components()) == [{3}, {1, 2}, {4}]
+
+
+def test_scc_on_edgeless_graph_skips_masked_nodes():
+    graph = Graph([1, 2, 3], [], directed=True)
+    assert list(graph.without_nodes([2]).strongly_connected_components()) == [{1}, {3}]
+
+
+@pytest.mark.parametrize(
+    "graph",
+    [
+        pytest.param(Graph([1, 2, 3], [(1, 2), (2, 1), (2, 3)], directed=True), id="edges"),
+        pytest.param(Graph([1, 2, 3], [(1, 2), (2, 1), (2, 3)], directed=True).without_nodes([3]), id="node-masked"),
+        pytest.param(Graph([1, 2], [], directed=True), id="edgeless"),
+    ],
+)
+def test_scc_sets_are_tracked_by_the_cyclic_gc(graph):
+    """The sets are built untracked; a set left untracked would leak any reference cycle through it."""
+    assert all(gc.is_tracked(component) for component in graph.strongly_connected_components())
 
 
 def test_wcc_matches_undirected_cc():
