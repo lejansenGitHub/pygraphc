@@ -1541,7 +1541,7 @@ and is skipped otherwise.
   medium scenarios and of every phase of the workflows in
   `benchmarks/profile_workflows.py`. CI builds the merge base and the branch
   with the same packages and with debug info (`CFLAGS=-g`, which leaves the
-  generated code unchanged), on x86-64 and arm64, and splits every count by the
+  generated code unchanged), on x86-64, and splits every count by the
   source file of each instruction, inlined lines included:
 
   | Bucket | Source files | Warns beyond |
@@ -1605,15 +1605,16 @@ with a bucket beyond its threshold, the source files (named relative to
 ```bash
 python dev_helpers/compare_profiles.py --only bridges,articulation_points            # against origin/main
 python dev_helpers/compare_profiles.py --only bridges --base HEAD~1                   # against any revision
-python dev_helpers/compare_profiles.py --only bridges --platform linux/amd64          # emulated x86-64, slow
+python dev_helpers/compare_profiles.py --only bridges --platform linux/arm64          # arm64, about ten times slower
 ```
 
 `--only` takes the same comma-separated substrings as `compare.py`. The report
 and a per-line annotation of every measurement land in `profiles/comparison/`
 (git ignores `profiles/`). It needs podman or docker, nothing else; it runs on
-macOS too, natively on the machine's architecture unless `--platform` says
-otherwise. Use it as soon as a count or a timing rises, before calling a
-change noise. The counts come from the container's compiler, so they can
+macOS too. The container is x86-64 like CI, emulated on Apple silicon:
+callgrind on arm64 is about ten times slower than on emulated x86-64. Use it
+as soon as a count or a timing rises, before calling a change noise. The
+counts come from the container's compiler, so they can
 differ from CI's by layout effects of up to a few percent: CI decides whether
 a count moved, this shows why.
 
