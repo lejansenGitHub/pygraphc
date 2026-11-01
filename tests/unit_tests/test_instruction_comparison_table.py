@@ -15,10 +15,14 @@ instruction_compare = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(instruction_compare)
 
 
+def _flat_threshold(_row_name: str) -> float:
+    return 0.005
+
+
 def test_unchanged_counts_are_left_out_and_counted() -> None:
     """A count that rounds to 0.00% is not a row; the line below the table says how many there were."""
     table, changed = instruction_compare.comparison_table(
-        {"steady": 1_000_000, "moved": 1_000_000}, {"steady": 1_000_003, "moved": 1_010_000}, 0.005
+        {"steady": 1_000_000, "moved": 1_000_000}, {"steady": 1_000_003, "moved": 1_010_000}, _flat_threshold
     )
 
     assert "steady" not in table
@@ -36,7 +40,7 @@ def test_slower_and_faster_counts_are_separate_tables_largest_change_first() -> 
     base = {"small_rise": 1000, "large_rise": 1000, "small_drop": 1000, "large_drop": 1000}
     head = {"small_rise": 1003, "large_rise": 1050, "small_drop": 998, "large_drop": 900}
 
-    table, _changed = instruction_compare.comparison_table(base, head, 0.005)
+    table, _changed = instruction_compare.comparison_table(base, head, _flat_threshold)
     slower, faster = table.split("**Fewer instructions (faster): 2**")
 
     assert slower.startswith("**More instructions (slower): 2**")
@@ -50,7 +54,7 @@ def test_every_table_row_starts_its_columns_at_the_same_character() -> None:
     base = {"rise": 1000, "long_scenario_name/size": 1000, "gone": 7}
     head = {"rise": 1010, "long_scenario_name/size": 900, "brand_new": 3}
 
-    table, changed = instruction_compare.comparison_table(base, head, 0.005)
+    table, changed = instruction_compare.comparison_table(base, head, _flat_threshold)
     rows = [line for line in table.splitlines() if line.startswith("|")]
 
     assert len({len(line) for line in rows}) == 1
@@ -61,9 +65,19 @@ def test_every_table_row_starts_its_columns_at_the_same_character() -> None:
 
 def test_the_failure_message_is_one_line_without_the_scenario_names() -> None:
     """The names are in the tables; the message after them only counts and says what to do."""
-    message = instruction_compare.failure_message(31, 0.005)
+    message = instruction_compare.failure_message(31)
 
     assert message == (
-        "31 count(s) moved by more than 0.5%, marked **changed** in the tables above; "
-        "review them and label the pull request accept-instruction-change"
+        "31 count(s) moved beyond their bucket's threshold (algorithm 0.1%, boundary 0.5%, cpython 0.5%), "
+        "marked **changed** in the tables above; review them and label the pull request accept-instruction-change"
     )
+
+
+def test_each_bucket_row_is_held_to_its_own_threshold() -> None:
+    """A 0.2% move fails the algorithm bucket but not the boundary bucket of the same scenario."""
+    base = {"bfs [algorithm]": 100_000, "bfs [boundary]": 100_000}
+    head = {"bfs [algorithm]": 100_200, "bfs [boundary]": 100_200}
+
+    _table, changed = instruction_compare.comparison_table(base, head, instruction_compare.bucket_threshold)
+
+    assert changed == ["bfs [algorithm]"]

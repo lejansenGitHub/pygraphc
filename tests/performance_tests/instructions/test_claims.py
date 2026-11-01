@@ -47,9 +47,9 @@ CLAIMS: list[tuple[str, str, float]] = [
 
 @pytest.fixture(scope="module")
 def instruction_counts() -> dict[str, int]:
-    """Every scenario of every claim, measured in one callgrind run."""
+    """The total of every scenario of every claim, measured in one callgrind run."""
     names = sorted({name for claimed, reference, _limit in CLAIMS for name in (claimed, reference)})
-    return count_instructions(names)
+    return {name: sum(buckets.values()) for name, buckets in count_instructions(names).items()}
 
 
 def _ratio(instruction_counts: dict[str, int], claimed: str, reference: str) -> float:
