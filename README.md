@@ -1449,7 +1449,6 @@ the change what moved and why. `profiles/engine_comparison.md` and the
 pip install -e ".[benchmark]"
 pip install networkx pgmpy
 python benchmarks/networkx_baselines.py  # networkx baseline per operation, the README tables
-python benchmarks/bench_all.py       # structured cost breakdown + topology scenarios
 python benchmarks/bench_dag_learn.py  # hill-climb K2: pygraphc vs pgmpy
 ```
 

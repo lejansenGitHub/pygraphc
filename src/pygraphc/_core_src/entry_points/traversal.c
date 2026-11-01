@@ -4,63 +4,6 @@
 #include "../conversion/parse_terminals.h"
 #include "../algorithms/adjacency.h"
 
-/* ── BFS (unweighted, from source) ── */
-
-PyObject *py_bfs(PyObject *self, PyObject *args) {
-    int node_count, source;
-    PyObject *edges_obj;
-    if (!PyArg_ParseTuple(args, "iOi", &node_count, &edges_obj, &source)) return NULL;
-
-    if (source < 0 || source >= node_count) {
-        PyErr_SetString(PyExc_ValueError, "source out of range");
-        return NULL;
-    }
-
-    EdgeList edges;
-    if (parse_edges(edges_obj, &edges) < 0) return NULL;
-
-    AdjacencyList adjacency;
-    if (build_adjacency(node_count, &edges, NULL, &adjacency, 0) < 0) { free_edges(&edges); return NULL; }
-    free_edges(&edges);
-
-    int *visited = (int *)calloc((size_t)node_count, sizeof(int));
-    int *queue   = (int *)malloc((size_t)node_count * sizeof(int));
-    if (!visited || !queue) {
-        free(visited); free(queue);
-        free_adjacency(&adjacency);
-        PyErr_NoMemory();
-        return NULL;
-    }
-
-    int head = 0, tail = 0;
-    queue[tail++] = source;
-    visited[source] = 1;
-
-    while (head < tail) {
-        int node = queue[head++];
-        for (int slot = adjacency.offset[node]; slot < adjacency.offset[node + 1]; slot++) {
-            int neighbor = adjacency.neighbors[slot];
-            if (!visited[neighbor]) {
-                visited[neighbor] = 1;
-                queue[tail++] = neighbor;
-            }
-        }
-    }
-
-    /* Build result list from queue (BFS order) */
-    PyObject *result = PyList_New(tail);
-    if (!result) {
-        free(visited); free(queue); free_adjacency(&adjacency);
-        return NULL;
-    }
-    for (int position = 0; position < tail; position++)
-        PyList_SET_ITEM(result, position, PyLong_FromLong(queue[position]));
-
-    free(visited); free(queue);
-    free_adjacency(&adjacency);
-    return result;
-}
-
 /* ── bfs (node-ID edges) ── */
 
 PyObject *py_bfs_by_node_id(PyObject *self, PyObject *args) {

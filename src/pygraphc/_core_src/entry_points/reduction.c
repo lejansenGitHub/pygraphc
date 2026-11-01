@@ -142,15 +142,6 @@ PyObject *py_sp_state_free(PyObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-/* sp_state_graph(state) -> the graph capsule the state was built from. */
-PyObject *py_sp_state_graph(PyObject *self, PyObject *args) {
-    PyObject *capsule;
-    if (!PyArg_ParseTuple(args, "O", &capsule)) return NULL;
-    SPHandle *handle = get_sp_handle(capsule);
-    if (!handle) return NULL;
-    return Py_NewRef(handle->owner);
-}
-
 /* sp_next_move(state) -> (kind, node, edge_a, edge_b, neighbor_a, neighbor_b) or None
  *
  * The move that applies at the next candidate node, pendant before series,
