@@ -1,8 +1,9 @@
 /* Directed acyclic graphs and cycles: topological sort, longest path, cycle basis. */
 #include "entry_points.h"
-#include "../helpers/parse.h"
-#include "../helpers/toposort.h"
-#include "../helpers/terminals.h"
+#include "../conversion/parse.h"
+#include "../algorithms/toposort.h"
+#include "../conversion/parse_terminals.h"
+#include "../algorithms/adjacency.h"
 
 /* The node ids of an order's node states, in order; edge states are left out. NULL with an exception set. */
 static PyObject *node_ids_in_order(const GraphContext *graph, const TopologicalOrder *order) {

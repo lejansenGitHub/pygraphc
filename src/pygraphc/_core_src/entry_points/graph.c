@@ -1,7 +1,8 @@
 /* Graph construction: the parsed graph capsule, its counters, and edge translation. */
 #include "entry_points.h"
-#include "../helpers/parse.h"
-#include "../helpers/terminals.h"
+#include "../conversion/parse.h"
+#include "../conversion/parse_terminals.h"
+#include "../algorithms/adjacency.h"
 
 /*
  * Parse node ids and edges into a graph: one terminal parser for every edge

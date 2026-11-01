@@ -1,7 +1,8 @@
 /* Bridges, articulation points and biconnected components (iterative Tarjan). */
 #include "entry_points.h"
-#include "../helpers/parse.h"
-#include "../helpers/terminals.h"
+#include "../conversion/parse.h"
+#include "../conversion/parse_terminals.h"
+#include "../algorithms/adjacency.h"
 
 /* ── Bridges (iterative Tarjan's) ── */
 

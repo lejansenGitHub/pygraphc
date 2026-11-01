@@ -1,6 +1,6 @@
 /* The series-parallel reduction: the one-shot reduce and the primitives over a state handle. */
 #include "entry_points.h"
-#include "../helpers/series_parallel.h"
+#include "../conversion/series_parallel.h"
 
 /* series_parallel_reduce_ctx(capsule, preserved_mask, protected_mask
  *                           [, edge_mask, node_mask,

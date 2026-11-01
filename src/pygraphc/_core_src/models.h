@@ -116,36 +116,6 @@ typedef struct {
 
 PYGRAPHC_INTERNAL void free_terminal_list(TerminalList *terminals);
 
-/*
- * The adjacency list of a graph (CSR, reverse CSR when directed). A
- * two-terminal edge sits at both endpoints (directed: forward at its first,
- * reverse at its second); with a terminal list, an edge with three or more
- * terminals sits as -1 - e at each of its terminals (directed: in-terminals
- * forward, out-terminals in reverse) with that terminal in edge_indices, and a
- * single-terminal edge nowhere. terminals is NULL when every edge has two
- * terminals. Returns 0, or -1 with an exception set.
- */
-PYGRAPHC_INTERNAL int build_adjacency(int node_count, const EdgeList *edges, const TerminalList *terminals,
-                                      AdjacencyList *adjacency, int directed);
-
-/* Whether edge e has three or more terminals and so appears as -1 - e in the adjacency list. */
-static inline int is_multi_terminal_edge(const TerminalList *terminals, int edge) {
-    return terminals->terminal_offsets[edge + 1] - terminals->terminal_offsets[edge] > 2;
-}
-
-/*
- * The one rule every algorithm on edges with terminals asks: a terminal is active iff
- * its edge, the terminal itself and its node are all unmasked. A NULL mask masks
- * nothing.
- */
-static inline int terminal_is_active(const TerminalList *terminals, int edge, int terminal, const uint8_t *edge_mask,
-                                 const uint8_t *terminal_mask, const uint8_t *node_mask) {
-    if (edge_mask && edge_mask[edge]) return 0;
-    if (terminal_mask && terminal_mask[terminal]) return 0;
-    if (node_mask && node_mask[terminals->terminal_nodes[terminal]]) return 0;
-    return 1;
-}
-
 /* ── GraphContext: cached parsed graph for reuse across algorithms ── */
 
 typedef struct {

@@ -1,20 +1,26 @@
-/* Edges with terminals: parsing, the adjacency list with multi-terminal entries and terminal masks. */
+/* Edges with terminals: the rules every algorithm on them asks, terminal masks and pass weights. */
 #ifndef PYGRAPHC_CORE_TERMINALS_H
 #define PYGRAPHC_CORE_TERMINALS_H
 
 #include "../models.h"
 
+/* Whether edge e has three or more terminals and so appears as -1 - e in the adjacency list. */
+static inline int is_multi_terminal_edge(const TerminalList *terminals, int edge) {
+    return terminals->terminal_offsets[edge + 1] - terminals->terminal_offsets[edge] > 2;
+}
+
 /*
- * Parse edges given as tuples of node ids, one per terminal, or as an
- * (edge_count, 2) int buffer, into graph->node_ids.edges and, when some edge
- * has other than two terminals, graph->terminals; directed edges are (u, v) or
- * (in_nodes, out_nodes). While every edge has two terminals the terminal list
- * stays implicit (edge e at terminals 2e and 2e + 1, the edge list holding its
- * nodes); otherwise any edge of other than two terminals sits in the edge list
- * as (node of its first terminal, same node), which joins nothing. The node
- * ids must already be parsed. Returns 0, or -1 with an exception set.
+ * The one rule every algorithm on edges with terminals asks: a terminal is active iff
+ * its edge, the terminal itself and its node are all unmasked. A NULL mask masks
+ * nothing.
  */
-PYGRAPHC_INTERNAL int parse_terminal_edges(GraphContext *graph, PyObject *edges_obj);
+static inline int terminal_is_active(const TerminalList *terminals, int edge, int terminal, const uint8_t *edge_mask,
+                                 const uint8_t *terminal_mask, const uint8_t *node_mask) {
+    if (edge_mask && edge_mask[edge]) return 0;
+    if (terminal_mask && terminal_mask[terminal]) return 0;
+    if (node_mask && node_mask[terminals->terminal_nodes[terminal]]) return 0;
+    return 1;
+}
 
 /* A parsed terminal mask and the edge mask two-terminal edges are traversed under. */
 typedef struct {
@@ -24,16 +30,11 @@ typedef struct {
 } TerminalMask;
 
 /*
- * Parse an optional terminal mask (None masks nothing), one byte per terminal. Every
- * graph numbers its terminals: with a terminal list as listed there, without one edge e
- * has terminals 2e and 2e + 1. A two-terminal edge with a masked terminal joins nothing
- * (masking case 5), so it is folded into a copy of the edge mask once per call
- * and the kernels check two-terminal edges by edge mask alone. Returns 0, or -1
- * with an exception set.
+ * The edge mask two-terminal edges are traversed under: the given edge mask plus every
+ * two-terminal edge with a masked terminal, which joins nothing (masking case 5).
  */
-PYGRAPHC_INTERNAL int parse_terminal_mask(const GraphContext *graph, PyObject *terminal_mask_obj, const uint8_t *edge_mask,
-                                      TerminalMask *mask);
-PYGRAPHC_INTERNAL void release_terminal_mask(TerminalMask *mask);
+PYGRAPHC_INTERNAL void fill_two_terminal_edge_mask(const GraphContext *graph, const uint8_t *edge_mask,
+                                                   const uint8_t *terminal_mask, uint8_t *two_terminal_edges);
 
 /*
  * How searches pass through edges under per-terminal weights. A pass goes from one

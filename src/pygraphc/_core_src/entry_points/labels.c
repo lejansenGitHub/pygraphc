@@ -1,7 +1,7 @@
 #include "entry_points.h"
-#include "../helpers/terminals.h"
-#include "../helpers/parse.h"
-#include "../helpers/components.h"
+#include "../conversion/parse_terminals.h"
+#include "../conversion/parse.h"
+#include "../algorithms/components.h"
 
 /* ── Label kernels: int32 byte arrays instead of Python containers ──
  *

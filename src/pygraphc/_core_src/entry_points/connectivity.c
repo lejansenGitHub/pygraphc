@@ -1,8 +1,8 @@
 /* Connected components (index, node-ID and context tiers) and strongly connected components. */
 #include "entry_points.h"
-#include "../helpers/terminals.h"
-#include "../helpers/parse.h"
-#include "../helpers/components.h"
+#include "../conversion/parse_terminals.h"
+#include "../conversion/parse.h"
+#include "../algorithms/components.h"
 
 /* ── connected_components(n, edges) -> list[set[int]] ── */
 

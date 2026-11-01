@@ -1,10 +1,23 @@
 /* Dijkstra: source-target paths, single-source and multi-source lengths. */
 #include "entry_points.h"
-#include "../helpers/terminals.h"
-#include "../helpers/arrival_labels.h"
-#include "../helpers/parse.h"
-#include "../helpers/min_heap.h"
-#include "../helpers/bidirectional_dijkstra.h"
+#include "../conversion/parse_terminals.h"
+#include "../algorithms/adjacency.h"
+#include "../algorithms/arrival_labels.h"
+#include "../conversion/parse.h"
+#include "../algorithms/min_heap.h"
+#include "../algorithms/bidirectional_dijkstra.h"
+
+/* Turn the node indices of a bidirectional result into a list of node IDs. */
+static PyObject *bidirectional_path_to_list(const BidirectionalPath *bidirectional_path, const NodeIdContext *context) {
+    PyObject *path = PyList_New(bidirectional_path->path_length);
+    if (!path) return NULL;
+    for (int position = 0; position < bidirectional_path->path_length; position++) {
+        PyObject *item = context->node_id_items[bidirectional_path->path[position]];
+        Py_INCREF(item);
+        PyList_SET_ITEM(path, position, item);
+    }
+    return path;
+}
 
 /* ── Dijkstra (source -> target, returns distance + path) ── */
 

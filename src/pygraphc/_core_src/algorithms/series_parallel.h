@@ -63,14 +63,6 @@ typedef struct { int other; int slot; } SPPairEntry;
 
 typedef struct { int first_slot; int start; int count; int from_node; int to_node; } SPParallelCandidate;
 
-/* The four masks of a reduction, parsed together and released together. */
-typedef struct {
-    const uint8_t *preserved; const uint8_t *protect; const uint8_t *keep; const uint8_t *blocked;
-    const uint8_t *edge_mask; const uint8_t *node_mask;
-    Py_buffer preserved_buffer, protect_buffer, keep_buffer, blocked_buffer, edge_mask_buffer, node_mask_buffer;
-    uint8_t *no_members;
-} SPMasks;
-
 /* ── The same reduction as primitives over an opaque state handle ──
  *
  * The incidence structure above, the preserved node and protected masks and the
@@ -119,14 +111,6 @@ PYGRAPHC_INTERNAL int sp_load_edges(SPState *state, GraphContext *graph, const u
 PYGRAPHC_INTERNAL int sp_drop_components_without_preserved_nodes(SPState *state, GraphContext *graph, int node_count, const uint8_t *edge_mask,
                                             const uint8_t *node_mask, const uint8_t *preserved_mask);
 PYGRAPHC_INTERNAL void sp_enqueue_all_candidates(SPState *state, int node_count, const uint8_t *preserved_mask);
-PYGRAPHC_INTERNAL PyObject *sp_build_log(SPState *state, int node_count);
-PYGRAPHC_INTERNAL void sp_release_masks(SPMasks *masks);
-PYGRAPHC_INTERNAL int sp_parse_masks(PyObject *preserved_obj, PyObject *protected_obj, PyObject *edge_mask_obj,
-                                     PyObject *node_mask_obj, PyObject *keep_obj, PyObject *blocked_obj,
-                                     int node_count, Py_ssize_t edge_count, SPMasks *masks);
-PYGRAPHC_INTERNAL void sp_handle_release(SPHandle *handle);
-PYGRAPHC_INTERNAL void sp_handle_destructor(PyObject *capsule);
-PYGRAPHC_INTERNAL SPHandle *get_sp_handle(PyObject *capsule);
 PYGRAPHC_INTERNAL int sp_check_edge(SPHandle *handle, int edge, int node, int neighbor);
 PYGRAPHC_INTERNAL int sp_check_distinct_edges(int edge_a, int edge_b);
 PYGRAPHC_INTERNAL int sp_check_node_removable(SPHandle *handle, int node);

@@ -1,7 +1,8 @@
 /* Breadth-first search and edge-simple path enumeration. */
 #include "entry_points.h"
-#include "../helpers/parse.h"
-#include "../helpers/terminals.h"
+#include "../conversion/parse.h"
+#include "../conversion/parse_terminals.h"
+#include "../algorithms/adjacency.h"
 
 /* ── BFS (unweighted, from source) ── */
 

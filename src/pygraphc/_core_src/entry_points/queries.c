@@ -1,5 +1,5 @@
 #include "entry_points.h"
-#include "../helpers/parse.h"
+#include "../conversion/parse.h"
 
 /* ── CSR-based query functions (O(degree) instead of O(m)) ── */
 

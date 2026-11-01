@@ -1,6 +1,6 @@
 /* Parsing helpers: Python objects and buffers into the data models. */
 #include "parse.h"
-#include "terminals.h"
+#include "parse_terminals.h"
 
 /*
  * Try the buffer protocol first (numpy int32 array with shape (edge_count, 2)).
