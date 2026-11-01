@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- `strongly_connected_components` builds its sets without triggering the cyclic
+  GC: each set is created at its component's first node and stays untracked
+  until the result list is built. On 1M single-node components the call no
+  longer depends on the caller's heap: 0.25-0.29s, where it took 0.3-1.8s
+  depending on how many full collections the new sets triggered.
 - **Breaking:** the nodes a reduction keeps are *preserved nodes*, no longer
   *terminals*: `reduce(graph, preserved_nodes, ...)` and the other reduction
   functions take `preserved_nodes`, and the masks are `preserved_mask`

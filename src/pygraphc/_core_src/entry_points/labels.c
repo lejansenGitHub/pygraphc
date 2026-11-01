@@ -113,38 +113,76 @@ PyObject *py_quotient_edges_ctx(PyObject *self, PyObject *args) {
     return result;
 }
 
-/* degrees_ctx(capsule[, edge_mask, node_mask]) -> bytes of int32[node_count]
+/*
+ * Add each joined terminal of every edge to the degree of its node: undirected
+ * the active terminals of an edge with at least two, directed the active
+ * in-terminals of an edge with an active out-terminal (the out-degree). A
+ * two-terminal edge without a terminal list has terminals 2e and 2e + 1 at its
+ * endpoints, a masked one folded into two_terminal_edges. Instantiated for both
+ * values of has_terminal_list.
+ */
+static inline __attribute__((always_inline)) void add_joined_terminals(
+    const GraphContext *graph, const uint8_t *two_terminal_edges, const uint8_t *edge_mask, const uint8_t *terminal_mask,
+    const uint8_t *node_mask, int32_t *degrees, const int has_terminal_list) {
+    const TerminalList *terminals = graph->terminals;
+    const EdgeList *edges = &graph->node_ids.edges;
+    for (Py_ssize_t edge = 0; edge < edges->edge_count; edge++) {
+        if (!has_terminal_list) {
+            if (two_terminal_edges && two_terminal_edges[edge]) continue;
+            int first_node = EDGE_FIRST_ENDPOINT(edges, edge), second_node = EDGE_SECOND_ENDPOINT(edges, edge);
+            if (node_mask && (node_mask[first_node] || node_mask[second_node])) continue;
+            degrees[first_node]++;
+            if (!graph->directed) degrees[second_node]++;
+            continue;
+        }
+        int first = terminals->terminal_offsets[edge], end = terminals->terminal_offsets[edge + 1];
+        int out_start = graph->directed ? terminals->out_terminal_offsets[edge] : end;
+        int active_in = 0, active_out = 0;
+        for (int terminal = first; terminal < end; terminal++) {
+            if (!terminal_is_active(terminals, (int)edge, terminal, edge_mask, terminal_mask, node_mask)) continue;
+            if (terminal < out_start) active_in++;
+            else active_out++;
+        }
+        if (graph->directed ? (active_in == 0 || active_out == 0) : active_in < 2) continue;
+        for (int terminal = first; terminal < out_start; terminal++)
+            if (terminal_is_active(terminals, (int)edge, terminal, edge_mask, terminal_mask, node_mask))
+                degrees[terminals->terminal_nodes[terminal]]++;
+    }
+}
+
+/* degrees_ctx(capsule[, edge_mask, node_mask, terminal_mask]) -> bytes of int32[node_count]
  *
- * Incidence degree of every node under the masks, a self-loop counting twice,
- * 0 for an excluded node and for edges at an excluded node. For a directed
- * graph the out-degree, like degree_ctx.
+ * The degree of every node under the masks, as degree_ctx counts it: the joined
+ * terminals at the node, a self-loop counting twice, 0 for an excluded node. For
+ * a directed graph the out-degree. One pass over the terminals.
  */
 PyObject *py_degrees_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = require_two_terminal_edges(capsule);
+    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *terminal_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &edge_mask_obj, &node_mask_obj, &terminal_mask_obj)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
-    Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
 
     const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
-    if (parse_mask(edge_mask_obj, edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
+    if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
     const uint8_t *node_mask; Py_buffer node_mask_buffer;
     if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); return NULL; }
+    TerminalMask terminal_mask;
+    if (parse_terminal_mask(graph, terminal_mask_obj, edge_mask, &terminal_mask) < 0) {
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;
+    }
 
     PyObject *result = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)node_count * (Py_ssize_t)sizeof(int32_t));
-    if (!result || node_count == 0) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return result; }
-    int32_t *degrees = (int32_t *)PyBytes_AS_STRING(result);
-    memset(degrees, 0, (size_t)node_count * sizeof(int32_t));
-
-    for (Py_ssize_t edge_index = 0; edge_index < edge_count; edge_index++) {
-        if (edge_mask && edge_mask[edge_index]) continue;
-        int from_node = EDGE_FIRST_ENDPOINT(&graph->node_ids.edges, edge_index), to_node = EDGE_SECOND_ENDPOINT(&graph->node_ids.edges, edge_index);
-        if (node_mask && (node_mask[from_node] || node_mask[to_node])) continue;
-        degrees[from_node]++;
-        if (!graph->directed) degrees[to_node]++;
+    if (result && node_count > 0) {
+        int32_t *degrees = (int32_t *)PyBytes_AS_STRING(result);
+        memset(degrees, 0, (size_t)node_count * sizeof(int32_t));
+        const uint8_t *two_terminal_edges = two_terminal_edge_mask(&terminal_mask, edge_mask);
+        if (graph->terminals)
+            add_joined_terminals(graph, two_terminal_edges, edge_mask, terminal_mask.terminals, node_mask, degrees, 1);
+        else
+            add_joined_terminals(graph, two_terminal_edges, NULL, NULL, node_mask, degrees, 0);
     }
-    release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+    release_terminal_mask(&terminal_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
     return result;
 }
 

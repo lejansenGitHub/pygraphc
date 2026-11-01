@@ -389,6 +389,51 @@ cleanup:
     return result;
 }
 
+/*
+ * List of node id sets, one per component holding an unmasked node, in component order;
+ * labels NULL makes every node its own component. A set is created at its component's
+ * first node and stays untracked by the cyclic GC until the list is built: the sets are
+ * all reachable, yet each allocation would otherwise trigger collections that traverse
+ * every set built so far. Tracking again in creation order keeps later collections
+ * walking the sets in memory order.
+ */
+static PyObject *component_node_sets(const GraphContext *graph, const int *labels, int component_count,
+                                     const uint8_t *node_mask) {
+    PyObject **component_sets = (PyObject **)calloc((size_t)component_count, sizeof(PyObject *));
+    int *components_in_creation_order = (int *)malloc((size_t)component_count * sizeof(int));
+    if (!component_sets || !components_in_creation_order) {
+        free(component_sets); free(components_in_creation_order);
+        return PyErr_NoMemory();
+    }
+    PyObject *result = NULL;
+    Py_ssize_t set_count = 0;
+    for (int node = 0; node < graph->node_ids.node_count; node++) {
+        if (node_mask && node_mask[node]) continue;
+        int component = labels ? labels[node] : node;
+        if (!component_sets[component]) {
+            component_sets[component] = PySet_New(NULL);
+            if (!component_sets[component]) goto cleanup;
+            PyObject_GC_UnTrack(component_sets[component]);
+            components_in_creation_order[set_count++] = component;
+        }
+        if (PySet_Add(component_sets[component], graph->node_ids.node_id_items[node]) < 0) goto cleanup;
+    }
+    result = PyList_New(set_count);
+    if (!result) goto cleanup;
+    for (Py_ssize_t created = 0; created < set_count; created++)
+        PyObject_GC_Track(component_sets[components_in_creation_order[created]]);
+    Py_ssize_t list_index = 0;
+    for (int component = 0; component < component_count; component++) {
+        if (!component_sets[component]) continue;
+        PyList_SET_ITEM(result, list_index++, component_sets[component]);
+        component_sets[component] = NULL;
+    }
+cleanup:
+    for (int component = 0; component < component_count; component++) Py_XDECREF(component_sets[component]);
+    free(component_sets); free(components_in_creation_order);
+    return result;
+}
+
 PyObject *py_strongly_connected_components_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *terminal_mask_obj = Py_None;
     if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &edge_mask_obj, &node_mask_obj, &terminal_mask_obj)) return NULL;
@@ -407,15 +452,7 @@ PyObject *py_strongly_connected_components_ctx(PyObject *self, PyObject *args) {
     if (!graph->has_adjacency) {
         const uint8_t *node_mask = NULL; Py_buffer node_mask_buffer;
         if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) return NULL;
-        PyObject *result = PyList_New(0);
-        if (!result) { release_mask(&node_mask_buffer); return NULL; }
-        for (int node = 0; node < node_count; node++) {
-            if (node_mask && node_mask[node]) continue;
-            PyObject *component_set = PySet_New(NULL);
-            PySet_Add(component_set, graph->node_ids.node_id_items[node]);
-            PyList_Append(result, component_set);
-            Py_DECREF(component_set);
-        }
+        PyObject *result = component_node_sets(graph, NULL, node_count, node_mask);
         release_mask(&node_mask_buffer);
         return result;
     }
@@ -434,35 +471,9 @@ PyObject *py_strongly_connected_components_ctx(PyObject *self, PyObject *args) {
     release_terminal_mask(&terminal_mask);
     release_mask(&edge_mask_buffer);
     if (status < 0) { release_mask(&node_mask_buffer); return NULL; }
-    int component_count = components.component_count;
 
-    /* Build sets, skipping masked nodes */
-    PyObject **component_sets = (PyObject **)malloc((size_t)component_count * sizeof(PyObject *));
-    if (!component_sets) { free(components.labels); release_mask(&node_mask_buffer); PyErr_NoMemory(); return NULL; }
-    for (int component = 0; component < component_count; component++) {
-        component_sets[component] = PySet_New(NULL);
-        if (!component_sets[component]) {
-            for (int previous_component = 0; previous_component < component; previous_component++) Py_DECREF(component_sets[previous_component]);
-            free(component_sets); free(components.labels); release_mask(&node_mask_buffer); return NULL;
-        }
-    }
-    for (int node = 0; node < node_count; node++) {
-        if (node_mask && node_mask[node]) continue;
-        PySet_Add(component_sets[components.labels[node]], graph->node_ids.node_id_items[node]);
-    }
-
-    /* Collect non-empty sets */
-    PyObject *result = PyList_New(0);
-    if (!result) {
-        for (int component = 0; component < component_count; component++) Py_DECREF(component_sets[component]);
-        free(component_sets); free(components.labels); release_mask(&node_mask_buffer); return NULL;
-    }
-    for (int component = 0; component < component_count; component++) {
-        if (PySet_GET_SIZE(component_sets[component]) > 0)
-            PyList_Append(result, component_sets[component]);
-        Py_DECREF(component_sets[component]);
-    }
-    free(component_sets); free(components.labels);
+    PyObject *result = component_node_sets(graph, components.labels, components.component_count, node_mask);
+    free(components.labels);
     release_mask(&node_mask_buffer);
     return result;
 }

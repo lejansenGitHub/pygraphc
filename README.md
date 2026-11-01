@@ -75,7 +75,7 @@ guarded by the three performance tiers described under [Tests](#tests).
 | Shortest path, single pair, `Graph` + float64 weights | 100K | 0.0002s | 0.0015s | **7.5x** |
 | Shortest path, single pair, `Graph` + list weights | 100K | 0.00062s | 0.0012s | **1.9x** |
 | Edge paths (cutoff=5) | 80 | 0.000001s | 0.0001s | **91x** |
-| SCC (directed) | 1M | 0.26s | 2.15s | **8.2x** |
+| SCC (directed) | 1M | 0.28s | 2.64s | **9.3x** |
 | WCC (directed) | 1M | 0.027s | 2.01s | **74x** |
 | Topological sort | 1M | 0.084s | 2.08s | **25x** |
 | DAG longest path | 1M | 0.10s | 4.73s | **47x** |
@@ -620,6 +620,41 @@ dag.dag_longest_path([1.0, 5.0, 2.0, 7.0, 0.5, 0.5])   # [2, 4, 5]: a pass weigh
 
 An edge with an in- and an out-terminal at the same node is a cycle, like a
 self-loop, and an edge without an active in-terminal passes nothing (case 9).
+
+#### Neighborhood queries and cycles
+
+The neighborhood queries follow the hypergraph libraries (XGI, HyperNetX) and,
+for direction, the forward and backward stars of Gallo et al. An edge at a
+node counts when its terminal there is active and it joins that terminal to
+another active one: any other terminal undirected, an out-terminal from an
+in-terminal directed.
+
+```python
+graph = Graph([1, 2, 3, 4, 5], [(1, 2), (2, 3, 4), (4, 5)])
+graph.neighbors(2)               # {1, 3, 4}: every other terminal node of the edges at 2
+graph.degree(2)                  # 2: one per terminal at the node
+graph.incident_edge_indices(2)   # [0, 1]
+graph.without_terminals([(1, 1)]).neighbors(3)   # set(): its only terminal is masked
+
+dag = Graph([1, 2, 3, 4, 5], [((1, 2), (3, 4)), (4, 5)], directed=True)
+dag.successors(1)                # {3, 4}
+dag.predecessors(4)              # {1, 2}
+```
+
+`degree` counts terminals, so an edge with two terminals at a node counts twice,
+as a self-loop does (case 26), and a node is never its own neighbor (case 27).
+
+`cycle_basis` returns Berge cycles, the standard hypergraph cycle: it passes
+through an edge from one terminal to another and uses every node and edge at
+most once. The number of cycles is the cycle rank of the incidence graph,
+terminals − nodes − edges + components, which is m − n + c on two-terminal
+edges. A single multi-terminal edge is a tree, never a cycle.
+
+```python
+Graph([1, 2, 3, 4], [(1, 2, 3), (3, 4), (4, 1)]).cycle_basis()   # [[4, 1, 3]]
+Graph([1, 2, 3, 4], [(1, 2, 3), (2, 3, 4)]).cycle_basis()        # [[3, 2]]: two edges sharing two nodes
+Graph([1, 2], [(1, 1, 2)]).cycle_basis()                         # [[1]]: two terminals at one node
+```
 
 #### Critical edges, critical nodes and blocks
 
@@ -1581,6 +1616,11 @@ implementing; the D and O numbers refer to `docs/multi_terminal-decisions.md`.
 | 23 | Edge with an in- and an out-terminal at the same node (directed) | A cycle, like a self-loop: topological sort raises, the node is its own strongly connected component. | Ignore the pair, so that only cycles through other nodes count. | user (step C proposal) |
 | 24 | DAG longest path without weights | A pass through a multi-terminal edge counts 1, as a two-terminal edge does. | Count 2 (entry and exit), or count by terminals. | user (step C proposal) |
 | 25 | Directed edge without an active in-terminal in a topological sort | Constrains nothing: its out-terminal nodes do not wait for it. | Keep its out-terminals after its (masked) in-terminals anyway. | user (step C proposal, case 9) |
+| 26 | `degree` at a node with two terminals of one edge | Counts terminals: 2, as for a self-loop. Equals XGI and HyperNetX ("edges containing the node") wherever an edge reaches a node once, and NetworkX on two-terminal graphs. | Count edges: 1, as XGI and HyperNetX do on hypergraphs without repeated nodes. | Claude (research: the conventions split here) |
+| 27 | A node as its own neighbor | Never, neither through a self-loop nor through two terminals of one edge (XGI, and pygraphc before). | Include it, as NetworkX does for a self-loop. | Claude (research: the conventions split here) |
+| 28 | Two terminals of one edge at one node in `cycle_basis` | A cycle `[node]`, like a self-loop; it counts toward the cycle rank. | No cycle: a strict Berge cycle needs distinct nodes. | Claude (research: the conventions split here) |
+| 29 | Two edges sharing two nodes in `cycle_basis` | A cycle of length 2, like two parallel two-terminal edges. | No cycle: some authors define Berge cycles from length 3. | Claude (research: the conventions split here) |
+| 30 | Which cycle space `cycle_basis` spans | The incidence graph's: Berge cycles, rank terminals − nodes − edges + components. | The hypercycle (oriented matroid) notion of reaction networks, which captures dependencies the incidence graph does not. | Claude (research: the community defaults to the incidence graph) |
 
 ### What the literature says about these cases
 
@@ -1615,6 +1655,14 @@ hypergraph libraries and power system tools. Sources:
 - **11:** pandapower uses the same entry + exit rule for three windings. A star is exact only up to three windings; CIM requires mesh impedances for more.
 - **16:** matching by node set follows HyperNetX and XGI. Ignoring direction departs from networkx's `has_edge(u, v)`.
 - **21–22:** banning only the immediate second pass computes a shortest *non-backtracking walk* in the star equivalent, not a shortest simple path. A detour that costs less than −2·w_n still counts the negative weight twice, which the test of entry 22 shows (4 instead of 5). The exact simple-path version is polynomial but needs T-join or matching algorithms (Schrijver, *Combinatorial Optimization*, ch. 29), not Dijkstra.
+
+**Neighborhood queries and cycles (research of 2026-11-01)**
+- **Supported:** neighbors as the nodes sharing an edge (XGI `neighbors`, HyperNetX s-adjacency with s = 1); in- and out-degree as the backward and forward stars of [GLNP] and XGI's `DiHypergraph`; Berge cycles as the cycle notion and the incidence (Levi) graph's cyclomatic number as the cycle rank.
+- **Split, decided by Claude and listed above:**
+  - 26: degree by edges (XGI, HyperNetX on sets) or by incidences with multiplicity (hypergraphs with repeated vertices, NetworkX self-loops).
+  - 27: NetworkX lists a self-loop node among its own neighbors, XGI does not.
+  - 28–29: whether a Berge cycle may repeat a node or have length 2 depends on the author.
+  - 30: reaction-network papers define a hypercycle space that differs from the incidence graph's.
 
 **Contradicted, and corrected**
 - **14:** removing every critical edge whole gave wrong two-edge-connected components when critical edges share a cycle. Corrected in this pull request.

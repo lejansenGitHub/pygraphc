@@ -263,11 +263,11 @@ def test_methods_of_later_stages_say_so() -> None:
 
     # --- Assert ---
     with pytest.raises(NotImplementedError, match="multi-terminal edges"):
-        graph.cycle_basis()
+        graph.all_edge_paths(1, 5)
     with pytest.raises(NotImplementedError, match="multi-terminal edges"):
         graph.with_edges([(1, 3)])
     with pytest.raises(NotImplementedError, match="multi-terminal edges"):
-        graph.without_edges([0]).degree(2)
+        graph.without_edges([0]).bcc_edge_labels()
 
 
 @pytest.mark.multi_terminal_edge_case
@@ -276,27 +276,16 @@ def test_methods_of_later_stages_refuse_a_terminal_mask_on_two_terminal_edges() 
     view = Graph([1, 2, 3], [(1, 2), (2, 3)]).without_terminals([(0, 1)])
 
     with pytest.raises(NotImplementedError, match="terminal masks"):
-        view.cycle_basis()
+        view.bcc_edge_labels()
 
 
 _METHODS_WITHOUT_TERMINAL_MASKS = {
     "with_edges": lambda view: view.with_edges([(1, 3)]),
     "split_node": lambda view: view.split_node(2, 9, [1]),
-    "incident_edge_indices": lambda view: view.incident_edge_indices(2),
-    "outgoing_edge_indices": lambda view: view.outgoing_edge_indices(2),
-    "incoming_edge_indices": lambda view: view.incoming_edge_indices(2),
-    "neighbors": lambda view: view.neighbors(2),
-    "successors": lambda view: view.successors(2),
-    "predecessors": lambda view: view.predecessors(2),
-    "degree": lambda view: view.degree(2),
-    "out_degree": lambda view: view.out_degree(2),
-    "in_degree": lambda view: view.in_degree(2),
     "all_edge_paths": lambda view: view.all_edge_paths(1, 3),
     "quotient_edges": lambda view: view.quotient_edges(memoryview(bytes(12)).cast("i")),
     "series_parallel_reduce": lambda view: view.series_parallel_reduce(bytes(3), bytes(3)),
-    "degrees": lambda view: view.degrees(),
     "bcc_edge_labels": lambda view: view.bcc_edge_labels(),
-    "cycle_basis": lambda view: view.cycle_basis(),
 }
 
 
@@ -792,3 +781,113 @@ def test_dag_longest_path_weighs_a_pass_entry_plus_exit() -> None:
 
     # --- Assert ---
     assert graph.dag_longest_path([1.0, 5.0, 2.0, 7.0]) == [2, 4]
+
+
+# ── Step D: local queries on multi-terminal edges (D24) ──
+
+
+def test_neighbors_through_a_multi_terminal_edge_are_its_other_terminal_nodes() -> None:
+    """D24: every other active terminal of an edge at the node is a neighbor, as two nodes in one hyperedge are."""
+    graph = _three_terminal_edge_between_two_terminal_edges()
+
+    # --- Assert ---
+    assert graph.neighbors(2) == {1, 3, 4}
+    assert graph.neighbors(3) == {2, 4}
+    assert graph.incident_edge_indices(2) == [0, 1]
+
+
+def test_degree_counts_the_terminals_at_the_node() -> None:
+    """D24: one per joined terminal at the node; degrees agrees with degree for every node."""
+    graph = Graph([1, 2, 3, 4], [(1, 2), (2, 3, 4), (3, 3, 4)])
+
+    # --- Assert ---
+    assert [graph.degree(node_id) for node_id in [1, 2, 3, 4]] == [1, 2, 3, 2]
+    assert list(graph.degrees()) == [1, 2, 3, 2]
+    assert graph.incident_edge_indices(3) == [1, 2]
+
+
+def test_a_masked_terminal_leaves_the_queries_of_its_node() -> None:
+    """D24 with case 2: the other terminals stay joined; the masked terminal's node loses the edge."""
+    view = _three_terminal_edge_between_two_terminal_edges().without_terminals([(1, 1)])
+
+    # --- Assert ---
+    assert view.neighbors(2) == {1, 4}
+    assert view.neighbors(3) == set()
+    assert [view.degree(node_id) for node_id in [1, 2, 3, 4, 5]] == [1, 2, 0, 2, 1]
+    assert list(view.degrees()) == [1, 2, 0, 2, 1]
+    assert view.incident_edge_indices(3) == []
+
+
+def test_an_edge_with_one_active_terminal_is_incident_to_nothing() -> None:
+    """D24 with case 3: a single active terminal joins nothing, so it counts toward no degree."""
+    view = _three_terminal_edge_between_two_terminal_edges().without_terminals([(1, 1), (1, 2)])
+
+    # --- Assert ---
+    assert view.neighbors(2) == {1}
+    assert view.degree(2) == 1
+    assert view.incident_edge_indices(2) == [0]
+    assert list(view.degrees()) == [1, 1, 0, 1, 1]
+
+
+def test_a_masked_node_leaves_the_neighbors_of_the_others() -> None:
+    """D24 with case 6: its terminal is inactive, the remaining terminals stay joined."""
+    view = _three_terminal_edge_between_two_terminal_edges().without_nodes([4])
+
+    # --- Assert ---
+    assert view.neighbors(2) == {1, 3}
+    assert view.degree(4) == 0
+    assert list(view.degrees()) == [1, 2, 1, 0, 0]
+
+
+def test_directed_queries_follow_in_and_out_terminals() -> None:
+    """D24: successors are the out-terminal nodes of edges at the node's in-terminals; predecessors the reverse."""
+    graph = Graph([1, 2, 3, 4, 5], [((1, 2), (3, 4)), (4, 5)], directed=True)
+
+    # --- Assert ---
+    assert graph.successors(1) == {3, 4}
+    assert graph.predecessors(4) == {1, 2}
+    assert graph.successors(4) == {5}
+    assert (graph.out_degree(1), graph.in_degree(4), graph.in_degree(1)) == (1, 1, 0)
+    assert graph.outgoing_edge_indices(1) == [0]
+    assert graph.incoming_edge_indices(4) == [0]
+    assert list(graph.degrees()) == [1, 1, 0, 1, 0]
+
+
+def test_a_directed_edge_without_an_active_out_terminal_has_no_successors() -> None:
+    """D24 with case 12: an edge left without an active out-terminal transmits nothing."""
+    view = Graph([1, 2, 3, 4], [((1, 2), (3, 4))], directed=True).without_terminals([(0, 2), (0, 3)])
+
+    # --- Assert ---
+    assert view.successors(1) == set()
+    assert view.out_degree(1) == 0
+    assert view.outgoing_edge_indices(1) == []
+    assert view.predecessors(3) == set()
+    assert list(view.degrees()) == [0, 0, 0, 0]
+
+
+def test_cycle_basis_passes_through_a_multi_terminal_edge() -> None:
+    """D25: a Berge cycle enters an edge at one terminal and leaves at another; the tree around it has none."""
+    ring = Graph([1, 2, 3, 4], [(1, 2, 3), (3, 4), (4, 1)])
+
+    # --- Assert ---
+    assert [sorted(cycle) for cycle in ring.cycle_basis()] == [[1, 3, 4]]
+    assert _three_terminal_edge_between_two_terminal_edges().cycle_basis() == []
+
+
+def test_cycle_basis_counts_the_rank_of_the_incidence_graph() -> None:
+    """D25: terminals - nodes - edges + components; one wide edge alone closes no cycle."""
+    graph = Graph([1, 2, 3, 4, 5], [(1, 2, 3, 4, 5), (1, 2), (3, 4, 5)])
+
+    # --- Assert ---
+    assert Graph([1, 2, 3, 4], [(1, 2, 3, 4)]).cycle_basis() == []
+    assert len(graph.cycle_basis()) == (5 + 2 + 3) - 5 - 3 + 1
+
+
+def test_a_masked_terminal_opens_the_cycle_through_its_edge() -> None:
+    """D25 with case 2: the edge still joins its other terminals, so a cycle needing the masked one is gone."""
+    ring = Graph([1, 2, 3, 4], [(1, 2, 3), (3, 4), (4, 1)])
+
+    # --- Assert ---
+    assert ring.without_terminals([(0, 0)]).cycle_basis() == []
+    assert [sorted(cycle) for cycle in ring.without_terminals([(0, 1)]).cycle_basis()] == [[1, 3, 4]]
+    assert ring.without_nodes([2]).cycle_basis() == ring.cycle_basis()

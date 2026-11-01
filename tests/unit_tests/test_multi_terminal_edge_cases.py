@@ -190,9 +190,9 @@ def test_edge_case_18_methods_not_yet_on_terminals_refuse_the_whole_graph() -> N
     two_terminal_view = Graph([1, 2, 3], [(1, 2), (2, 3)]).without_terminals([(0, 1)])
 
     with pytest.raises(NotImplementedError, match="multi-terminal edges"):
-        graph.cycle_basis()
+        graph.bcc_edge_labels()
     with pytest.raises(NotImplementedError, match="terminal masks"):
-        two_terminal_view.cycle_basis()
+        two_terminal_view.bcc_edge_labels()
 
 
 def test_edge_case_19_negative_terminal_weights_need_every_pass_to_cost_at_least_zero() -> None:
@@ -255,3 +255,34 @@ def test_edge_case_25_an_edge_without_an_active_in_terminal_constrains_no_order(
     view = Graph([1, 2, 3], [((1,), (2, 3)), (3, 1)], directed=True).without_terminals([(0, 0)])
 
     assert view.topological_sort() == [2, 3, 1]
+
+
+def test_edge_case_26_degree_counts_terminals_not_edges() -> None:
+    """EC26: an edge with two terminals at a node counts twice, like a self-loop; XGI and HyperNetX count edges."""
+    graph = Graph([1, 2], [(1, 1, 2)])
+
+    assert graph.degree(1) == 2
+    assert graph.incident_edge_indices(1) == [0]
+
+
+def test_edge_case_27_a_node_is_never_its_own_neighbor() -> None:
+    """EC27: neither through a self-loop nor through two terminals of one edge; NetworkX lists the node itself."""
+    assert Graph([1, 2], [(1, 1, 2)]).neighbors(1) == {2}
+    assert Graph([1], [(1, 1)]).neighbors(1) == set()
+
+
+def test_edge_case_28_two_terminals_of_one_edge_at_one_node_close_a_cycle() -> None:
+    """EC28: like a self-loop, [node]; a strict Berge cycle needs distinct nodes and would not count it."""
+    assert Graph([1, 2], [(1, 1, 2)]).cycle_basis() == [[1]]
+
+
+def test_edge_case_29_two_edges_sharing_two_nodes_close_a_cycle() -> None:
+    """EC29: a Berge cycle of length 2, like two parallel two-terminal edges; some authors start at length 3."""
+    assert [sorted(cycle) for cycle in Graph([1, 2, 3, 4], [(1, 2, 3), (2, 3, 4)]).cycle_basis()] == [[2, 3]]
+
+
+def test_edge_case_30_cycles_are_those_of_the_incidence_graph() -> None:
+    """EC30: the cycle space is the incidence graph's; a hypercycle notion (reaction networks) is not used."""
+    graph = Graph([1, 2, 3, 4], [(1, 2, 3), (2, 3, 4), (1, 4)])
+
+    assert len(graph.cycle_basis()) == (3 + 3 + 2) - 4 - 3 + 1
