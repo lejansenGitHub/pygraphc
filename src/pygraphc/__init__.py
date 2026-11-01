@@ -1167,14 +1167,17 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     ) -> list[list[EdgeIndex]]:
         """Find all paths from source to targets using each edge at most once.
 
-        Returns a list of paths. Each path is a list of edge indices.
+        Returns a list of paths. Each path is a list of edge indices, each
+        sequence once. A path enters an edge at an active terminal and leaves at
+        another (directed: an in-terminal to an out-terminal), so through a
+        multi-terminal edge one sequence can stand for several node paths (D28).
 
         node_simple: if True, each node may be visited at most once per path
             (source counts as visited at initialization). Default False allows
             node revisits via different edges — relevant for multigraphs.
 
-        ignore_self_loops: if True, self-loops are never traversed, so no
-            returned path contains one.
+        ignore_self_loops: if True, no step returns to the node it left: a
+            self-loop is never traversed, nor two terminals of one edge at a node.
 
         cutoff: maximum number of edges per path. None = no limit.
         """
@@ -1967,14 +1970,12 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     ) -> list[list[EdgeIndex]]:
         """Find all paths from source to targets using each edge at most once.
 
-        Returns a list of paths. Each path is a list of edge indices.
-        Respects both excluded edges and excluded nodes.
+        Returns a list of paths. Each path is a list of edge indices, see
+        ``Graph.all_edge_paths``. Respects excluded edges, nodes and terminals.
 
         node_simple: if True, each node may be visited at most once per path.
-        ignore_self_loops: if True, self-loops are never traversed.
+        ignore_self_loops: if True, no step returns to the node it left.
         """
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("all_edge_paths")
         target_node_ids = [targets] if isinstance(targets, int) else list(targets)
         cutoff_or_unbounded = cutoff if cutoff is not None else -1
         return _all_edge_paths_ctx(
@@ -1986,6 +1987,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             self._excluded_nodes,
             node_simple,
             ignore_self_loops,
+            self._excluded_terminals,
         )
 
     def connected_components(self) -> Generator[set[NodeIdT], None, None]:

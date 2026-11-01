@@ -263,7 +263,7 @@ def test_methods_of_later_stages_say_so() -> None:
 
     # --- Assert ---
     with pytest.raises(NotImplementedError, match="multi-terminal edges"):
-        graph.all_edge_paths(1, 5)
+        graph.quotient_edges(memoryview(bytes(20)).cast("i"))
     with pytest.raises(NotImplementedError, match="multi-terminal edges"):
         graph.without_edges([0]).quotient_edges(memoryview(bytes(20)).cast("i"))
 
@@ -274,11 +274,10 @@ def test_methods_of_later_stages_refuse_a_terminal_mask_on_two_terminal_edges() 
     view = Graph([1, 2, 3], [(1, 2), (2, 3)]).without_terminals([(0, 1)])
 
     with pytest.raises(NotImplementedError, match="terminal masks"):
-        view.all_edge_paths(1, 3)
+        view.quotient_edges(memoryview(bytes(12)).cast("i"))
 
 
 _METHODS_WITHOUT_TERMINAL_MASKS = {
-    "all_edge_paths": lambda view: view.all_edge_paths(1, 3),
     "quotient_edges": lambda view: view.quotient_edges(memoryview(bytes(12)).cast("i")),
     "series_parallel_reduce": lambda view: view.series_parallel_reduce(bytes(3), bytes(3)),
 }
@@ -998,3 +997,63 @@ def test_bcc_edge_labels_under_a_terminal_mask() -> None:
     # --- Assert ---
     assert len(set(labels)) == 3
     assert list(ring.without_terminals([(0, 0), (0, 1)]).bcc_edge_labels())[0] == -1
+
+
+# ── Step D: edge paths through multi-terminal edges (D28) ──
+
+
+def test_all_edge_paths_pass_through_a_multi_terminal_edge() -> None:
+    """D28: a path enters the edge at one terminal and leaves at another."""
+    graph = _three_terminal_edge_between_two_terminal_edges()
+
+    # --- Assert ---
+    assert graph.all_edge_paths(1, 5) == [[0, 1, 2]]
+    assert graph.all_edge_paths(1, [3, 5]) == [[0, 1], [0, 1, 2]]
+
+
+def test_all_edge_paths_report_an_edge_sequence_once() -> None:
+    """D28: two exits at 2 and 3 both continue through (2, 3, 4), one sequence for two node paths."""
+    graph = Graph([1, 2, 3, 4], [(1, 2, 3), (2, 3, 4)])
+
+    # --- Assert ---
+    assert graph.all_edge_paths(1, 4) == [[0, 1]]
+
+
+def test_all_edge_paths_through_a_ladder_report_one_sequence() -> None:
+    """D28: consecutive edges sharing two nodes; the search walks every node choice, the result stays one path."""
+    rungs = 6
+    edges = [(2 * rung, 2 * rung + 1, 2 * rung + 2, 2 * rung + 3) for rung in range(rungs)]
+    graph = Graph(list(range(2 * rungs + 2)), edges)
+
+    # --- Assert ---
+    assert graph.all_edge_paths(0, 2 * rungs) == [list(range(rungs))]
+
+
+def test_all_edge_paths_skip_a_masked_terminal() -> None:
+    """D28 with case 2: the edge still joins its other terminals, so only the paths through 3 are gone."""
+    view = _three_terminal_edge_between_two_terminal_edges().without_terminals([(1, 1)])
+
+    # --- Assert ---
+    assert view.all_edge_paths(1, 5) == [[0, 1, 2]]
+    assert view.all_edge_paths(1, 3) == []
+
+
+def test_directed_all_edge_paths_go_from_in_terminals_to_out_terminals() -> None:
+    """D28 with D5: an in-terminal leads to every out-terminal, never to another in-terminal."""
+    graph = Graph([1, 2, 3, 4], [((1, 2), (3, 4))], directed=True)
+
+    # --- Assert ---
+    assert graph.all_edge_paths(1, [3, 4]) == [[0]]
+    assert graph.all_edge_paths(1, 2) == []
+    assert graph.all_edge_paths(3, 4) == []
+
+
+def test_all_edge_paths_through_two_terminals_at_one_node() -> None:
+    """D28: (1, 1, 2) steps from 1 back to 1 like a self-loop, which ignore_self_loops and node_simple leave out."""
+    graph = Graph([1, 2], [(1, 1, 2), (1, 2)])
+
+    # --- Assert ---
+    assert sorted(graph.all_edge_paths(1, 2)) == [[0], [0, 1], [1]]
+    assert sorted(graph.all_edge_paths(1, 1)) == [[0], [0, 1], [1, 0]]
+    assert sorted(graph.all_edge_paths(1, 1, ignore_self_loops=True)) == [[0, 1], [1, 0]]
+    assert sorted(graph.all_edge_paths(1, 2, node_simple=True)) == [[0], [1]]

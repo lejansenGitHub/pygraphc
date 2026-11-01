@@ -199,6 +199,7 @@ def all_edge_paths_ctx(
     node_mask: _Mask | None = None,
     node_simple: bool = False,
     ignore_self_loops: bool = False,
+    terminal_mask: _Mask | None = None,
     /,
 ) -> list[list[EdgeIndex]]: ...
 def dijkstra_ctx(

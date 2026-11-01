@@ -706,8 +706,8 @@ graph.split_node(2, 9, terminals_to_new_node=[(1, 1)]).neighbors(9) # {2, 3}: on
 
 #### Methods not yet available on terminals
 
-`all_edge_paths` and the reduction family (`quotient_edges`, `series_parallel_reduce`,
-`series_parallel_state`) do not read terminals yet. Methods whose kernel does not read terminals yet raise `NotImplementedError` on a
+The reduction family (`quotient_edges`, `series_parallel_reduce`,
+`series_parallel_state`) does not read terminals yet. Methods whose kernel does not read terminals yet raise `NotImplementedError` on a
 graph with a multi-terminal edge and on a view with a terminal mask, instead of
 answering on part of the graph; `docs/multi_terminal-decisions.md` lists the stage
 that brings each. On graphs of two-terminal edges without a terminal mask they run as
@@ -1293,7 +1293,9 @@ Uses topological sort + dynamic programming. Raises `ValueError` on cyclic graph
 
 ### Edge-path enumeration (edge-disjoint paths)
 
-Find all paths from source to targets where each edge is used at most once. Returns paths as lists of edge indices. By default, nodes may be revisited (critical for multigraphs). Use `node_simple=True` to restrict to node-simple paths where each node is visited at most once. Use `ignore_self_loops=True` to never traverse self-loops, so no returned path contains one.
+Find all paths from source to targets where each edge is used at most once. Returns paths as lists of edge indices, each sequence once. By default, nodes may be revisited (critical for multigraphs). Use `node_simple=True` to restrict to node-simple paths where each node is visited at most once. Use `ignore_self_loops=True` so that no step returns to the node it left: no self-loop, and no step between two terminals of one edge at a node.
+
+A path enters a multi-terminal edge at an active terminal and leaves at another (directed: an in-terminal to an out-terminal). Several node paths can use the same edges, `(1, 2, 3)` then `(2, 3, 4)` from 1 to 4 through 2 or through 3, and are reported once, as `[0, 1]` (case 34). Such a ladder of edges sharing two nodes costs the search one walk per node choice.
 
 ```python
 g = Graph([0, 1, 2, 3], [(0, 1), (1, 2), (0, 2), (2, 3)])
@@ -1652,6 +1654,7 @@ implementing; the D and O numbers refer to `docs/multi_terminal-decisions.md`.
 | 31 | `is_multigraph` with repeated terminal nodes | Terminal nodes compare as multisets: `(1, 1, 2)` and `(1, 2)` are not parallel, `(1, 1, 2)` and `(2, 1, 1)` are; two single-terminal edges at a node are parallel. | Compare node sets, as XGI's duplicate edges do; XGI cannot hold a repeated node in an edge. | Claude (research: duplicates are edges with equal members; repeated members are not covered) |
 | 32 | `split_node` with an edge that has several terminals at the node | An edge index moves all of them, so a self-loop moves whole; `terminals_to_new_node` moves single terminals. Before, a listed self-loop moved only its first end. | An edge index moves one terminal, the first at the node. | Claude (research: splitting divides a node's incidences; edges with repeated nodes are not covered) |
 | 33 | `bcc_edge_labels` of an edge whose active terminals sit at one node | -1, like a self-loop. | A block of its own. | Claude (follows the self-loop rule) |
+| 34 | `all_edge_paths` through a multi-terminal edge | One result per edge sequence, even when several node paths realise it. | One result per Berge path, which needs the nodes in the result (as NetworkX's `(u, v, key)` edges for multigraphs). | Claude (research: Berge paths name their nodes; the method returns edges) |
 
 ### What the literature says about these cases
 
@@ -1701,6 +1704,10 @@ hypergraph libraries and power system tools. Sources:
   - 31: libraries store an edge's members as a set, so whether `(1, 1, 2)` duplicates `(1, 2)` has no precedent.
   - 32: the literature splits incidences; with one incidence per edge and node, moving an edge and moving its terminal coincide.
   - 33: block theory leaves loops out, as `biconnected_components` does.
+
+**Edge paths (research of 2026-11-01)**
+- **Supported:** a Berge path alternates distinct nodes and distinct edges, each consecutive pair of nodes in the edge between them (Berge; Győri, Katona and Lemons); neither XGI nor HyperNetX enumerates paths.
+- **Split, decided by Claude and listed above:** 34: a result naming edges only cannot tell apart node paths through the same edges; returning nodes would change the method's result type.
 
 **Contradicted, and corrected**
 - **14:** removing every critical edge whole gave wrong two-edge-connected components when critical edges share a cycle. Corrected in this pull request.

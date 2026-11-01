@@ -308,3 +308,8 @@ def test_edge_case_33_an_edge_joining_no_two_nodes_has_no_biconnected_component(
     labels = list(Graph([1, 2], [(1, 1, 1), (1, 2), (2,)]).bcc_edge_labels())
 
     assert labels == [-1, 0, -1]
+
+
+def test_edge_case_34_edge_paths_are_edge_sequences_not_node_paths() -> None:
+    """EC34: two node paths through (1, 2, 3) then (2, 3, 4) share one edge sequence and are reported once."""
+    assert Graph([1, 2, 3, 4], [(1, 2, 3), (2, 3, 4)]).all_edge_paths(1, 4) == [[0, 1]]
