@@ -257,11 +257,13 @@ static inline __attribute__((always_inline)) int report_edge_path(const int *edg
                                                                   PyObject *reported) {
     PyObject *path = PyList_New(length);
     if (!path) return -1;
+    int allocated = 1;
     for (int depth = 0; depth < length; depth++) {
         PyObject *edge_index_obj = PyLong_FromLong(edges[depth]);
-        if (!edge_index_obj) { Py_DECREF(path); return -1; }
+        allocated &= edge_index_obj != NULL;
         PyList_SET_ITEM(path, depth, edge_index_obj);
     }
+    if (!allocated) { Py_DECREF(path); return -1; }
     if (reported) {
         PyObject *key = PyList_AsTuple(path);
         int seen = key ? PySet_Contains(reported, key) : -1;
@@ -362,9 +364,11 @@ static inline __attribute__((always_inline)) int edge_path_search(const GraphCon
             /* Self-loops: optionally never traversed. Otherwise an undirected
              * self-loop occupies two consecutive CSR slots and is visited
              * through the first slot only. */
-            if (neighbor == node && ignore_self_loops) continue;
-            if (neighbor == node && idx > adjacency->offset[node] && adjacency->edge_indices[idx - 1] == edge_index &&
-                (!has_multi_terminal_edges || adjacency->neighbors[idx - 1] >= 0)) continue;
+            if (neighbor == node) {
+                if (ignore_self_loops) continue;
+                if (idx > adjacency->offset[node] && adjacency->edge_indices[idx - 1] == edge_index &&
+                    (!has_multi_terminal_edges || adjacency->neighbors[idx - 1] >= 0)) continue;
+            }
 
             /* Skip masked/visited edges */
             if (visited_edges[edge_index]) continue;
