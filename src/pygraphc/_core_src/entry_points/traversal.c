@@ -103,7 +103,7 @@ PyObject *py_bfs_ctx(PyObject *self, PyObject *args) {
 /* ── All-edge-paths (stack-based DFS, edge-simple: no edge repeats within a path) ── */
 
 /* Append each path to the result list as a list of edge indices. */
-static int append_edge_path(void *result, const int *path_edges, int length) {
+static inline __attribute__((always_inline)) int append_edge_path(void *result, const int *path_edges, int length) {
     PyObject *path = PyList_New(length);
     if (!path) return -1;
     for (int depth = 0; depth < length; depth++)

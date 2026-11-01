@@ -56,14 +56,19 @@ static inline __attribute__((always_inline)) int all_edge_paths(
             int slot = stack_slot[stack_top]++;
             int edge_index = adjacency->edge_indices[slot];
             int neighbor = adjacency->neighbors[slot];
-            if (neighbor == node && ignore_self_loops) continue;
-            if (neighbor == node && slot > adjacency->offset[node] && adjacency->edge_indices[slot - 1] == edge_index) continue;
+            if (neighbor == node) {
+                if (ignore_self_loops) continue;
+                if (slot > adjacency->offset[node] && adjacency->edge_indices[slot - 1] == edge_index) continue;
+            }
             if (visited_edges[edge_index]) continue;
             if (edge_mask && edge_mask[edge_index]) continue;
             if (node_mask && node_mask[neighbor]) continue;
             visited_edges[edge_index] = 1;
             path_edges[stack_top] = edge_index;
-            if (is_target[neighbor] && (status = visit(visitor_state, path_edges, stack_top + 1)) < 0) goto done;
+            if (is_target[neighbor]) {
+                int visit_status = visit(visitor_state, path_edges, stack_top + 1);
+                if (visit_status < 0) { status = visit_status; break; }
+            }
             if (visited_nodes && visited_nodes[neighbor]) {
                 visited_edges[edge_index] = 0;
                 continue;

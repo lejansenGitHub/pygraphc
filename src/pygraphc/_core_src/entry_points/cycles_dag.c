@@ -80,16 +80,22 @@ typedef struct {
     PyObject *const *node_id_items;
 } CycleList;
 
-/* Append each cycle to the result list as a list of node ids. */
-static int append_cycle(void *visitor_state, const int *nodes, int length) {
+/* Append each cycle to the result list as a list of node ids, its reversed tail read backwards. */
+static inline __attribute__((always_inline)) int append_cycle(void *visitor_state, const int *nodes, int length,
+                                                              const int *reversed_tail, int reversed_length) {
     const CycleList *cycles = (const CycleList *)visitor_state;
     PyObject *const *node_id_items = cycles->node_id_items;
-    PyObject *cycle = PyList_New(length);
+    PyObject *cycle = PyList_New(length + reversed_length);
     if (!cycle) return -1;
     for (int position = 0; position < length; position++) {
         PyObject *node_id = node_id_items[nodes[position]];
         Py_INCREF(node_id);
         PyList_SET_ITEM(cycle, position, node_id);
+    }
+    for (int position = 0; position < reversed_length; position++) {
+        PyObject *node_id = node_id_items[reversed_tail[reversed_length - 1 - position]];
+        Py_INCREF(node_id);
+        PyList_SET_ITEM(cycle, length + position, node_id);
     }
     int status = PyList_Append(cycles->result, cycle);
     Py_DECREF(cycle);

@@ -4,8 +4,12 @@
 
 #include "terminals.h"
 
-/* Receives each cycle as its node indices in order; a negative return stops the search with that status. */
-typedef int (*CycleVisitor)(void *visitor_state, const int *nodes, int length);
+/*
+ * Receives each cycle as its node indices in order: nodes, then reversed_tail read from
+ * its end, so no cycle is copied into one array; a negative return stops the search.
+ */
+typedef int (*CycleVisitor)(void *visitor_state, const int *nodes, int length, const int *reversed_tail,
+                            int reversed_length);
 
 /* Whether a search state is a node; without multi-terminal edges every state is, and the check compiles away. */
 static inline __attribute__((always_inline)) int is_node_state(int state, int node_count, const int has_multi_terminal_edges) {
@@ -14,9 +18,9 @@ static inline __attribute__((always_inline)) int is_node_state(int state, int no
 
 /*
  * Report the cycle closed by a non-tree step between two discovered states: both
- * walk up to their lowest common ancestor, keeping only node states, and the
- * second walk is appended reversed, so the cycle lists its nodes in order. path
- * and reversed_path hold state_count entries; a cycle visits each state once.
+ * walk up to their lowest common ancestor, keeping only node states; the cycle is
+ * the first walk followed by the second one reversed. path and reversed_path hold
+ * state_count entries.
  */
 static inline __attribute__((always_inline)) int report_closed_cycle(
     const int *parent, const int *depth, int *path, int *reversed_path, int walker_a, int walker_b, int node_count,
@@ -36,8 +40,7 @@ static inline __attribute__((always_inline)) int report_closed_cycle(
         walker_a = parent[walker_a]; walker_b = parent[walker_b];
     }
     if (is_node_state(walker_a, node_count, has_multi_terminal_edges)) path[path_length++] = walker_a;
-    while (reversed_length > 0) path[path_length++] = reversed_path[--reversed_length];
-    return visit(visitor_state, path, path_length);
+    return visit(visitor_state, path, path_length, reversed_path, reversed_length);
 }
 
 /* The basis, instantiated for both values of has_multi_terminal_edges. */
@@ -57,7 +60,7 @@ static inline __attribute__((always_inline)) int fundamental_cycles(
         if (two_terminal_edges && two_terminal_edges[edge]) continue;
         int first_node = EDGE_FIRST_ENDPOINT(edges, edge);
         if (first_node != EDGE_SECOND_ENDPOINT(edges, edge) || (node_mask && node_mask[first_node])) continue;
-        int status = visit(visitor_state, &first_node, 1);
+        int status = visit(visitor_state, &first_node, 1, NULL, 0);
         if (status < 0) return status;
     }
 
