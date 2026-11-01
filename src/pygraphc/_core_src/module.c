@@ -74,8 +74,9 @@ static PyMethodDef methods[] = {
      "Topological sort (Kahn's algorithm). Edges are directed: (u, v) means u -> v.\n"
      "Raises ValueError if the graph contains a cycle."},
     {"all_edge_paths_ctx", py_all_edge_paths_ctx, METH_VARARGS,
-     "all_edge_paths_ctx(capsule, source, targets[, cutoff, edge_mask, node_mask, node_simple]) -> list[list[int]]\n\n"
-     "Find all paths from source to targets using each edge at most once.\n"
+     "all_edge_paths_ctx(capsule, source, targets[, cutoff, edge_mask, node_mask, node_simple, ignore_self_loops,\n"
+     "                   terminal_mask]) -> list[list[int]]\n\n"
+     "Find all paths from source to targets using each edge at most once, each edge sequence once.\n"
      "If node_simple is true, each node may be visited at most once per path."},
     {"strongly_connected_components_ctx", py_strongly_connected_components_ctx, METH_VARARGS,
      "strongly_connected_components_ctx(capsule[, edge_mask, node_mask]) -> list[set[NodeId]]\n\n"

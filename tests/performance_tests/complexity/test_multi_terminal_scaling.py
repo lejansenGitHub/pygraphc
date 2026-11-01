@@ -147,3 +147,19 @@ def test_terminal_parsing_scales_linearly(shape_name: str) -> None:
         return lambda: Graph(node_ids, edges)
 
     assert_scales_linearly(f"terminals/parse/{shape_name}", measure_scaling(prepare))
+
+
+@pytest.mark.parametrize("shape_name", ["wide_edge", "terminal_chain"])
+def test_all_edge_paths_scales_linearly_on_one_path(shape_name: str) -> None:
+    """One path from the first node to the last: the search passes each multi-terminal edge's terminals once (D28).
+
+    Random shapes are left out, their paths grow exponentially.
+    """
+
+    def prepare(size: int) -> Callable[[], object]:
+        node_ids, edges = SHAPES[shape_name](size)
+        graph = Graph(node_ids, edges)
+        return lambda: graph.all_edge_paths(0, node_ids[-1])
+
+    scaling = measure_scaling(prepare)
+    assert_scales_linearly(f"terminals/all_edge_paths/{shape_name}", scaling)

@@ -102,27 +102,72 @@ PyObject *py_bfs_ctx(PyObject *self, PyObject *args) {
 
 /* ── All-edge-paths (stack-based DFS, edge-simple: no edge repeats within a path) ── */
 
+/* The path as a new list of edge indices, or NULL with an exception set. */
+static inline __attribute__((always_inline)) PyObject *edge_path_list(const int *path_edges, int length) {
+    PyObject *path = PyList_New(length);
+    if (!path) return NULL;
+    int allocated = 1;
+    for (int depth = 0; depth < length; depth++) {
+        PyObject *edge_index_obj = PyLong_FromLong(path_edges[depth]);
+        allocated &= edge_index_obj != NULL;
+        PyList_SET_ITEM(path, depth, edge_index_obj);
+    }
+    if (!allocated) { Py_DECREF(path); return NULL; }
+    return path;
+}
+
 /* Append each path to the result list as a list of edge indices. */
 static inline __attribute__((always_inline)) int append_edge_path(void *result, const int *path_edges, int length) {
-    PyObject *path = PyList_New(length);
+    PyObject *path = edge_path_list(path_edges, length);
     if (!path) return -1;
-    for (int depth = 0; depth < length; depth++)
-        PyList_SET_ITEM(path, depth, PyLong_FromLong(path_edges[depth]));
     int status = PyList_Append((PyObject *)result, path);
     Py_DECREF(path);
     return status;
 }
 
+typedef struct {
+    PyObject *result, *reported;
+} EdgePathsOnce;
+
+/* Append each path once: with multi-terminal edges two node paths can share one edge sequence. */
+static inline __attribute__((always_inline)) int append_edge_path_once(void *visitor_state, const int *path_edges,
+                                                                       int length) {
+    EdgePathsOnce *paths = (EdgePathsOnce *)visitor_state;
+    PyObject *path = edge_path_list(path_edges, length);
+    if (!path) return -1;
+    PyObject *key = PyList_AsTuple(path);
+    int seen = key ? PySet_Contains(paths->reported, key) : -1;
+    if (seen == 0) seen = PySet_Add(paths->reported, key) < 0 ? -1 : 0;
+    Py_XDECREF(key);
+    int status = seen < 0 ? -1 : seen ? 0 : PyList_Append(paths->result, path);
+    Py_DECREF(path);
+    return status;
+}
+
+/*
+ * Each instantiation in its own non-inlined function: inlined together into the entry,
+ * they share one register allocation and the two-terminal search pays for the other.
+ */
+static __attribute__((noinline)) int search_two_terminal_edge_paths(const GraphContext *graph,
+                                                                    const EdgePathQuery *query, PyObject *result) {
+    return all_edge_paths(graph, query, append_edge_path, result, 0);
+}
+
+static __attribute__((noinline)) int search_multi_terminal_edge_paths(const GraphContext *graph,
+                                                                      const EdgePathQuery *query, EdgePathsOnce *paths) {
+    return all_edge_paths(graph, query, append_edge_path_once, paths, 1);
+}
+
 PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
     PyObject *capsule, *source_obj, *targets_obj;
     int cutoff = -1;
-    PyObject *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
+    PyObject *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *terminal_mask_obj = Py_None;
     int node_simple = 0;
     int ignore_self_loops = 0;
-    if (!PyArg_ParseTuple(args, "OOO|iOOpp", &capsule, &source_obj, &targets_obj,
-                          &cutoff, &edge_mask_obj, &node_mask_obj, &node_simple, &ignore_self_loops))
+    if (!PyArg_ParseTuple(args, "OOO|iOOppO", &capsule, &source_obj, &targets_obj,
+                          &cutoff, &edge_mask_obj, &node_mask_obj, &node_simple, &ignore_self_loops, &terminal_mask_obj))
         return NULL;
-    GraphContext *graph = require_two_terminal_edges(capsule);
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
@@ -156,18 +201,42 @@ PyObject *py_all_edge_paths_ctx(PyObject *self, PyObject *args) {
     if (parse_mask(edge_mask_obj, edge_count, &edge_mask, &edge_mask_buffer) < 0) { free(is_target); return NULL; }
     const uint8_t *node_mask; Py_buffer node_mask_buffer;
     if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); free(is_target); return NULL; }
-
-    if (node_mask && node_mask[source]) {
-        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); free(is_target);
-        PyErr_SetString(PyExc_ValueError, "source node is excluded by node mask");
-        return NULL;
+    TerminalMask terminal_mask;
+    if (parse_terminal_mask(graph, terminal_mask_obj, edge_mask, &terminal_mask) < 0) {
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); free(is_target); return NULL;
     }
 
-    PyObject *result = PyList_New(0);
-    if (result && graph->has_adjacency && edge_count > 0
-        && all_edge_paths(&graph->adjacency, node_count, edge_count, source, is_target, cutoff, edge_mask, node_mask,
-                          node_simple, ignore_self_loops, append_edge_path, result) < 0)
-        Py_CLEAR(result);
-    release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); free(is_target);
+    PyObject *result = NULL;
+    EdgePathsOnce paths = {NULL, NULL};
+    uint8_t *terminal_flags = NULL;
+    if (node_mask && node_mask[source]) {
+        PyErr_SetString(PyExc_ValueError, "source node is excluded by node mask");
+        goto done;
+    }
+    result = PyList_New(0);
+    if (!result || !graph->has_adjacency || edge_count == 0) goto done;
+
+    EdgePathQuery query = {source, cutoff, node_simple, ignore_self_loops, is_target,
+                           two_terminal_edge_mask(&terminal_mask, edge_mask), node_mask, NULL};
+    int status;
+    if (graph->terminals) {
+        terminal_flags = (uint8_t *)calloc((size_t)graph->terminals->terminal_count + 1, 1);
+        paths = (EdgePathsOnce){result, PySet_New(NULL)};
+        if (!terminal_flags || !paths.reported) {
+            if (!PyErr_Occurred()) PyErr_NoMemory();
+            status = -1;
+        } else {
+            status = flag_path_terminals(graph, edge_mask, terminal_mask.terminals, node_mask, terminal_flags);
+        }
+        query.terminal_flags = terminal_flags;
+        if (status == 0) status = search_multi_terminal_edge_paths(graph, &query, &paths);
+    } else {
+        status = search_two_terminal_edge_paths(graph, &query, result);
+    }
+    if (status < 0) Py_CLEAR(result);
+
+done:
+    free(terminal_flags); Py_XDECREF(paths.reported);
+    release_terminal_mask(&terminal_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); free(is_target);
     return result;
 }

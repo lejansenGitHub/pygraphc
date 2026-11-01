@@ -60,3 +60,27 @@ int breadth_first_order(const AdjacencyList *adjacency, const TerminalList *term
                                  expanded, 1)
         : breadth_first_order_of(adjacency, NULL, directed, source, edge_mask, NULL, node_mask, visited, queue, NULL, 0);
 }
+
+int flag_path_terminals(const GraphContext *graph, const uint8_t *edge_mask, const uint8_t *terminal_mask,
+                        const uint8_t *node_mask, uint8_t *flags) {
+    const TerminalList *terminals = graph->terminals;
+    int node_count = graph->node_ids.node_count, edge_count = (int)graph->node_ids.edges.edge_count;
+    int *stamp = (int *)malloc((size_t)(node_count > 0 ? node_count : 1) * sizeof(int));
+    int *first = (int *)malloc((size_t)(node_count > 0 ? node_count : 1) * sizeof(int));
+    if (!stamp || !first) { free(stamp); free(first); PyErr_NoMemory(); return -1; }
+    memset(stamp, -1, (size_t)node_count * sizeof(int));
+    for (int edge = 0; edge < edge_count; edge++) {
+        if (!is_multi_terminal_edge(terminals, edge)) continue;
+        int out_start = graph->directed ? terminals->out_terminal_offsets[edge] : terminals->terminal_offsets[edge + 1];
+        for (int terminal = terminals->terminal_offsets[edge]; terminal < terminals->terminal_offsets[edge + 1]; terminal++) {
+            if (!terminal_is_active(terminals, edge, terminal, edge_mask, terminal_mask, node_mask)) continue;
+            int is_out = terminal >= out_start, node = terminals->terminal_nodes[terminal];
+            int key = graph->directed ? 2 * edge + is_out : edge;
+            if (stamp[node] == key) { flags[first[node]] |= SHARES_ITS_NODE; continue; }
+            stamp[node] = key; first[node] = terminal;
+            flags[terminal] = graph->directed ? (is_out ? EXIT_TERMINAL : ENTRY_TERMINAL) : ENTRY_TERMINAL | EXIT_TERMINAL;
+        }
+    }
+    free(stamp); free(first);
+    return 0;
+}
