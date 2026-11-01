@@ -87,8 +87,9 @@ static int append_cycle(void *visitor_state, const int *nodes, int length) {
     PyObject *cycle = PyList_New(length);
     if (!cycle) return -1;
     for (int position = 0; position < length; position++) {
-        Py_INCREF(node_id_items[nodes[position]]);
-        PyList_SET_ITEM(cycle, position, node_id_items[nodes[position]]);
+        PyObject *node_id = node_id_items[nodes[position]];
+        Py_INCREF(node_id);
+        PyList_SET_ITEM(cycle, position, node_id);
     }
     int status = PyList_Append(cycles->result, cycle);
     Py_DECREF(cycle);
@@ -173,8 +174,9 @@ PyObject *py_dag_longest_path_ctx(PyObject *self, PyObject *args) {
     if (dag_longest_path(graph, has_weights ? weights.values : NULL, edge_mask, &terminal_mask, node_mask, &path,
                          &path_length) == 0 && (result = PyList_New(path_length))) {
         for (int position = 0; position < path_length; position++) {
-            Py_INCREF(graph->node_ids.node_id_items[path[position]]);
-            PyList_SET_ITEM(result, position, graph->node_ids.node_id_items[path[position]]);
+            PyObject *node_id = graph->node_ids.node_id_items[path[position]];
+            Py_INCREF(node_id);
+            PyList_SET_ITEM(result, position, node_id);
         }
     }
     free(path);

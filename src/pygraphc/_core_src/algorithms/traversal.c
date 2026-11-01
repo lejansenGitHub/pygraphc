@@ -62,15 +62,27 @@ int breadth_first_order(const AdjacencyList *adjacency, const TerminalList *term
 }
 
 /*
- * The depth-first search of all_edge_paths over scratch the caller owns. An
- * undirected self-loop occupies two consecutive CSR slots and is traversed
+ * An undirected self-loop occupies two consecutive CSR slots and is traversed
  * through the first only. Leaving a node unmarks the edge that entered it, and
- * with node_simple the node itself.
+ * with node_simple the node itself. The scratch is allocated here, next to the
+ * loop, so the compiler knows the arrays do not alias.
  */
-static int edge_paths_from(const AdjacencyList *adjacency, int source, const uint8_t *is_target, int max_depth,
-                           const uint8_t *edge_mask, const uint8_t *node_mask, int ignore_self_loops,
-                           EdgePathVisitor visit, void *visitor_state, uint8_t *visited_edges, uint8_t *visited_nodes,
-                           int *stack_node, int *stack_slot, int *path_edges) {
+int all_edge_paths(const AdjacencyList *adjacency, int node_count, Py_ssize_t edge_count, int source,
+                   const uint8_t *is_target, int cutoff, const uint8_t *edge_mask, const uint8_t *node_mask,
+                   int node_simple, int ignore_self_loops, EdgePathVisitor visit, void *visitor_state) {
+    int max_depth = cutoff > 0 ? cutoff : (int)(2 * edge_count);
+    uint8_t *visited_edges = (uint8_t *)calloc((size_t)edge_count, sizeof(uint8_t));
+    uint8_t *visited_nodes = node_simple ? (uint8_t *)calloc((size_t)node_count, sizeof(uint8_t)) : NULL;
+    int *stack_node = (int *)malloc((size_t)(max_depth + 1) * sizeof(int));
+    int *stack_slot = (int *)malloc((size_t)(max_depth + 1) * sizeof(int));
+    int *path_edges = (int *)malloc((size_t)max_depth * sizeof(int));
+    int status = 0;
+    if (!visited_edges || !stack_node || !stack_slot || !path_edges || (node_simple && !visited_nodes)) {
+        PyErr_NoMemory();
+        status = -1;
+        goto done;
+    }
+    if (visited_nodes) visited_nodes[source] = 1;
     int stack_top = 0;
     stack_node[0] = source;
     stack_slot[0] = adjacency->offset[source];
@@ -87,10 +99,7 @@ static int edge_paths_from(const AdjacencyList *adjacency, int source, const uin
             if (node_mask && node_mask[neighbor]) continue;
             visited_edges[edge_index] = 1;
             path_edges[stack_top] = edge_index;
-            if (is_target[neighbor]) {
-                int status = visit(visitor_state, path_edges, stack_top + 1);
-                if (status < 0) return status;
-            }
+            if (is_target[neighbor] && (status = visit(visitor_state, path_edges, stack_top + 1)) < 0) goto done;
             if (visited_nodes && visited_nodes[neighbor]) {
                 visited_edges[edge_index] = 0;
                 continue;
@@ -110,27 +119,7 @@ static int edge_paths_from(const AdjacencyList *adjacency, int source, const uin
             if (stack_top >= 0) visited_edges[path_edges[stack_top]] = 0;
         }
     }
-    return 0;
-}
-
-int all_edge_paths(const AdjacencyList *adjacency, int node_count, Py_ssize_t edge_count, int source,
-                   const uint8_t *is_target, int cutoff, const uint8_t *edge_mask, const uint8_t *node_mask,
-                   int node_simple, int ignore_self_loops, EdgePathVisitor visit, void *visitor_state) {
-    int max_depth = cutoff > 0 ? cutoff : (int)(2 * edge_count);
-    uint8_t *visited_edges = (uint8_t *)calloc((size_t)edge_count, sizeof(uint8_t));
-    uint8_t *visited_nodes = node_simple ? (uint8_t *)calloc((size_t)node_count, sizeof(uint8_t)) : NULL;
-    int *stack_node = (int *)malloc((size_t)(max_depth + 1) * sizeof(int));
-    int *stack_slot = (int *)malloc((size_t)(max_depth + 1) * sizeof(int));
-    int *path_edges = (int *)malloc((size_t)max_depth * sizeof(int));
-    int status;
-    if (!visited_edges || !stack_node || !stack_slot || !path_edges || (node_simple && !visited_nodes)) {
-        PyErr_NoMemory();
-        status = -1;
-    } else {
-        if (visited_nodes) visited_nodes[source] = 1;
-        status = edge_paths_from(adjacency, source, is_target, max_depth, edge_mask, node_mask, ignore_self_loops, visit,
-                                 visitor_state, visited_edges, visited_nodes, stack_node, stack_slot, path_edges);
-    }
+done:
     free(visited_edges); free(visited_nodes);
     free(stack_node); free(stack_slot); free(path_edges);
     return status;

@@ -33,7 +33,8 @@ typedef enum { TARJAN_CRITICAL_EDGES, TARJAN_CRITICAL_NODES, TARJAN_BLOCKS, TARJ
 typedef struct {
     int *critical_edges;        /* edge indices, in the order found */
     int critical_edge_count;
-    uint8_t *critical_nodes;    /* node_count bytes, 1 for a critical node */
+    int *critical_nodes;        /* the distinct critical nodes, in the order found */
+    int critical_node_count;
     int *block_offsets;         /* block_count + 1: the states of block b are block_states[block_offsets[b] ..] */
     int *block_states;          /* the distinct states of each block: a node, or node_count + e for an edge state */
     int block_count;

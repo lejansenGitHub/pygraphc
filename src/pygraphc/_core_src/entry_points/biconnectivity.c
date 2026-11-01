@@ -32,8 +32,8 @@ static PyObject *critical_edge_list(const GraphContext *graph, const TarjanRepor
 static PyObject *critical_node_set(const GraphContext *graph, const TarjanReport *report) {
     PyObject *result = PySet_New(NULL);
     if (!result) return NULL;
-    for (int node = 0; node < graph->node_ids.node_count; node++) {
-        if (report->critical_nodes[node] && PySet_Add(result, graph->node_ids.node_id_items[node]) < 0) {
+    for (int position = 0; position < report->critical_node_count; position++) {
+        if (PySet_Add(result, graph->node_ids.node_id_items[report->critical_nodes[position]]) < 0) {
             Py_DECREF(result);
             return NULL;
         }

@@ -10,8 +10,9 @@ static PyObject *node_ids_in_queue_order(PyObject **node_id_items, const int *qu
     PyObject *result = PyList_New(count);
     if (!result) return NULL;
     for (int position = 0; position < count; position++) {
-        Py_INCREF(node_id_items[queue[position]]);
-        PyList_SET_ITEM(result, position, node_id_items[queue[position]]);
+        PyObject *node_id = node_id_items[queue[position]];
+        Py_INCREF(node_id);
+        PyList_SET_ITEM(result, position, node_id);
     }
     return result;
 }
