@@ -576,9 +576,9 @@ cleanup:
 }
 
 PyObject *py_strongly_connected_components_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = require_two_terminal_edges(capsule);
+    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *terminal_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &edge_mask_obj, &node_mask_obj, &terminal_mask_obj)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
     if (node_count == 0) return PyList_New(0);
@@ -610,12 +610,16 @@ PyObject *py_strongly_connected_components_ctx(PyObject *self, PyObject *args) {
     if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
     const uint8_t *node_mask; Py_buffer node_mask_buffer;
     if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); return NULL; }
-
-    ComponentResult components;
-    if (compute_strongly_connected_components_masked(node_count, &graph->adjacency, edge_mask, node_mask, &components) < 0) {
+    TerminalMask terminal_mask;
+    if (parse_terminal_mask(graph, terminal_mask_obj, edge_mask, &terminal_mask) < 0) {
         release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;
     }
+
+    ComponentResult components;
+    int status = compute_strongly_connected_components(graph, edge_mask, &terminal_mask, node_mask, &components);
+    release_terminal_mask(&terminal_mask);
     release_mask(&edge_mask_buffer);
+    if (status < 0) { release_mask(&node_mask_buffer); return NULL; }
     int component_count = components.component_count;
 
     /* Build sets, skipping masked nodes */

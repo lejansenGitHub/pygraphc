@@ -90,26 +90,36 @@ int compute_graph_components(GraphContext *graph, const uint8_t *edge_mask, cons
  * Writes component labels into components (same shape as compute_components_masked).
  * Returns 0 on success, -1 on error.
  */
-int compute_strongly_connected_components_masked(int node_count, AdjacencyList *adjacency, const uint8_t *edge_mask,
-                                                 const uint8_t *node_mask, ComponentResult *components) {
-    /* 6 * node_count ints: discovery_time, low_link, on_stack, tarjan_stack, dfs_stack, stack_next_slot */
-    int *scratch = (int *)malloc(6 * (size_t)node_count * sizeof(int));
-    if (!scratch) { PyErr_NoMemory(); return -1; }
-    int *discovery_time  = scratch;
-    int *low_link        = scratch + node_count;
-    int *on_stack        = scratch + 2 * node_count;
-    int *tarjan_stack    = scratch + 3 * node_count;
-    int *dfs_stack       = scratch + 4 * node_count;
-    int *stack_next_slot = scratch + 5 * node_count;
-    memset(discovery_time, -1, (size_t)node_count * sizeof(int));
-    memset(on_stack, 0, (size_t)node_count * sizeof(int));
-
-    components->labels = (int *)malloc((size_t)node_count * sizeof(int));
-    if (!components->labels) { free(scratch); PyErr_NoMemory(); return -1; }
-    memset(components->labels, -1, (size_t)node_count * sizeof(int));
+/*
+ * Tarjan's strongly connected components over the search states of a directed
+ * graph: its nodes and, with has_multi_terminal_edges, one state per edge with
+ * three or more terminals (node_count + e), entered from the node of each
+ * active in-terminal and leaving to the node of each active out-terminal (OR
+ * semantics, D5). Labels cover every state; an edge state shares the label of
+ * the nodes it lies on a cycle with. Instantiated for both values of
+ * has_multi_terminal_edges, so graphs of two-terminal edges run the loop as
+ * before.
+ */
+static inline __attribute__((always_inline)) int strongly_connected_states(
+    const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask,
+    const uint8_t *terminal_mask, const uint8_t *node_mask, ComponentResult *components,
+    const int has_multi_terminal_edges) {
+    const AdjacencyList *adjacency = &graph->adjacency;
+    const TerminalList *terminals = graph->terminals;
+    int node_count = graph->node_ids.node_count;
+    size_t state_count = (size_t)node_count + (has_multi_terminal_edges ? (size_t)graph->node_ids.edges.edge_count : 0);
+    /* 6 * state_count ints: discovery_time, low_link, on_stack, tarjan_stack, dfs_stack, stack_next_slot */
+    int *scratch = (int *)malloc(6 * state_count * sizeof(int));
+    components->labels = (int *)malloc(state_count * sizeof(int));
+    if (!scratch || !components->labels) { free(scratch); free(components->labels); PyErr_NoMemory(); return -1; }
+    int *discovery_time = scratch, *low_link = scratch + state_count, *on_stack = scratch + 2 * state_count;
+    int *tarjan_stack = scratch + 3 * state_count, *dfs_stack = scratch + 4 * state_count;
+    int *stack_next_slot = scratch + 5 * state_count;
+    memset(discovery_time, -1, state_count * sizeof(int));
+    memset(on_stack, 0, state_count * sizeof(int));
+    memset(components->labels, -1, state_count * sizeof(int));
 
     int timer = 0, tarjan_stack_top = 0, component_count = 0;
-
     for (int start = 0; start < node_count; start++) {
         if (discovery_time[start] != -1) continue;
         if (node_mask && node_mask[start]) continue;
@@ -122,50 +132,75 @@ int compute_strongly_connected_components_masked(int node_count, AdjacencyList *
         tarjan_stack[tarjan_stack_top++] = start;
 
         while (stack_top >= 0) {
-            int node = dfs_stack[stack_top];
-            if (stack_next_slot[stack_top] < adjacency->offset[node + 1]) {
+            int state = dfs_stack[stack_top];
+            int is_edge_state = has_multi_terminal_edges && state >= node_count;
+            int end_slot = is_edge_state ? terminals->terminal_offsets[state - node_count + 1] : adjacency->offset[state + 1];
+            if (stack_next_slot[stack_top] < end_slot) {
                 int slot = stack_next_slot[stack_top]++;
-                int edge_index = adjacency->edge_indices[slot];
-                if (edge_mask && edge_mask[edge_index]) continue;
-                int neighbor = adjacency->neighbors[slot];
-                if (node_mask && node_mask[neighbor]) continue;
+                int neighbor;
+                if (is_edge_state) {
+                    int edge = state - node_count;
+                    if (!terminal_is_active(terminals, edge, slot, edge_mask, terminal_mask, node_mask)) continue;
+                    neighbor = terminals->terminal_nodes[slot];
+                } else {
+                    neighbor = adjacency->neighbors[slot];
+                    int edge_index = adjacency->edge_indices[slot];
+                    if (has_multi_terminal_edges && neighbor < 0) {
+                        int edge = -1 - neighbor;
+                        if (!terminal_is_active(terminals, edge, edge_index, edge_mask, terminal_mask, node_mask)) continue;
+                        neighbor = node_count + edge;
+                    } else {
+                        if (two_terminal_edge_mask && two_terminal_edge_mask[edge_index]) continue;
+                        if (node_mask && node_mask[neighbor]) continue;
+                    }
+                }
                 if (discovery_time[neighbor] == -1) {
                     discovery_time[neighbor] = low_link[neighbor] = timer++;
                     on_stack[neighbor] = 1;
                     tarjan_stack[tarjan_stack_top++] = neighbor;
                     dfs_stack[++stack_top] = neighbor;
-                    stack_next_slot[stack_top] = adjacency->offset[neighbor];
+                    stack_next_slot[stack_top] = (has_multi_terminal_edges && neighbor >= node_count)
+                        ? terminals->out_terminal_offsets[neighbor - node_count] : adjacency->offset[neighbor];
                 } else if (on_stack[neighbor]) {
-                    if (low_link[node] > discovery_time[neighbor]) low_link[node] = discovery_time[neighbor];
+                    if (low_link[state] > discovery_time[neighbor]) low_link[state] = discovery_time[neighbor];
                 }
             } else {
                 /* Backtrack: propagate low_link to parent */
                 if (stack_top > 0) {
                     int parent = dfs_stack[stack_top - 1];
-                    if (low_link[parent] > low_link[node]) low_link[parent] = low_link[node];
+                    if (low_link[parent] > low_link[state]) low_link[parent] = low_link[state];
                 }
-                /* If node is a root of an SCC, pop the Tarjan stack */
-                if (low_link[node] == discovery_time[node]) {
+                /* If state is a root of an SCC, pop the Tarjan stack */
+                if (low_link[state] == discovery_time[state]) {
                     int component_id = component_count++;
-                    int popped_node;
+                    int popped_state;
                     do {
-                        popped_node = tarjan_stack[--tarjan_stack_top];
-                        on_stack[popped_node] = 0;
-                        components->labels[popped_node] = component_id;
-                    } while (popped_node != node);
+                        popped_state = tarjan_stack[--tarjan_stack_top];
+                        on_stack[popped_state] = 0;
+                        components->labels[popped_state] = component_id;
+                    } while (popped_state != state);
                 }
                 stack_top--;
             }
         }
     }
 
-    /* Assign isolated masked-out nodes to their own components */
-    for (int node_index = 0; node_index < node_count; node_index++) {
-        if (components->labels[node_index] == -1)
-            components->labels[node_index] = component_count++;
+    /* Masked nodes get components of their own */
+    for (int node = 0; node < node_count; node++) {
+        if (components->labels[node] == -1)
+            components->labels[node] = component_count++;
     }
 
     components->component_count = component_count;
     free(scratch);
     return 0;
+}
+
+int compute_strongly_connected_components(const GraphContext *graph, const uint8_t *edge_mask,
+                                          const TerminalMask *terminal_mask, const uint8_t *node_mask,
+                                          ComponentResult *components) {
+    const uint8_t *traversal_edge_mask = two_terminal_edge_mask(terminal_mask, edge_mask);
+    return graph->terminals
+        ? strongly_connected_states(graph, traversal_edge_mask, edge_mask, terminal_mask->terminals, node_mask, components, 1)
+        : strongly_connected_states(graph, traversal_edge_mask, NULL, NULL, node_mask, components, 0);
 }

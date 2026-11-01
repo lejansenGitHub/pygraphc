@@ -602,6 +602,25 @@ graph.edge_indices_at([4, 2, 3])   # [1]: order and repeats do not matter
 graph.critical_edges()             # [1, 0]: both edges are critical
 ```
 
+#### Directed algorithms
+
+Strongly connected components, topological sort and DAG longest path read
+multi-terminal edges with the OR rule: an edge leads from each active
+in-terminal to each active out-terminal, and is never part of a result.
+
+```python
+graph = Graph([1, 2, 3, 4], [((1, 2), (3, 4)), (4, 1)], directed=True)
+list(graph.strongly_connected_components())   # [{3}, {1, 4}, {2}]: 1 -> 4 -> 1; 3 has no way back, 2 only feeds
+
+dag = Graph([1, 2, 3, 4, 5], [((1, 2), (3, 4)), (4, 5)], directed=True)
+dag.topological_sort()       # 1 and 2 before 3 and 4, 4 before 5
+dag.dag_longest_path()       # [1, 4, 5]: a pass through the edge counts 1
+dag.dag_longest_path([1.0, 5.0, 2.0, 7.0, 0.5, 0.5])   # [2, 4, 5]: a pass weighs entry plus exit
+```
+
+An edge with an in- and an out-terminal at the same node is a cycle, like a
+self-loop, and an edge without an active in-terminal passes nothing (case 9).
+
 #### Critical edges, critical nodes and blocks
 
 Computed on the active terminals only (case 11), by one depth-first search that
@@ -1560,6 +1579,9 @@ implementing; the D and O numbers refer to `docs/multi_terminal-decisions.md`.
 | 20 | Leaving through the entry terminal | Never: a pass goes from one terminal to another. Without negative weights it could not shorten a path anyway. | — | user |
 | 21 | Passing an edge again right after leaving it through its negative terminal | Not allowed: in `(1, 2, 3)` with weights `[3, -1, 2]` the path from 1 to 3 costs 5, not `(3 − 1) + (−1 + 2) = 3`. | Allow it: each pass is legal on its own. | user |
 | 22 | Coming back to the negative terminal's node another way | Allowed: only the immediate second pass is banned, so a shortest path may visit a node twice (`[1, 2, 4, 2, 3]` in the test). | Ban every second pass through the same edge, which makes shortest paths a constrained, much harder problem. | Claude |
+| 23 | Edge with an in- and an out-terminal at the same node (directed) | A cycle, like a self-loop: topological sort raises, the node is its own strongly connected component. | Ignore the pair, so that only cycles through other nodes count. | user (step C proposal) |
+| 24 | DAG longest path without weights | A pass through a multi-terminal edge counts 1, as a two-terminal edge does. | Count 2 (entry and exit), or count by terminals. | user (step C proposal) |
+| 25 | Directed edge without an active in-terminal in a topological sort | Constrains nothing: its out-terminal nodes do not wait for it. | Keep its out-terminals after its (masked) in-terminals anyway. | user (step C proposal, case 9) |
 
 ### What the literature says about these cases
 

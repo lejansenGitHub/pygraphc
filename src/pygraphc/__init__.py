@@ -1993,12 +1993,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def strongly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each strongly connected component as a set of node IDs."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("strongly_connected_components")
         self._require_directed("strongly_connected_components")
-        yield from _strongly_connected_components_ctx(
-            self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
-        )
+        yield from _strongly_connected_components_ctx(self._graph._graph_capsule, *self._masks())
 
     def weakly_connected_components(self) -> Generator[set[NodeIdT], None, None]:
         """Yield each weakly connected component as a set of node IDs."""
@@ -2010,12 +2006,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         Raises ValueError if the graph contains a cycle.
         """
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("topological_sort")
         self._require_directed("topological_sort")
-        result: list[NodeIdT] = _topological_sort_ctx(
-            self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
-        )
+        result: list[NodeIdT] = _topological_sort_ctx(self._graph._graph_capsule, *self._masks())
         return result
 
     def bridges(self) -> list[tuple[NodeIdT, NodeIdT]]:
@@ -2111,12 +2103,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeIdT]:
         """Return the longest path in the DAG as a list of node IDs."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("dag_longest_path")
         self._require_directed("dag_longest_path")
-        result: list[NodeIdT] = _dag_longest_path_ctx(
-            self._graph._graph_capsule, weights, self._excluded_edges, self._excluded_nodes
-        )
+        result: list[NodeIdT] = _dag_longest_path_ctx(self._graph._graph_capsule, weights, *self._masks())
         return result
 
     def bfs(self, source: NodeIdT) -> list[NodeIdT]:

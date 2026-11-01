@@ -232,3 +232,26 @@ def test_edge_case_22_a_path_may_come_back_to_the_negative_terminal_another_way(
 
     assert star_with_a_loop.shortest_path_lengths(weights, 1)[3] == 4.0
     assert star_with_a_loop.shortest_path(weights, 1, 3) == [1, 2, 4, 2, 3]
+
+
+def test_edge_case_23_an_in_and_an_out_terminal_at_one_node_is_a_cycle() -> None:
+    """EC23: like a self-loop; topological sort raises and the node stays its own strong component."""
+    graph = Graph([1, 2], [((1,), (1, 2))], directed=True)
+
+    with pytest.raises(ValueError, match="cycle"):
+        graph.topological_sort()
+    assert sorted(sorted(component) for component in graph.strongly_connected_components()) == [[1], [2]]
+
+
+def test_edge_case_24_an_unweighted_pass_through_an_edge_counts_one() -> None:
+    """EC24: 1 -> (edge) -> 4 -> 5 is two passes."""
+    graph = Graph([1, 2, 3, 4, 5], [((1, 2), (3, 4)), (4, 5)], directed=True)
+
+    assert graph.dag_longest_path() == [1, 4, 5]
+
+
+def test_edge_case_25_an_edge_without_an_active_in_terminal_constrains_no_order() -> None:
+    """EC25: its out-terminal nodes do not wait for it."""
+    view = Graph([1, 2, 3], [((1,), (2, 3)), (3, 1)], directed=True).without_terminals([(0, 0)])
+
+    assert view.topological_sort() == [2, 3, 1]
