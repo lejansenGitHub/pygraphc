@@ -8,9 +8,16 @@
 PYGRAPHC_INTERNAL int compute_components_masked(int node_count, EdgeList *edges, const uint8_t *edge_mask,
                                                 const uint8_t *node_mask,
                                                 ComponentResult *components);
-PYGRAPHC_INTERNAL int compute_strongly_connected_components_masked(int node_count, AdjacencyList *adjacency,
-                                                                   const uint8_t *edge_mask, const uint8_t *node_mask,
-                                                                   ComponentResult *components);
+/*
+ * Strongly connected components of a parsed directed graph under its edge,
+ * terminal and node masks; a multi-terminal edge leads from each active
+ * in-terminal to each active out-terminal (D5). Labels cover nodes and, on a
+ * graph with multi-terminal edges, edge states (node_count + e) as well.
+ * Returns 0, or -1 with an exception set.
+ */
+PYGRAPHC_INTERNAL int compute_strongly_connected_components(const GraphContext *graph, const uint8_t *edge_mask,
+                                                            const TerminalMask *terminal_mask, const uint8_t *node_mask,
+                                                            ComponentResult *components);
 
 /*
  * Components of a parsed graph under its edge, terminal and node masks: every edge

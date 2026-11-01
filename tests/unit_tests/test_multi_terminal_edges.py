@@ -292,9 +292,6 @@ _METHODS_WITHOUT_TERMINAL_MASKS = {
     "out_degree": lambda view: view.out_degree(2),
     "in_degree": lambda view: view.in_degree(2),
     "all_edge_paths": lambda view: view.all_edge_paths(1, 3),
-    "strongly_connected_components": lambda view: list(view.strongly_connected_components()),
-    "topological_sort": lambda view: view.topological_sort(),
-    "dag_longest_path": lambda view: view.dag_longest_path(),
     "quotient_edges": lambda view: view.quotient_edges(memoryview(bytes(12)).cast("i")),
     "series_parallel_reduce": lambda view: view.series_parallel_reduce(bytes(3), bytes(3)),
     "degrees": lambda view: view.degrees(),
@@ -663,3 +660,85 @@ def test_bfs_agrees_with_a_brute_force_reference(direction: str, masks: dict[str
         order = view.bfs(source)
         assert len(order) == len(set(order))
         assert set(order) == _reference_reach(steps, source)
+
+
+# ── Step C: directed algorithms on multi-terminal edges (D5, D23) ──
+
+
+def _strong_components(view: object) -> list[list[int]]:
+    return sorted(sorted(component) for component in view.strongly_connected_components())  # type: ignore[attr-defined]
+
+
+def test_strongly_connected_components_pass_through_a_multi_terminal_edge() -> None:
+    """D5: 1 reaches 3 through the edge and 3 reaches 1, so they share a component; 2 only reaches them."""
+    graph = Graph([1, 2, 3], [((1, 2), (3,)), (3, 1)], directed=True)
+
+    # --- Assert ---
+    assert _strong_components(graph) == [[1, 3], [2]]
+
+
+def test_a_cycle_through_two_out_terminals_is_one_component() -> None:
+    """Every active out-terminal is reached: 1 feeds 2 and 3, both lead back to 1."""
+    graph = Graph([1, 2, 3, 4], [((1,), (2, 3)), (2, 1), (3, 1), (3, 4)], directed=True)
+
+    # --- Assert ---
+    assert _strong_components(graph) == [[1, 2, 3], [4]]
+
+
+def test_masking_an_in_terminal_breaks_the_strong_component() -> None:
+    """Case 9 under a terminal mask: with the in-terminal at 1 masked, 1 no longer reaches 3."""
+    view = Graph([1, 2, 3], [((1, 2), (3,)), (3, 1)], directed=True).without_terminals([(0, 0)])
+
+    # --- Assert ---
+    assert _strong_components(view) == [[1], [2], [3]]
+
+
+def test_topological_sort_puts_every_in_terminal_before_every_out_terminal() -> None:
+    """((1, 2), (3, 4)): 1 and 2 before 3 and 4."""
+    order = Graph([1, 2, 3, 4], [((1, 2), (3, 4))], directed=True).topological_sort()
+
+    # --- Assert ---
+    assert set(order[:2]) == {1, 2}
+    assert set(order[2:]) == {3, 4}
+
+
+def test_topological_sort_raises_on_a_cycle_through_a_multi_terminal_edge() -> None:
+    """1 feeds 3 through the edge and 3 leads back to 1."""
+    graph = Graph([1, 2, 3], [((1, 2), (3,)), (3, 1)], directed=True)
+
+    # --- Assert ---
+    with pytest.raises(ValueError, match="cycle"):
+        graph.topological_sort()
+
+
+def test_an_in_and_an_out_terminal_at_one_node_is_a_cycle() -> None:
+    """Like a self-loop: the edge leads from node 1 back to node 1."""
+    graph = Graph([1, 2], [((1,), (1, 2))], directed=True)
+
+    # --- Assert ---
+    with pytest.raises(ValueError, match="cycle"):
+        graph.topological_sort()
+
+
+def test_an_edge_without_an_active_in_terminal_orders_nothing() -> None:
+    """Case 9: with its only in-terminal masked, the edge no longer constrains its out-terminals."""
+    view = Graph([1, 2, 3], [((1,), (2, 3)), (3, 1)], directed=True).without_terminals([(0, 0)])
+
+    # --- Assert ---
+    assert view.topological_sort() == [2, 3, 1]
+
+
+def test_dag_longest_path_counts_a_pass_through_an_edge_as_one() -> None:
+    """Unweighted, 1 -> (edge) -> 4 -> 5 is two passes, longer than any single pass."""
+    graph = Graph([1, 2, 3, 4, 5], [((1, 2), (3, 4)), (4, 5)], directed=True)
+
+    # --- Assert ---
+    assert graph.dag_longest_path() == [1, 4, 5]
+
+
+def test_dag_longest_path_weighs_a_pass_entry_plus_exit() -> None:
+    """D11: one weight per terminal; entering at 2 (5) and leaving at 4 (7) beats every other pass."""
+    graph = Graph([1, 2, 3, 4], [((1, 2), (3, 4))], directed=True)
+
+    # --- Assert ---
+    assert graph.dag_longest_path([1.0, 5.0, 2.0, 7.0]) == [2, 4]

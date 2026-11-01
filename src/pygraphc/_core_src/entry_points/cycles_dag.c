@@ -2,88 +2,81 @@
 #include "entry_points.h"
 #include "../helpers/parse.h"
 #include "../helpers/toposort.h"
+#include "../helpers/terminals.h"
+
+/* The node ids of an order's node states, in order; edge states are left out. NULL with an exception set. */
+static PyObject *node_ids_in_order(const GraphContext *graph, const TopologicalOrder *order) {
+    PyObject *result = PyList_New(order->nodes_in_order);
+    if (!result) return NULL;
+    int position = 0;
+    for (int index = 0; index < order->state_count; index++) {
+        int state = order->states[index];
+        if (state >= graph->node_ids.node_count) continue;
+        Py_INCREF(graph->node_ids.node_id_items[state]);
+        PyList_SET_ITEM(result, position++, graph->node_ids.node_id_items[state]);
+    }
+    return result;
+}
+
+/* The topological sort of a parsed graph as a list of node ids; ValueError on a cycle. */
+static PyObject *topological_sort_of(const GraphContext *graph, const uint8_t *edge_mask, const TerminalMask *terminal_mask,
+                                     const uint8_t *node_mask) {
+    TopologicalOrder order;
+    if (topological_order(graph, edge_mask, terminal_mask, node_mask, &order) < 0) return NULL;
+    PyObject *result = NULL;
+    if (order.nodes_in_order < order.node_count)
+        PyErr_Format(PyExc_ValueError,
+                     "Graph contains a cycle - topological sort is undefined (%d of %d nodes processed)",
+                     order.nodes_in_order, order.node_count);
+    else
+        result = node_ids_in_order(graph, &order);
+    free(order.states);
+    return result;
+}
 
 PyObject *py_topological_sort_by_node_id(PyObject *self, PyObject *args) {
     PyObject *node_ids_obj, *edges_obj;
     if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
-    NodeIdContext context;
-    if (node_id_parse(node_ids_obj, edges_obj, &context) < 0) return NULL;
-    int node_count = context.node_count;
-
-    if (node_count == 0) {
-        node_id_context_free(&context);
-        return PyList_New(0);
-    }
-
-    int *order;
-    int count = topological_order(node_count, &context.edges, &order);
-    if (count < 0) { node_id_context_free(&context); return NULL; }
-
-    if (count < node_count) {
-        free(order); node_id_context_free(&context);
-        PyErr_Format(PyExc_ValueError,
-            "Graph contains a cycle - topological sort is undefined "
-            "(%d of %d nodes processed)", count, node_count);
-        return NULL;
-    }
-
-    PyObject *result = PyList_New(node_count);
-    if (result) {
-        for (int position = 0; position < node_count; position++) {
-            Py_INCREF(context.node_id_items[order[position]]);
-            PyList_SET_ITEM(result, position, context.node_id_items[order[position]]);
+    GraphContext graph;
+    memset(&graph, 0, sizeof graph);
+    graph.directed = 1;
+    if (node_id_parse(node_ids_obj, edges_obj, &graph.node_ids) < 0) return NULL;
+    if (graph.node_ids.node_count > 0 && graph.node_ids.edges.edge_count > 0) {
+        if (build_adjacency(graph.node_ids.node_count, &graph.node_ids.edges, NULL, &graph.adjacency, 1) < 0) {
+            node_id_context_free(&graph.node_ids);
+            return NULL;
         }
+        graph.has_adjacency = 1;
     }
-
-    free(order); node_id_context_free(&context);
+    TerminalMask no_terminal_mask = {NULL, NULL, {0}};
+    PyObject *result = topological_sort_of(&graph, NULL, &no_terminal_mask, NULL);
+    if (graph.has_adjacency) free_adjacency(&graph.adjacency);
+    node_id_context_free(&graph.node_ids);
     return result;
 }
 
 PyObject *py_topological_sort_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OO", &capsule, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = require_two_terminal_edges(capsule);
+    PyObject *capsule, *edge_mask_obj = Py_None, *node_mask_obj = Py_None, *terminal_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &edge_mask_obj, &node_mask_obj, &terminal_mask_obj)) return NULL;
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
-    int node_count = graph->node_ids.node_count;
-
     if (!graph->directed) {
-        PyErr_SetString(PyExc_TypeError,
-            "topological_sort requires a directed graph");
+        PyErr_SetString(PyExc_TypeError, "topological_sort requires a directed graph");
         return NULL;
     }
-    if (node_count == 0) return PyList_New(0);
+    if (graph->node_ids.node_count == 0) return PyList_New(0);
 
     const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
     if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) return NULL;
     const uint8_t *node_mask; Py_buffer node_mask_buffer;
-    if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); return NULL; }
-
-    /* Count active nodes */
-    int active_node_count = node_count;
-    if (node_mask) { active_node_count = 0; for (int node = 0; node < node_count; node++) if (!node_mask[node]) active_node_count++; }
-
-    int *order;
-    int count = topological_order_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &order);
-    release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
-    if (count < 0) return NULL;
-
-    if (count < active_node_count) {
-        free(order);
-        PyErr_Format(PyExc_ValueError,
-            "Graph contains a cycle - topological sort is undefined "
-            "(%d of %d nodes processed)", count, active_node_count);
-        return NULL;
+    if (parse_mask(node_mask_obj, graph->node_ids.node_count, &node_mask, &node_mask_buffer) < 0) { release_mask(&edge_mask_buffer); return NULL; }
+    TerminalMask terminal_mask;
+    if (parse_terminal_mask(graph, terminal_mask_obj, edge_mask, &terminal_mask) < 0) {
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); return NULL;
     }
-
-    PyObject *result = PyList_New(count);
-    if (result) {
-        for (int position = 0; position < count; position++) {
-            Py_INCREF(graph->node_ids.node_id_items[order[position]]);
-            PyList_SET_ITEM(result, position, graph->node_ids.node_id_items[order[position]]);
-        }
-    }
-    free(order);
+    PyObject *result = topological_sort_of(graph, edge_mask, &terminal_mask, node_mask);
+    release_terminal_mask(&terminal_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
     return result;
 }
 
@@ -244,141 +237,152 @@ PyObject *py_cycle_basis_ctx(PyObject *self, PyObject *args) {
  * weights: if NULL, all edges have weight 1.
  * Returns Python list of original node IDs forming the longest path.
  */
+/*
+ * Longest distances over a topological order of states. A two-terminal edge
+ * weighs its weight (with a terminal list, the sum of its two terminal
+ * weights), 1 unweighted; entering a multi-terminal edge through an in-terminal
+ * weighs that terminal's weight, 1 unweighted, and leaving it through an
+ * out-terminal that terminal's weight, 0 unweighted, so a pass weighs entry
+ * plus exit (D11) and counts 1 unweighted. An edge state relaxes its
+ * out-terminals only once an in-terminal reached it. Instantiated for both
+ * values of has_multi_terminal_edges.
+ */
+static inline __attribute__((always_inline)) void relax_in_order(
+    const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask,
+    const uint8_t *terminal_mask, const uint8_t *node_mask, const double *weights, const TopologicalOrder *order,
+    double *distance, int *predecessor, const int has_multi_terminal_edges) {
+    const AdjacencyList *adjacency = &graph->adjacency;
+    const TerminalList *terminals = graph->terminals;
+    int node_count = graph->node_ids.node_count;
+    for (int position = 0; position < order->state_count; position++) {
+        int state = order->states[position];
+        if (has_multi_terminal_edges && state >= node_count) {
+            int edge = state - node_count;
+            if (predecessor[state] < 0) continue;
+            for (int terminal = terminals->out_terminal_offsets[edge]; terminal < terminals->terminal_offsets[edge + 1]; terminal++) {
+                if (!terminal_is_active(terminals, edge, terminal, edge_mask, terminal_mask, node_mask)) continue;
+                int reached = terminals->terminal_nodes[terminal];
+                double candidate = distance[state] + (weights ? weights[terminal] : 0.0);
+                if (candidate > distance[reached]) { distance[reached] = candidate; predecessor[reached] = state; }
+            }
+            continue;
+        }
+        if (!graph->has_adjacency) continue;
+        for (int slot = adjacency->offset[state]; slot < adjacency->offset[state + 1]; slot++) {
+            int neighbor = adjacency->neighbors[slot], index = adjacency->edge_indices[slot];
+            double weight;
+            if (has_multi_terminal_edges && neighbor < 0) {
+                int edge = -1 - neighbor;
+                if (!terminal_is_active(terminals, edge, index, edge_mask, terminal_mask, node_mask)) continue;
+                neighbor = node_count + edge;
+                weight = weights ? weights[index] : 1.0;
+                if (predecessor[neighbor] < 0 || distance[state] + weight > distance[neighbor]) {
+                    distance[neighbor] = distance[state] + weight;
+                    predecessor[neighbor] = state;
+                }
+                continue;
+            }
+            if (two_terminal_edge_mask && two_terminal_edge_mask[index]) continue;
+            if (node_mask && node_mask[neighbor]) continue;
+            weight = !weights ? 1.0
+                   : has_multi_terminal_edges ? weights[terminals->terminal_offsets[index]] + weights[terminals->terminal_offsets[index] + 1]
+                   : weights[index];
+            if (distance[state] + weight > distance[neighbor]) {
+                distance[neighbor] = distance[state] + weight;
+                predecessor[neighbor] = state;
+            }
+        }
+    }
+}
+
 PyObject *py_dag_longest_path_ctx(PyObject *self, PyObject *args) {
-    PyObject *capsule, *weights_obj = Py_None, *edge_mask_obj = Py_None, *node_mask_obj = Py_None;
-    if (!PyArg_ParseTuple(args, "O|OOO", &capsule, &weights_obj, &edge_mask_obj, &node_mask_obj)) return NULL;
-    GraphContext *graph = require_two_terminal_edges(capsule);
+    PyObject *capsule, *weights_obj = Py_None, *edge_mask_obj = Py_None, *node_mask_obj = Py_None,
+             *terminal_mask_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "O|OOOO", &capsule, &weights_obj, &edge_mask_obj, &node_mask_obj, &terminal_mask_obj))
+        return NULL;
+    GraphContext *graph = get_graph_context(capsule);
     if (!graph) return NULL;
     int node_count = graph->node_ids.node_count;
-
     if (!graph->directed) {
-        PyErr_SetString(PyExc_TypeError,
-            "dag_longest_path requires a directed graph");
+        PyErr_SetString(PyExc_TypeError, "dag_longest_path requires a directed graph");
         return NULL;
     }
     if (node_count == 0) return PyList_New(0);
 
-    /* Parse optional weights */
-    WeightList weights = {NULL, 0, 0};
-    int has_weights = (weights_obj != Py_None);
-    if (has_weights) {
-        if (parse_weights(weights_obj, &weights, graph->node_ids.edges.edge_count) < 0) return NULL;
-    }
-
+    const TerminalList *terminals = graph->terminals;
+    WeightList weights = {NULL, 0, 0, 0};
+    int has_weights = weights_obj != Py_None;
+    if (has_weights &&
+        parse_counted_weights(weights_obj, &weights, terminals ? terminals->terminal_count : graph->node_ids.edges.edge_count,
+                              terminals ? "terminal" : "edge", 0) < 0)
+        return NULL;
     const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
     if (parse_mask(edge_mask_obj, graph->node_ids.edges.edge_count, &edge_mask, &edge_mask_buffer) < 0) {
-        if (has_weights) free_weights(&weights); return NULL;
+        if (has_weights) free_weights(&weights);
+        return NULL;
     }
     const uint8_t *node_mask; Py_buffer node_mask_buffer;
     if (parse_mask(node_mask_obj, node_count, &node_mask, &node_mask_buffer) < 0) {
-        release_mask(&edge_mask_buffer); if (has_weights) free_weights(&weights); return NULL;
-    }
-
-    /* Get topological order (reuse masked toposort) */
-    int *order;
-    int active_node_count = node_count;
-    if (node_mask) { active_node_count = 0; for (int node = 0; node < node_count; node++) if (!node_mask[node]) active_node_count++; }
-
-    int count = topological_order_masked(node_count, &graph->node_ids.edges, edge_mask, node_mask, &order);
-    if (count < 0) {
-        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
-        if (has_weights) free_weights(&weights);
+        release_mask(&edge_mask_buffer); if (has_weights) free_weights(&weights);
         return NULL;
     }
-    if (count < active_node_count) {
-        free(order);
-        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
-        if (has_weights) free_weights(&weights);
-        PyErr_SetString(PyExc_ValueError,
-            "Graph contains a cycle - dag_longest_path is undefined");
+    TerminalMask terminal_mask;
+    if (parse_terminal_mask(graph, terminal_mask_obj, edge_mask, &terminal_mask) < 0) {
+        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); if (has_weights) free_weights(&weights);
         return NULL;
     }
 
-    /* DP: distance[node] = longest distance to reach node, predecessor[node] = predecessor on longest path */
-    double *distance = (double *)malloc((size_t)node_count * sizeof(double));
-    int *predecessor = (int *)malloc((size_t)node_count * sizeof(int));
-    if (!distance || !predecessor) {
-        free(distance); free(predecessor); free(order);
-        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
-        if (has_weights) free_weights(&weights);
-        PyErr_NoMemory(); return NULL;
+    PyObject *result = NULL;
+    TopologicalOrder order = {NULL, 0, 0, 0};
+    size_t state_count = (size_t)node_count + (terminals ? (size_t)graph->node_ids.edges.edge_count : 0);
+    double *distance = (double *)malloc(state_count * sizeof(double));
+    int *predecessor = (int *)malloc(state_count * sizeof(int));
+    if (!distance || !predecessor) { PyErr_NoMemory(); goto done; }
+    if (topological_order(graph, edge_mask, &terminal_mask, node_mask, &order) < 0) goto done;
+    if (order.nodes_in_order < order.node_count) {
+        PyErr_SetString(PyExc_ValueError, "Graph contains a cycle - dag_longest_path is undefined");
+        goto done;
     }
-    for (int node = 0; node < node_count; node++) { distance[node] = 0.0; predecessor[node] = -1; }
+    for (size_t state = 0; state < state_count; state++) { distance[state] = 0.0; predecessor[state] = -1; }
+    const uint8_t *traversal_edge_mask = two_terminal_edge_mask(&terminal_mask, edge_mask);
+    const double *weight_values = has_weights ? weights.values : NULL;
+    if (terminals)
+        relax_in_order(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, weight_values, &order,
+                       distance, predecessor, 1);
+    else
+        relax_in_order(graph, traversal_edge_mask, NULL, NULL, node_mask, weight_values, &order, distance, predecessor, 0);
 
-    /* Use forward CSR to iterate outgoing edges */
-    AdjacencyList *adjacency = &graph->adjacency;
-    int has_adjacency = graph->has_adjacency;
-
-    /* Process nodes in topological order */
-    for (int order_position = 0; order_position < count; order_position++) {
-        int node = order[order_position];
-        if (has_adjacency) {
-            for (int slot = adjacency->offset[node]; slot < adjacency->offset[node + 1]; slot++) {
-                int edge_index = adjacency->edge_indices[slot];
-                if (edge_mask && edge_mask[edge_index]) continue;
-                int neighbor = adjacency->neighbors[slot];
-                if (node_mask && node_mask[neighbor]) continue;
-                double weight = has_weights ? weights.values[edge_index] : 1.0;
-                if (distance[node] + weight > distance[neighbor]) {
-                    distance[neighbor] = distance[node] + weight;
-                    predecessor[neighbor] = node;
-                }
-            }
-        } else {
-            /* No CSR (no edges) — nothing to relax */
-        }
-    }
-
-    /* Find node with maximum distance */
-    int best_node = -1;
+    /* The node with the longest distance, the first in order on a tie */
+    int best_node = -1, first_node = -1;
     double best_distance = -1.0;
-    for (int order_position = 0; order_position < count; order_position++) {
-        int node = order[order_position];
-        if (distance[node] > best_distance) {
-            best_distance = distance[node];
-            best_node = node;
-        }
+    for (int position = 0; position < order.state_count; position++) {
+        int state = order.states[position];
+        if (state >= node_count) continue;
+        if (first_node < 0) first_node = state;
+        if (distance[state] > best_distance) { best_distance = distance[state]; best_node = state; }
     }
-
-    /* Trace back the path */
     if (best_node < 0 || best_distance == 0.0) {
-        /* No edges or all isolated: return first active node */
-        PyObject *single_node_path;
-        if (count > 0) {
-            single_node_path = PyList_New(1);
-            if (single_node_path) {
-                Py_INCREF(graph->node_ids.node_id_items[order[0]]);
-                PyList_SET_ITEM(single_node_path, 0, graph->node_ids.node_id_items[order[0]]);
-            }
-        } else {
-            single_node_path = PyList_New(0);
+        result = PyList_New(first_node >= 0 ? 1 : 0);
+        if (result && first_node >= 0) {
+            Py_INCREF(graph->node_ids.node_id_items[first_node]);
+            PyList_SET_ITEM(result, 0, graph->node_ids.node_id_items[first_node]);
         }
-        free(distance); free(predecessor); free(order);
-        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
-        if (has_weights) free_weights(&weights);
-        return single_node_path;
+        goto done;
     }
-
-    /* Count path length by tracing back */
     int path_length = 0;
-    for (int node = best_node; node >= 0; node = predecessor[node]) path_length++;
-
-    PyObject *result = PyList_New(path_length);
-    if (!result) {
-        free(distance); free(predecessor); free(order);
-        release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
-        if (has_weights) free_weights(&weights);
-        return NULL;
-    }
-    /* Fill in reverse */
-    int idx = path_length - 1;
-    for (int node = best_node; node >= 0; node = predecessor[node]) {
-        Py_INCREF(graph->node_ids.node_id_items[node]);
-        PyList_SET_ITEM(result, idx--, graph->node_ids.node_id_items[node]);
+    for (int state = best_node; state >= 0; state = predecessor[state]) path_length += state < node_count;
+    result = PyList_New(path_length);
+    if (!result) goto done;
+    int position = path_length - 1;
+    for (int state = best_node; state >= 0; state = predecessor[state]) {
+        if (state >= node_count) continue;
+        Py_INCREF(graph->node_ids.node_id_items[state]);
+        PyList_SET_ITEM(result, position--, graph->node_ids.node_id_items[state]);
     }
 
-    free(distance); free(predecessor); free(order);
-    release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
+done:
+    free(distance); free(predecessor); free(order.states);
+    release_terminal_mask(&terminal_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
     if (has_weights) free_weights(&weights);
     return result;
 }

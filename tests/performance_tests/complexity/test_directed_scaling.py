@@ -26,12 +26,34 @@ def _long_cycle(node_count: int) -> tuple[list[int], list[tuple[int, int]]]:
     return node_ids, [*edges, (node_count - 1, 0)]
 
 
-ACYCLIC_SHAPES: dict[str, Shape] = {
+def _wide_out_edge(node_count: int) -> tuple[list[int], list[object]]:
+    """One multi-terminal edge from node 0 to every other node: a wide state."""
+    return list(range(node_count)), [((0,), tuple(range(1, node_count)))]
+
+
+def _terminal_chain(node_count: int) -> tuple[list[int], list[object]]:
+    """Multi-terminal edges ((i,), (i + 1, i + 2)) along the nodes: deep, every node reached twice."""
+    return list(range(node_count)), [((node,), (node + 1, node + 2)) for node in range(node_count - 2)]
+
+
+def _terminal_ring(node_count: int) -> tuple[list[int], list[object]]:
+    """The terminal chain closed into a ring: one strongly connected component through edge states."""
+    edges = [((node,), ((node + 1) % node_count, (node + 2) % node_count)) for node in range(node_count)]
+    return list(range(node_count)), edges
+
+
+TWO_TERMINAL_ACYCLIC_SHAPES: dict[str, Shape] = {
     "directed_acyclic": shapes.directed_acyclic,
     "path": shapes.path,
     "star": shapes.star,
 }
-SHAPES: dict[str, Shape] = {**ACYCLIC_SHAPES, "long_cycle": _long_cycle}
+TWO_TERMINAL_SHAPES: dict[str, Shape] = {**TWO_TERMINAL_ACYCLIC_SHAPES, "long_cycle": _long_cycle}
+ACYCLIC_SHAPES: dict[str, Shape] = {
+    **TWO_TERMINAL_ACYCLIC_SHAPES,
+    "wide_out_edge": _wide_out_edge,
+    "terminal_chain": _terminal_chain,
+}
+SHAPES: dict[str, Shape] = {**ACYCLIC_SHAPES, "long_cycle": _long_cycle, "terminal_ring": _terminal_ring}
 
 ACYCLIC_OPERATIONS: dict[str, Operation] = {
     "topological_sort": lambda graph: graph.topological_sort,
@@ -41,6 +63,8 @@ OPERATIONS: dict[str, Operation] = {
     "strongly_connected_components": lambda graph: lambda: list(graph.strongly_connected_components()),
     "weakly_connected_components": lambda graph: lambda: list(graph.weakly_connected_components()),
     "bfs": lambda graph: lambda: graph.bfs(0),
+}
+TWO_TERMINAL_OPERATIONS: dict[str, Operation] = {
     "shortest_path_lengths": lambda graph: (
         lambda: graph.shortest_path_lengths(array.array("d", [1.0] * graph.edge_count), 0)
     ),
@@ -60,6 +84,14 @@ def _prepare(operation: Operation, shape: Shape) -> Callable[[int], Callable[[],
 def test_operation_scales_linearly(operation_name: str, shape_name: str) -> None:
     """Every operation here visits each node and edge a bounded number of times."""
     scaling = measure_scaling(_prepare(OPERATIONS[operation_name], SHAPES[shape_name]))
+    assert_scales_linearly(f"directed/{operation_name}/{shape_name}", scaling)
+
+
+@pytest.mark.parametrize("shape_name", list(TWO_TERMINAL_SHAPES))
+@pytest.mark.parametrize("operation_name", list(TWO_TERMINAL_OPERATIONS))
+def test_two_terminal_operation_scales_linearly(operation_name: str, shape_name: str) -> None:
+    """Shortest path lengths take one edge weight per edge, so they run on two-terminal shapes."""
+    scaling = measure_scaling(_prepare(TWO_TERMINAL_OPERATIONS[operation_name], TWO_TERMINAL_SHAPES[shape_name]))
     assert_scales_linearly(f"directed/{operation_name}/{shape_name}", scaling)
 
 
