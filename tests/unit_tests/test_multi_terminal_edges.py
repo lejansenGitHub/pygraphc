@@ -503,6 +503,56 @@ def test_path_through_a_multi_terminal_edge_costs_entry_plus_exit() -> None:
     assert graph.shortest_path(weights, 5, 3) == [5, 4, 3]
 
 
+@pytest.mark.multi_terminal_edge_case
+def test_path_halves_never_join_into_a_second_pass_right_at_the_negative_terminal() -> None:
+    """D21: the halves meet at node 3, one leaving and the other entering the three-terminal edge there; the cheapest
+    path joins a best label to a second one, taking the loop over node 6 between the two passes."""
+    graph = Graph([1, 2, 3, 4, 5, 6], [(1, 2), (2, 3, 4), (4, 5), (3, 6)])
+    weights = [0.5, 0.5, 3.0, -1.0, 2.0, 0.5, 0.5, 0.25, 0.25]
+
+    # --- Assert ---
+    assert graph.shortest_path(weights, 1, 5) == [1, 2, 3, 6, 3, 4, 5]
+    assert graph.shortest_path_lengths(weights, 1)[5] == 6.0
+
+
+@pytest.mark.multi_terminal_edge_case
+def test_path_halves_never_join_in_a_u_turn_through_an_edge() -> None:
+    """D21, edge case 20: both halves reach the three-terminal edge through its terminal of weight 0 at node 2;
+    joining there would be a U-turn and return the path [1, 2, 2]."""
+    graph = Graph([1, 2], [(1, 2, 2), (1, 2)])
+    weights = [3.0, 1.0, 0.0, -1.0, 1.0]
+
+    # --- Assert ---
+    assert graph.shortest_path(weights, 1, 2) == [1, 2]
+    assert graph.shortest_path_lengths(weights, 1)[2] == 0.0
+
+
+@pytest.mark.multi_terminal_edge_case
+def test_path_halves_meeting_inside_an_edge_count_its_weights_once() -> None:
+    """D11, D21: each half entering the three-terminal edge adds its lowest terminal weight as a shift; a meeting
+    inside the edge takes both off again, or the detour 1 - 2 - 3 (costing 3) would look as cheap as the direct pass
+    (costing 1)."""
+    graph = Graph([1, 2, 3], [(1, 2, 3)])
+    weights = [-1.0, 1.0, 2.0]
+
+    # --- Assert ---
+    assert graph.shortest_path(weights, 1, 3) == [1, 3]
+    assert graph.shortest_path_lengths(weights, 1)[3] == 1.0
+
+
+@pytest.mark.multi_terminal_edge_case
+def test_path_halves_join_on_a_pass_leaving_through_the_negative_terminal() -> None:
+    """D21: the forward half enters the three-terminal edge at node 2 and leaves through its negative terminal at node
+    3; the backward half represents the same pass as a direct one, so they meet on the pass, before the dearer edge
+    (1, 3) ends the search."""
+    graph = Graph([1, 2, 3, 6], [(1, 2), (2, 3, 6), (1, 3)])
+    weights = [0.5, 0.5, 2.0, -1.0, 5.0, 1.25, 1.25]
+
+    # --- Assert ---
+    assert graph.shortest_path(weights, 1, 3) == [1, 2, 3]
+    assert graph.shortest_path_lengths(weights, 1)[3] == 2.0
+
+
 def test_masking_case_10_paths_only_through_active_terminals() -> None:
     """Case 10: with the terminal at node 4 masked, no path enters or leaves the three-terminal edge there."""
     view = _three_terminal_edge_between_two_terminal_edges().without_terminals([(1, 2)])

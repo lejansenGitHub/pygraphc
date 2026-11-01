@@ -73,12 +73,13 @@ def _shortest_path_lengths_with_a_negative_terminal(graph: Graph[int, int]) -> C
 
 
 def _shortest_path_with_a_negative_terminal(graph: Graph[int, int]) -> Callable[[], object]:
-    """The labelled search stopped at the target, path read back through the labels.
+    """The labelled search from both ends, path read back through the labels of both sides.
 
-    The search runs from the source only, so it stops after the share of the graph
-    closer than the target. The target is the farthest node, settled last: a fixed
-    node such as the last one lands at a different share for every random size and
-    bends the fitted exponent without any change in the work per node.
+    The search stops once the two sides' tops add up to the best meeting, so it
+    covers a share of the graph that depends on where the target lies. The target is
+    the farthest node: a fixed node such as the last one lands at a different
+    share for every random size and bends the fitted exponent without any change in
+    the work per node.
     """
     weights = _weights_with_a_negative_terminal(graph)
     distances = graph.shortest_path_lengths(weights, 0)

@@ -22,13 +22,36 @@
  * Without a negative terminal weight no search uses labels: a U-turn then costs
  * at least 0 and never shortens a path.
  */
-typedef struct {
+typedef struct LabelledMeeting LabelledMeeting;
+
+typedef struct ArrivalLabels {
     int *arrival_edges;       /* node_count: tag of a node's best label; its second label's tag always differs */
     int *entry_terminals;         /* edge_count: entry terminal of an edge state's best label; its second label's differs */
     int *predecessors;        /* state count, or NULL: the state each label was reached from */
     int second_node_states;   /* search state of node 0's second label */
     int second_edge_states;   /* search state of edge 0's second label */
+    LabelledMeeting *meeting; /* one side of a point-to-point search, or NULL */
 } ArrivalLabels;
+
+/* The cheapest meeting of the two sides of a point-to-point search: the label each side's part ends at. */
+typedef struct {
+    double weight;
+    int forward_state;
+    int backward_state;
+} PathMeeting;
+
+/*
+ * One side's view of a point-to-point search. D21's rules read the same on a
+ * reversed path, so the backward side is the same search run from the target:
+ * its tag at a node names the edge whose negative terminal the rest of the path
+ * enters first, its edge state's key the terminal the path leaves through.
+ */
+struct LabelledMeeting {
+    const MinHeap *far_heap;
+    const ArrivalLabels *far_labels;
+    PathMeeting *best;
+    int is_backward;
+};
 
 /*
  * Allocate the labels of a search whose other states number plain_state_count
@@ -43,6 +66,7 @@ static inline int allocate_arrival_labels(ArrivalLabels *labels, int node_count,
     labels->predecessors = with_predecessors ? (int *)malloc((size_t)state_count * sizeof(int)) : NULL;
     labels->second_node_states = plain_state_count;
     labels->second_edge_states = plain_state_count + node_count;
+    labels->meeting = NULL;
     if (!labels->arrival_edges || !labels->entry_terminals || (with_predecessors && !labels->predecessors)) {
         free(labels->arrival_edges); free(labels->entry_terminals); free(labels->predecessors);
         labels->arrival_edges = labels->entry_terminals = labels->predecessors = NULL;
@@ -71,6 +95,24 @@ static inline __attribute__((always_inline)) void lower_state_distance(MinHeap *
     } else {
         min_heap_sift_up(min_heap, min_heap->heap_position[state]);
     }
+}
+
+/*
+ * Offer the far side a meeting: the near search reaches `state` (second label
+ * second_state) from `from` at candidate_distance with key `key`. The far label
+ * that may continue is its best one unless the keys conflict (equal and not -1:
+ * a U-turn, or a second pass right at a negative terminal), else its second one;
+ * only a settled far label counts, so the meeting's chains never change afterwards.
+ */
+static inline __attribute__((always_inline)) void record_meeting(LabelledMeeting *meeting, int far_best_key, int state,
+                                                                 int second_state, int key, double candidate_distance, int from) {
+    int far_state = (key >= 0 && key == far_best_key) ? second_state : state;
+    const MinHeap *far_heap = meeting->far_heap;
+    double weight = candidate_distance + far_heap->distance[far_state];
+    if (far_heap->heap_position[far_state] != -1 || weight >= meeting->best->weight) return;
+    meeting->best->weight = weight;
+    meeting->best->forward_state = meeting->is_backward ? far_state : from;
+    meeting->best->backward_state = meeting->is_backward ? from : far_state;
 }
 
 /*
