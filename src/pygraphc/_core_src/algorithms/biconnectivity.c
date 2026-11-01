@@ -11,17 +11,18 @@ void release_tarjan_report(TarjanReport *report) {
 
 /*
  * The arrays of a mode, sized for the most a search can report: every edge once,
- * a block per finished state, and two states per link popped. Returns 0, or -1
+ * a critical node at most once per finished state (a state reports its parent,
+ * a root itself), a block per finished state, and two states per link popped. Returns 0, or -1
  * with nothing allocated.
  */
-static int allocate_report(TarjanReport *report, TarjanMode mode, int node_count, int edge_count, size_t state_count,
+static int allocate_report(TarjanReport *report, TarjanMode mode, int edge_count, size_t state_count,
                            size_t link_capacity) {
     memset(report, 0, sizeof *report);
     if (mode == TARJAN_CRITICAL_EDGES) {
         report->critical_edges = (int *)malloc((size_t)(edge_count > 0 ? edge_count : 1) * sizeof(int));
         if (report->critical_edges) return 0;
     } else if (mode == TARJAN_CRITICAL_NODES) {
-        report->critical_nodes = (int *)malloc((size_t)(node_count > 0 ? node_count : 1) * sizeof(int));
+        report->critical_nodes = (int *)malloc((state_count > 0 ? state_count : 1) * sizeof(int));
         if (report->critical_nodes) return 0;
     } else {
         report->block_offsets = (int *)malloc((state_count + 1) * sizeof(int));
@@ -61,14 +62,6 @@ static inline __attribute__((always_inline)) void close_block(
     if (block_nodes >= minimum_nodes) report->block_offsets[++report->block_count] = end;
 }
 
-/* Report a critical node the first time it is found; a node can qualify through several children. */
-static inline __attribute__((always_inline)) void mark_critical_node(TarjanReport *report, uint8_t *critical_node_marks,
-                                                                     int node) {
-    if (critical_node_marks[node]) return;
-    critical_node_marks[node] = 1;
-    report->critical_nodes[report->critical_node_count++] = node;
-}
-
 /*
  * One search in one mode, instantiated for every mode and both values of
  * has_multi_terminal_edges, so graphs of two-terminal edges run it without the
@@ -87,15 +80,12 @@ static inline __attribute__((always_inline)) int tarjan_search(
 
     const int collects_links = mode == TARJAN_BLOCKS || mode == TARJAN_SIMPLE_PATH_BLOCKS;
     const int marks_edge_states = has_multi_terminal_edges && mode == TARJAN_CRITICAL_EDGES;
-    const int marks_nodes = mode == TARJAN_CRITICAL_NODES;
     int *scratch = (int *)malloc((collects_links ? 7 : 6) * state_count * sizeof(int));
     int *link_stack = collects_links ? (int *)malloc(2 * (link_capacity > 0 ? link_capacity : 1) * sizeof(int)) : NULL;
     uint8_t *critical_edge_states = marks_edge_states ? (uint8_t *)calloc((size_t)edge_count + 1, 1) : NULL;
-    uint8_t *critical_node_marks = marks_nodes ? (uint8_t *)calloc((size_t)node_count + 1, 1) : NULL;
     if (!scratch || (collects_links && !link_stack) || (marks_edge_states && !critical_edge_states)
-        || (marks_nodes && !critical_node_marks)
-        || allocate_report(report, mode, node_count, edge_count, state_count, link_capacity) < 0) {
-        free(scratch); free(link_stack); free(critical_edge_states); free(critical_node_marks);
+        || allocate_report(report, mode, edge_count, state_count, link_capacity) < 0) {
+        free(scratch); free(link_stack); free(critical_edge_states);
         PyErr_NoMemory();
         return -1;
     }
@@ -158,7 +148,7 @@ static inline __attribute__((always_inline)) int tarjan_search(
             }
             if (stack_top == 0) {
                 if (mode == TARJAN_CRITICAL_NODES && child_count[state] >= 2)
-                    mark_critical_node(report, critical_node_marks, state);
+                    report->critical_nodes[report->critical_node_count++] = state;
                 stack_top--;
                 continue;
             }
@@ -178,7 +168,7 @@ static inline __attribute__((always_inline)) int tarjan_search(
             } else if (mode == TARJAN_CRITICAL_NODES) {
                 if (!parent_is_edge_state && parent_link[parent] != -1 && subtree_holds_node &&
                     low_link[state] >= discovery_time[parent])
-                    mark_critical_node(report, critical_node_marks, parent);
+                    report->critical_nodes[report->critical_node_count++] = parent;
             } else if (mode == TARJAN_SIMPLE_PATH_BLOCKS && has_multi_terminal_edges) {
                 if (low_link[state] >= discovery_time[parent])
                     close_block(report, link_from, link_to, &link_top, parent, state, node_count, block_stamp, closure++, 1, 0);
@@ -189,7 +179,7 @@ static inline __attribute__((always_inline)) int tarjan_search(
             stack_top--;
         }
     }
-    free(scratch); free(link_stack); free(critical_edge_states); free(critical_node_marks);
+    free(scratch); free(link_stack); free(critical_edge_states);
     return 0;
 }
 

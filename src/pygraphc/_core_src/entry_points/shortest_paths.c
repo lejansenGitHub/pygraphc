@@ -160,12 +160,14 @@ static PyObject *shortest_path_lengths_from(const GraphContext *graph, PyObject 
         : shortest_path_distances(graph, weights.values, &pass_weights, two_terminal_edge_mask(&terminal_mask, edge_mask),
                                   edge_mask, terminal_mask.terminals, node_mask, sources, source_count, cutoff, &distance);
     release_pass_weights(&pass_weights);
-    for (int node = 0; status == 0 && node < node_count; node++) {
+    for (int node = 0; node < node_count && status == 0; node++) {
         if (node_mask && node_mask[node]) continue;
         if (distance[node] < HUGE_VAL && (!use_cutoff || distance[node] <= cutoff)) {
             PyObject *value = PyFloat_FromDouble(distance[node]);
-            if (!value || PyDict_SetItem(result, graph->node_ids.node_id_items[node], value) < 0) status = -1;
-            Py_XDECREF(value);
+            if (!value) { status = -1; break; }
+            int set_status = PyDict_SetItem(result, graph->node_ids.node_id_items[node], value);
+            Py_DECREF(value);
+            if (set_status < 0) { status = -1; break; }
         }
     }
     free(distance);
