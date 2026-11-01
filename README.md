@@ -1514,16 +1514,17 @@ and is skipped otherwise.
 - **instructions/**: deterministic callgrind instruction counts of small and
   medium scenarios and of every phase of the workflows in
   `benchmarks/profile_workflows.py`. CI builds the merge base and the branch
-  with the same packages, on x86-64 and arm64, and fails on a count that moves
-  by more than 0.5% in either direction. Within one binary the counts are
-  exact; a changed C extension moves unchanged work by up to about 1.1%
-  through the allocator, so a C change often needs review even when only the
-  layout moved. The threshold stays below that noise on purpose, because real
-  code generation changes of 0.5 to 1% matter. Every count that moved is in
+  with the same packages, on x86-64 and arm64. A count that moves by more than
+  0.5% in either direction is marked and raises a warning; the run fails on a
+  rise beyond 1.5%, a drop beyond 10% or a scenario no longer measured. Within
+  one binary the counts are exact; a changed C extension moves unchanged work by
+  up to about 1.1% through the allocator, so the warning threshold stays below
+  that noise on purpose, because real code generation changes of 0.5 to 1%
+  matter, while the failing bounds stay above it. Every count that moved is in
   one of two aligned tables, more instructions and fewer instructions, each
   largest change first; counts that round to 0.00% are only counted below
-  them. A pull request labelled
-  `accept-instruction-change` still gets the table but does not fail.
+  them, the warned rows marked **changed** and the failing ones **fails**. A pull
+  request labelled `accept-instruction-change` still gets the table but does not fail.
 
   What the counts cannot see: they measure portable work, compiled with GCC.
   The same instructions can run slower on one machine (splitting `_core.c`

@@ -5,14 +5,14 @@ importing its own installed pygraphc. Within one binary the counts are exact,
 but a changed C extension shifts memory addresses, and CPython's allocator
 then takes slightly different paths: work that did not change moves by up to
 about 1.1% (measured on a pure rename with identical machine code). A count
-that moves by more than ``DEFAULT_THRESHOLD`` fails the run, in either
-direction, because an unexpected drop can mean skipped work as much as a rise
-can mean added work, so a C change often needs a reviewer's label even when
-nothing but layout moved; every count that moved appears in one of two aligned tables,
-more instructions and fewer, each largest change first, and the counts that round to
-0.00% are only counted below them. The reviewer accepts
-a change by labelling the pull request; the table goes to stdout and, in CI,
-to the job summary. Both builds run at the same time: an instruction count does
+that moves by more than ``DEFAULT_THRESHOLD`` is marked and warned about; the run
+fails only on a rise beyond ``FAILING_RISE``, a drop beyond ``FAILING_DROP`` or a
+scenario no longer measured, so layout drift stays a warning while added or
+skipped work still stops the run. Every count that moved appears in one of two
+aligned tables, more instructions and fewer, each largest change first, and the
+counts that round to 0.00% are only counted below them. A reviewer accepts a
+failing change by labelling the pull request; the table goes to stdout and, in
+CI, to the job summary. Both builds run at the same time: an instruction count does
 not depend on the load next to it.
 
     python -m performance_tests.instructions.compare --base-python BASE --head-python HEAD [--only bfs,terminal_]
@@ -34,6 +34,10 @@ from performance_tests.instructions.workflows import workflow_scenario_names
 
 DEFAULT_THRESHOLD = 0.005
 """Below the layout noise of up to 1.1% on purpose: code generation changes of 0.5 to 1% matter."""
+FAILING_RISE = 0.015
+"""A rise beyond the layout noise of up to 1.1% fails the run (user decision 2026-11-01)."""
+FAILING_DROP = 0.10
+"""A drop this large fails the run: it can mean skipped work (user decision 2026-11-01)."""
 
 
 def _aligned(header: tuple[str, ...], rows: list[tuple[str, ...]], widths: list[int]) -> list[str]:
@@ -65,7 +69,7 @@ def comparison_table(base: dict[str, int], head: dict[str, int], threshold: floa
     for name in dict.fromkeys([*head, *base]):
         if name not in head:
             changed.append(name)
-            one_sided.append((name, f"{base[name]:,}", "not measured", "", "**changed**"))
+            one_sided.append((name, f"{base[name]:,}", "not measured", "", "**fails**"))
             continue
         if name not in base:
             one_sided.append((name, "new", f"{head[name]:,}", "", ""))
@@ -77,7 +81,7 @@ def comparison_table(base: dict[str, int], head: dict[str, int], threshold: floa
         marker = ""
         if abs(change) > threshold:
             changed.append(name)
-            marker = "**changed**"
+            marker = "**fails**" if _fails(change) else "**changed**"
         row = (name, f"{base[name]:,}", f"{head[name]:,}", f"{change:+.2%}", marker)
         (slower if change > 0 else faster).append((abs(change), row))
     header = ("scenario", "base", "head", "change", f"beyond {threshold:.1%}")
@@ -99,6 +103,20 @@ def comparison_table(base: dict[str, int], head: dict[str, int], threshold: floa
     return "\n".join(lines), changed
 
 
+def _fails(change: float) -> bool:
+    """Whether a relative change fails the run: a rise beyond ``FAILING_RISE`` or a drop beyond ``FAILING_DROP``."""
+    return change > FAILING_RISE or change < -FAILING_DROP
+
+
+def failing_names(base: dict[str, int], head: dict[str, int]) -> list[str]:
+    """The counts that fail the run, the rows marked **fails**: beyond the failing bounds, or no longer measured."""
+    return [
+        name
+        for name, base_count in base.items()
+        if name not in head or _fails(head[name] / base_count - 1 if base_count else float(head[name] != 0))
+    ]
+
+
 def _largest_first(rows: list[tuple[float, tuple[str, ...]]]) -> list[tuple[str, ...]]:
     """The rows ordered by the size of their change, largest first."""
     return [row for _size, row in sorted(rows, key=lambda size_and_row: -size_and_row[0])]
@@ -113,7 +131,7 @@ def selected_names(names: list[str], only: str) -> list[str]:
 
 
 def main() -> int:
-    """Run both builds, print the table and return 1 when a count moved beyond the threshold."""
+    """Run both builds, print the table, warn on a count beyond the threshold, return 1 on a failing one."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-python", required=True)
     parser.add_argument("--head-python", required=True)
@@ -133,16 +151,28 @@ def main() -> int:
     if summary:
         with Path(summary).open("a", encoding="utf-8") as summary_file:
             summary_file.write(report)
-    if changed:
-        print(failure_message(len(changed), arguments.threshold), file=sys.stderr)  # noqa: T201 — the failure reason
+    failing = failing_names(base, head)
+    if failing:
+        print(failure_message(len(failing)), file=sys.stderr)  # noqa: T201 — the failure reason
         return 1
+    if changed:
+        print(warning_message(len(changed), arguments.threshold))  # noqa: T201 — a GitHub warning annotation
     return 0
 
 
-def failure_message(changed_count: int, threshold: float) -> str:
-    """One line after the tables: how many counts moved; their names are the rows marked **changed**."""
+def warning_message(changed_count: int, threshold: float) -> str:
+    """A GitHub warning annotation: counts moved beyond the threshold but within the failing bounds."""
     return (
-        f"{changed_count} count(s) moved by more than {threshold:.1%}, marked **changed** in the tables above; "
+        f"::warning title=Instruction counts::{changed_count} count(s) moved by more than {threshold:.1%}, "
+        f"none beyond +{FAILING_RISE:.1%} or -{FAILING_DROP:.0%}; see the tables in the job summary"
+    )
+
+
+def failure_message(failing_count: int) -> str:
+    """One line after the tables: how many counts fail; their names are the rows marked **fails**."""
+    return (
+        f"{failing_count} count(s) rose by more than {FAILING_RISE:.1%}, fell by more than {FAILING_DROP:.0%} "
+        "or are no longer measured, marked **fails** in the tables above; "
         "review them and label the pull request accept-instruction-change"
     )
 

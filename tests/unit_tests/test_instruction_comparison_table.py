@@ -60,10 +60,40 @@ def test_every_table_row_starts_its_columns_at_the_same_character() -> None:
 
 
 def test_the_failure_message_is_one_line_without_the_scenario_names() -> None:
-    """The names are in the tables; the message after them only counts and says what to do."""
-    message = instruction_compare.failure_message(31, 0.005)
+    """The names are in the tables, marked **fails**; the message after them only counts and says what to do."""
+    message = instruction_compare.failure_message(3)
 
     assert message == (
-        "31 count(s) moved by more than 0.5%, marked **changed** in the tables above; "
-        "review them and label the pull request accept-instruction-change"
+        "3 count(s) rose by more than 1.5%, fell by more than 10% or are no longer measured, "
+        "marked **fails** in the tables above; review them and label the pull request accept-instruction-change"
+    )
+
+
+def test_only_a_rise_beyond_one_and_a_half_percent_or_a_drop_beyond_ten_fails() -> None:
+    """Layout drift up to about 1.1% only warns; added work, skipped work and a lost scenario fail."""
+    base = {"drift": 1000, "rise": 1000, "edge_rise": 1000, "drop": 1000, "large_drop": 1000, "gone": 1000}
+    head = {"drift": 1011, "rise": 1016, "edge_rise": 1015, "drop": 910, "large_drop": 899}
+
+    assert instruction_compare.failing_names(base, head) == ["rise", "large_drop", "gone"]
+
+
+def test_the_table_marks_failing_rows_apart_from_changed_ones() -> None:
+    """A row beyond the threshold but within the bounds is **changed**, one beyond the bounds **fails**."""
+    table, changed = instruction_compare.comparison_table(
+        {"drift": 1000, "rise": 1000}, {"drift": 1011, "rise": 1020}, 0.005
+    )
+    rows = {line.split("|")[1].strip(): line for line in table.splitlines() if line.startswith("| ")}
+
+    assert rows["drift"].rstrip(" |").endswith("**changed**")
+    assert rows["rise"].rstrip(" |").endswith("**fails**")
+    assert changed == ["drift", "rise"]
+
+
+def test_a_warning_inside_the_bounds_is_a_github_annotation() -> None:
+    """CI shows it on the run without failing it."""
+    message = instruction_compare.warning_message(2, 0.005)
+
+    assert message == (
+        "::warning title=Instruction counts::2 count(s) moved by more than 0.5%, none beyond +1.5% or -10%; "
+        "see the tables in the job summary"
     )
