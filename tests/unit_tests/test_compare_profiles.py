@@ -1,4 +1,4 @@
-"""The report half of dev_helpers/compare_profiles.py: reading callgrind dumps and building the tables."""
+"""The report half of dev_helpers/compare_profiles.py: the tables; reading dumps is test_instruction_buckets.py."""
 
 import importlib.util
 import sys
@@ -12,56 +12,13 @@ compare_profiles = importlib.util.module_from_spec(_SPEC)
 sys.modules["compare_profiles"] = compare_profiles
 _SPEC.loader.exec_module(compare_profiles)
 
-_DUMP = """# callgrind format
-version: 1
-positions: line
-events: Ir
-summary: 160
-
-ob=(6) /usr/lib/libpython.so
-fl=(1) ???
-fn=(7) PyLong_FromLong'2
-cfn=(8) caller'2
-calls=0 0
-0 53479350093
-
-ob=(9) /venv/_core.so
-fl=(2) /build/src/biconnectivity.c
-fn=(10) tarjan_entry
-12 100
-fi=(3) /build/src/terminals.h
-40 30
-fe=(2)
-+1 10
-cfn=(7)
-calls=1 0
-13 999
-fn=(11) report_block
-* 20
-"""
-
-
-def test_self_costs_skip_the_inclusive_cost_after_calls() -> None:
-    """The cost line after calls= is the callee's inclusive cost, not the caller's own."""
-    by_function, by_file = compare_profiles.self_costs(_DUMP)
-
-    assert by_function == {"biconnectivity.c:tarjan_entry": 140, "biconnectivity.c:report_block": 20}
-    assert sum(by_function.values()) == 160
-
-
-def test_self_costs_follow_inlined_files() -> None:
-    """fi= and fe= move the cost of inlined lines to their own file; fn= returns to the function's file."""
-    _by_function, by_file = compare_profiles.self_costs(_DUMP)
-
-    assert by_file == {"biconnectivity.c": 130, "terminals.h": 30}
-
 
 def test_totals_table_marks_changes_beyond_the_threshold_in_either_direction() -> None:
     """Largest change first; new and missing scenarios stay in the table without a change."""
     base = {"steady": 1000, "faster": 1000, "missing": 5}
     head = {"steady": 1004, "faster": 900, "new": 7}
 
-    rows, changed = compare_profiles.totals_table(base, head, 0.005)
+    rows, changed = compare_profiles.totals_table(base, head, lambda _name: 0.005)
 
     assert changed == ["faster"]
     assert rows[2:] == [

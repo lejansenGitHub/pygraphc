@@ -1,6 +1,6 @@
 #include "entry_points.h"
-#include "../helpers/parse.h"
-#include "../helpers/terminals.h"
+#include "../conversion/parse.h"
+#include "../algorithms/terminals.h"
 
 /* ── Neighborhood queries over the adjacency list (O(degree) instead of O(m)) ──
  *

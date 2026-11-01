@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- Instruction counts are split into three buckets by the source file of each
+  instruction: `algorithm` (`_core_src/algorithms/`, warns beyond 0.1%),
+  `boundary` (the rest of pygraphc's C sources, 0.5%) and `cpython` (CPython
+  and the C library, 0.5%); each bucket fails beyond +1.5% or -10%, so a slower
+  kernel fails even when the scenario's total hides it. CI builds with
+  `CFLAGS=-g` for that. The C core's
+  `helpers/` is `algorithms/`, which never reads or creates a Python object;
+  parsing and result building moved to `conversion/`, and the algorithms that
+  lived in entry points (BFS, edge paths, Tarjan, Dijkstra, cycle basis, DAG
+  longest path, the label kernels, the series-parallel fixpoint) moved to
+  `algorithms/`. The `_by_node_id` entry points share those kernels instead of
+  their own copies. Blocks are deduplicated in C, so biconnected components
+  need 34 to 44% fewer instructions.
 - `strongly_connected_components` builds its sets without triggering the cyclic
   GC: each set is created at its component's first node and stays untracked
   until the result list is built. On 1M single-node components the call no
@@ -278,6 +291,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and the fold-phase noise floor — taken from two engines that fold a
   byte-identical log — is several percent, the same order as the differences
   between the three C-backed engines.
+
+### Removed
+- The 13 C entry points of `pygraphc._core` the package never called: `bfs`,
+  `bridges`, `articulation_points`, `biconnected_components`,
+  `connected_components`, `connected_components_remapped`,
+  `connected_components_with_branches`, `dijkstra`, `shortest_path_lengths`,
+  `multi_source_dijkstra`, `graph_is_directed`, `sp_state_graph`,
+  `translate_edges`, each the index-based predecessor of a `_ctx` or
+  `_by_node_id` entry point with its own copy of the algorithm, and the two
+  benchmark scripts that still called them (`benchmarks/bench_all.py`,
+  `bench_remapped_overhead.py`).
 
 ### Fixed
 - Weighted algorithms (`shortest_path`, `shortest_path_lengths`,

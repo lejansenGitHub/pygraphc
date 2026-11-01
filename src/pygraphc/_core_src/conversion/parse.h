@@ -21,6 +21,13 @@ static inline int is_int64_format(const char *format, Py_ssize_t itemsize) {
 PYGRAPHC_INTERNAL int parse_edges(PyObject *edges_obj, EdgeList *edges);
 /* Node ids and edges of pairs of node ids, through the terminal parser; any other edge raises. Returns 0, or -1 with an exception set. */
 PYGRAPHC_INTERNAL int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *context);
+/*
+ * Node ids and edges of pairs of node ids into a graph on the stack, with its
+ * adjacency list when it has edges. Returns 0, or -1 with an exception set and
+ * nothing to release; release_graph_by_node_id frees the rest.
+ */
+PYGRAPHC_INTERNAL int parse_graph_by_node_id(PyObject *node_ids_obj, PyObject *edges_obj, int directed, GraphContext *graph);
+PYGRAPHC_INTERNAL void release_graph_by_node_id(GraphContext *graph);
 /* The node ids of a graph and their index map, with no edges yet. Returns 0, or -1 with an exception set. */
 PYGRAPHC_INTERNAL int node_id_parse_nodes(PyObject *node_ids_obj, NodeIdContext *context);
 /*

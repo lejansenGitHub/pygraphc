@@ -3,9 +3,10 @@
 CI's instruction tier says that a count moved; this says where. Both trees are
 built with debug info and measured by the same harness as CI
 (``tests/performance_tests/instructions``): the working tree's scenarios, run
-once by each build. The report lists every count, and for each one beyond the
-threshold the functions whose own instructions changed most. The full
-per-line annotation of every dump stays next to the report.
+once by each build, each count split into the same three buckets with the same
+thresholds. The report lists every count, and for each scenario with a bucket
+beyond its threshold the files and functions whose own instructions changed
+most. The full per-line annotation of every dump stays next to the report.
 
     python dev_helpers/compare_profiles.py --only bridges,articulation_points [--base origin/main]
 
@@ -18,19 +19,17 @@ included; untracked files are included unless git ignores them.
 import argparse
 import os
 import platform
-import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 IMAGE = "python:3.13-slim"
 CONTAINER_DIRECTORY = Path("/comparison")
 TREES = ("base", "head")
-DEFAULT_THRESHOLD = 0.005
-"""The threshold of CI's instruction tier."""
 FUNCTION_ROWS = 15
 
 MARKER_SOURCE = """#include <valgrind/callgrind.h>
@@ -54,66 +53,6 @@ print("\\n".join(selected_names([*SCENARIOS, *workflow_scenario_names()], sys.ar
 
 # ── Report: pure functions over callgrind dumps ──
 
-NAME_DEFINITION = re.compile(r"^\((\d+)\)(?: (.*))?$")
-
-
-def _resolve(names: dict[str, str], value: str) -> str:
-    """A compressed name: ``(id) name`` defines it, ``(id)`` refers back to it."""
-    match = NAME_DEFINITION.match(value)
-    if not match:
-        return value
-    identifier, name = match.groups()
-    if name is not None:
-        names[identifier] = name
-    return names.get(identifier, value)
-
-
-def self_costs(dump: str) -> tuple[dict[str, int], dict[str, int]]:
-    """Own instructions per function (``file:function``) and per source file of one callgrind dump.
-
-    The cost line after ``calls=`` is the inclusive cost of that call, not
-    the caller's own; ``callgrind_annotate`` misreads it for frames active
-    across a client-request dump, so the dump is read directly. ``fi=`` and
-    ``fe=`` name the file of inlined lines, so the per-file costs follow
-    inlining where the per-function costs follow the enclosing function.
-    """
-    file_names: dict[str, str] = {}
-    function_names: dict[str, str] = {}
-    by_function: dict[str, int] = {}
-    by_file: dict[str, int] = {}
-    function = function_file = line_file = "???"
-    skip_next_cost = False
-    for line in dump.splitlines():
-        if not line or line.startswith("#"):
-            continue
-        key, separator, value = line.partition("=")
-        if separator and key in {"fl", "fi", "fe", "cfi", "cfl"}:
-            name = _resolve(file_names, value).rsplit("/", 1)[-1]
-            if key == "fl":
-                function_file = line_file = name
-            elif key in {"fi", "fe"}:
-                line_file = name
-            continue
-        if separator and key in {"fn", "cfn"}:
-            name = re.sub(r"'\d+$", "", _resolve(function_names, value))
-            if key == "fn":
-                function = name
-                line_file = function_file
-            continue
-        if separator and key == "calls":
-            skip_next_cost = True
-            continue
-        if separator or not (line[0].isdigit() or line[0] in "+-*"):
-            continue
-        if skip_next_cost:
-            skip_next_cost = False
-            continue
-        cost = int(line.split()[-1])
-        function_key = f"{function_file}:{function}"
-        by_function[function_key] = by_function.get(function_key, 0) + cost
-        by_file[line_file] = by_file.get(line_file, 0) + cost
-    return by_function, by_file
-
 
 def relative_change(base: int, head: int) -> float:
     """Head over base minus one; a count appearing from zero is a full change."""
@@ -122,8 +61,10 @@ def relative_change(base: int, head: int) -> float:
     return head / base - 1
 
 
-def totals_table(base: dict[str, int], head: dict[str, int], threshold: float) -> tuple[list[str], list[str]]:
-    """Markdown rows of every scenario, largest change first, and the names beyond the threshold."""
+def totals_table(
+    base: dict[str, int], head: dict[str, int], threshold_of: Callable[[str], float]
+) -> tuple[list[str], list[str]]:
+    """Markdown rows of every count, largest change first, and the names beyond their threshold."""
     rows: list[tuple[float, str]] = []
     changed: list[str] = []
     for name in dict.fromkeys([*head, *base]):
@@ -134,7 +75,7 @@ def totals_table(base: dict[str, int], head: dict[str, int], threshold: float) -
             continue
         change = relative_change(base[name], head[name])
         marker = ""
-        if abs(change) > threshold:
+        if abs(change) > threshold_of(name):
             changed.append(name)
             marker = " **changed**"
         rows.append((abs(change), f"| {name} | {base[name]:,} | {head[name]:,} | {change:+.2%}{marker} |"))
@@ -232,8 +173,6 @@ def run_on_host(arguments: argparse.Namespace) -> int:
         "--inside-container",
         "--only",
         arguments.only,
-        "--threshold",
-        str(arguments.threshold),
         "--platform",
         container_platform,
     ]
@@ -292,14 +231,6 @@ def _measure(tree: str, python: Path, names: list[str], marker: Path) -> list[tu
     return list(zip(manifest.read_text(encoding="utf-8").splitlines(), dumps, strict=True))
 
 
-def _total(dump: Path) -> int:
-    for line in dump.read_text(encoding="utf-8").splitlines():
-        if line.startswith(("totals:", "summary:")):
-            return int(line.split()[1])
-    message = f"no instruction total in {dump}"
-    raise ValueError(message)
-
-
 def _annotate_lines(tree: str, name: str, dump: Path) -> None:
     """Write the per-line annotation of the C core's sources next to the dump."""
     sources = CONTAINER_DIRECTORY / tree / "src" / "pygraphc" / "_core_src"
@@ -313,7 +244,17 @@ def _annotate_lines(tree: str, name: str, dump: Path) -> None:
 
 
 def run_in_container(arguments: argparse.Namespace) -> int:
-    """Measure both builds and write report.md; return 1 when a count moved beyond the threshold."""
+    """Measure both builds and write report.md; return 1 when a count moved beyond its bucket's threshold."""
+    sys.path.insert(0, str(CONTAINER_DIRECTORY / "head" / "tests"))
+    from performance_tests.instructions.callgrind import (  # noqa: PLC0415 — the head tree's tests are importable only here
+        bucket_costs,
+        bucket_rows,
+        bucket_threshold,
+        self_costs,
+        short_source_name,
+        thresholds_text,
+    )
+
     _run(["apt-get", "-qq", "update"], quiet=True)
     _run(["apt-get", "-qq", "install", "-y", "gcc", "valgrind"], quiet=True)
     pythons = {tree: _build(tree) for tree in TREES}
@@ -326,25 +267,31 @@ def run_in_container(arguments: argparse.Namespace) -> int:
         capture_output=True,
     ).stdout.split()
 
-    totals: dict[str, dict[str, int]] = {tree: {} for tree in TREES}
+    buckets: dict[str, dict[str, dict[str, int]]] = {tree: {} for tree in TREES}
     functions: dict[str, dict[str, dict[str, int]]] = {tree: {} for tree in TREES}
     files: dict[str, dict[str, dict[str, int]]] = {tree: {} for tree in TREES}
     for tree in TREES:
         for name, dump in _measure(tree, pythons[tree], names, marker):
-            totals[tree][name] = totals[tree].get(name, 0) + _total(dump)
             _annotate_lines(tree, name, dump)
             by_function, by_file = self_costs(dump.read_text(encoding="utf-8"))
+            short_files: dict[str, int] = {}
+            for source_file, cost in by_file.items():
+                short_name = short_source_name(source_file)
+                short_files[short_name] = short_files.get(short_name, 0) + cost
             for merged, costs in (
+                (buckets[tree].setdefault(name, {}), bucket_costs(by_file)),
                 (functions[tree].setdefault(name, {}), by_function),
-                (files[tree].setdefault(name, {}), by_file),
+                (files[tree].setdefault(name, {}), short_files),
             ):
                 for entry, cost in costs.items():
                     merged[entry] = merged.get(entry, 0) + cost
 
-    rows, changed = totals_table(totals["base"], totals["head"], arguments.threshold)
-    heading = f"## Instruction counts on {arguments.platform} ({len(changed)} beyond {arguments.threshold:.1%})"
+    rows, changed = totals_table(bucket_rows(buckets["base"]), bucket_rows(buckets["head"]), bucket_threshold)
+    heading = (
+        f"## Instruction counts on {arguments.platform} ({len(changed)} beyond their threshold: {thresholds_text()})"
+    )
     report = [heading, "", *rows]
-    for name in changed:
+    for name in dict.fromkeys(row.rsplit(" [", 1)[0] for row in changed):
         report += ["", f"### {name}", "", *difference_table(files["base"][name], files["head"][name], "file")]
         report += ["", *difference_table(functions["base"][name], functions["head"][name], "function")]
     report += ["", "Per-line annotations: `profiles/base/` and `profiles/head/`, one file per dump."]
@@ -360,7 +307,6 @@ def main() -> int:
     parser.add_argument("--only", required=True, help="comma-separated substrings of scenario names, as compare.py")
     parser.add_argument("--base", default="origin/main", help="revision to compare against (default origin/main)")
     parser.add_argument("--output", default="profiles/comparison", help="directory for trees, dumps and report")
-    parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     parser.add_argument(
         "--platform", default="", help="container platform; default this machine's, linux/amd64 emulates x86-64"
     )

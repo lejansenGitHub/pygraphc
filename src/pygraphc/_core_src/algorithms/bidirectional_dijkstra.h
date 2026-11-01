@@ -24,6 +24,5 @@ PYGRAPHC_INTERNAL int bidirectional_dijkstra(int node_count, int edge_count, con
                                              const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask,
                                              const uint8_t *terminal_mask, const uint8_t *node_mask, int directed,
                                              int source, int target, BidirectionalPath *out);
-PYGRAPHC_INTERNAL PyObject *bidirectional_path_to_list(const BidirectionalPath *bidirectional_path, const NodeIdContext *context);
 
 #endif

@@ -1,6 +1,7 @@
 /* Parsing helpers: Python objects and buffers into the data models. */
 #include "parse.h"
-#include "terminals.h"
+#include "parse_terminals.h"
+#include "../algorithms/adjacency.h"
 
 /*
  * Try the buffer protocol first (numpy int32 array with shape (edge_count, 2)).
@@ -328,6 +329,24 @@ int node_id_parse(PyObject *node_ids_obj, PyObject *edges_obj, NodeIdContext *co
     }
     context->edges = graph.node_ids.edges;
     return 0;
+}
+
+int parse_graph_by_node_id(PyObject *node_ids_obj, PyObject *edges_obj, int directed, GraphContext *graph) {
+    memset(graph, 0, sizeof *graph);
+    graph->directed = directed;
+    if (node_id_parse(node_ids_obj, edges_obj, &graph->node_ids) < 0) return -1;
+    if (graph->node_ids.node_count == 0 || graph->node_ids.edges.edge_count == 0) return 0;
+    if (build_adjacency(graph->node_ids.node_count, &graph->node_ids.edges, NULL, &graph->adjacency, directed) < 0) {
+        node_id_context_free(&graph->node_ids);
+        return -1;
+    }
+    graph->has_adjacency = 1;
+    return 0;
+}
+
+void release_graph_by_node_id(GraphContext *graph) {
+    if (graph->has_adjacency) free_adjacency(&graph->adjacency);
+    node_id_context_free(&graph->node_ids);
 }
 
 int node_id_parse_split(PyObject *node_ids_obj, PyObject *first_endpoints_obj, PyObject *second_endpoints_obj,

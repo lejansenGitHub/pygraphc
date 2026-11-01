@@ -1,16 +1,22 @@
 """Compare the instruction counts of a branch build against its merge-base build.
 
 Both interpreters run the scenarios and workflow phases of this checkout, each
-importing its own installed pygraphc. Within one binary the counts are exact,
-but a changed C extension shifts memory addresses, and CPython's allocator
-then takes slightly different paths: work that did not change moves by up to
-about 1.1% (measured on a pure rename with identical machine code). A count
-that moves by more than ``DEFAULT_THRESHOLD`` is marked and warned about; the run
-fails only on a rise beyond ``FAILING_RISE``, a drop beyond ``FAILING_DROP`` or a
-scenario no longer measured, so layout drift stays a warning while added or
-skipped work still stops the run. Every count that moved appears in one of two
-aligned tables, more instructions and fewer, each largest change first, and the
-counts that round to 0.00% are only counted below them. A reviewer accepts a
+importing its own installed pygraphc. Every count is three counts, one per
+bucket of callgrind.py: the algorithm, pygraphc's boundary around it and
+CPython with the C library. Within one binary the counts are exact, but a
+changed C extension shifts memory addresses, and CPython's allocator then
+takes slightly different paths: work that did not change moves by up to about
+1.1% (measured on a pure rename with identical machine code), and that noise
+lives in the ``cpython`` bucket. pygraphc's own code does not depend on
+addresses, so the algorithm bucket warns at a tighter threshold
+(``BUCKET_THRESHOLDS`` in callgrind.py). A bucket that moves by more than its
+threshold is marked and warned about; the run fails only on a bucket rising
+beyond ``FAILING_RISE``, dropping beyond ``FAILING_DROP`` or no longer measured,
+so layout drift stays a warning while added or skipped work still stops the
+run, and a kernel that got slower fails even when the scenario's total hides it.
+Every count that moved appears in one of two aligned tables, more instructions
+and fewer, each largest change first, and the counts that round to 0.00% are
+only counted below them. A reviewer accepts a
 failing change by labelling the pull request; the table goes to stdout and, in
 CI, to the job summary. Both builds run at the same time: an instruction count does
 not depend on the load next to it.
@@ -25,15 +31,19 @@ change touches; without it everything is measured.
 import argparse
 import os
 import sys
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from performance_tests.instructions.callgrind import count_instructions
+from performance_tests.instructions.callgrind import (
+    bucket_rows,
+    bucket_threshold,
+    count_instructions,
+    thresholds_text,
+)
 from performance_tests.instructions.scenarios import SCENARIOS
 from performance_tests.instructions.workflows import workflow_scenario_names
 
-DEFAULT_THRESHOLD = 0.005
-"""Below the layout noise of up to 1.1% on purpose: code generation changes of 0.5 to 1% matter."""
 FAILING_RISE = 0.015
 """A rise beyond the layout noise of up to 1.1% fails the run (user decision 2026-11-01)."""
 FAILING_DROP = 0.10
@@ -53,8 +63,10 @@ def _aligned(header: tuple[str, ...], rows: list[tuple[str, ...]], widths: list[
     return [line(header), separator, *(line(row) for row in rows)]
 
 
-def comparison_table(base: dict[str, int], head: dict[str, int], threshold: float) -> tuple[str, list[str]]:
-    """Aligned Markdown tables of the counts that moved, and the names beyond the threshold.
+def comparison_table(
+    base: dict[str, int], head: dict[str, int], threshold_of: Callable[[str], float]
+) -> tuple[str, list[str]]:
+    """Aligned Markdown tables of the counts that moved, and the names beyond their threshold.
 
     One table for more instructions (slower), one for fewer (faster), one for
     scenarios measured on one side only; each sorted by the size of the
@@ -79,12 +91,12 @@ def comparison_table(base: dict[str, int], head: dict[str, int], threshold: floa
             unchanged_count += 1
             continue
         marker = ""
-        if abs(change) > threshold:
+        if abs(change) > threshold_of(name):
             changed.append(name)
             marker = "**fails**" if _fails(change) else "**changed**"
         row = (name, f"{base[name]:,}", f"{head[name]:,}", f"{change:+.2%}", marker)
         (slower if change > 0 else faster).append((abs(change), row))
-    header = ("scenario", "base", "head", "change", f"beyond {threshold:.1%}")
+    header = ("scenario", "base", "head", "change", "beyond threshold")
     groups = [
         ("More instructions (slower)", _largest_first(slower), True),
         ("Fewer instructions (faster)", _largest_first(faster), True),
@@ -131,20 +143,19 @@ def selected_names(names: list[str], only: str) -> list[str]:
 
 
 def main() -> int:
-    """Run both builds, print the table, warn on a count beyond the threshold, return 1 on a failing one."""
+    """Run both builds, print the table, warn on a count beyond its threshold, return 1 on a failing one."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base-python", required=True)
     parser.add_argument("--head-python", required=True)
-    parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     parser.add_argument("--only", default="", help="comma-separated substrings; measure only names containing one")
     arguments = parser.parse_args()
     names = selected_names([*SCENARIOS, *workflow_scenario_names()], arguments.only)
     with ThreadPoolExecutor(max_workers=2) as executor:
         base_counts = executor.submit(count_instructions, names, arguments.base_python)
         head_counts = executor.submit(count_instructions, names, arguments.head_python)
-        base, head = base_counts.result(), head_counts.result()
-    table, changed = comparison_table(base, head, arguments.threshold)
-    heading = f"Instruction counts against the merge base ({len(changed)} beyond {arguments.threshold:.1%})"
+        base, head = bucket_rows(base_counts.result()), bucket_rows(head_counts.result())
+    table, changed = comparison_table(base, head, bucket_threshold)
+    heading = f"Instruction counts against the merge base ({len(changed)} beyond their threshold: {thresholds_text()})"
     report = f"### {heading}\n\n{table}\n"
     print(report, flush=True)  # noqa: T201 — the table is the command's output
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -156,14 +167,15 @@ def main() -> int:
         print(failure_message(len(failing)), file=sys.stderr)  # noqa: T201 — the failure reason
         return 1
     if changed:
-        print(warning_message(len(changed), arguments.threshold))  # noqa: T201 — a GitHub warning annotation
+        print(warning_message(len(changed)))  # noqa: T201 — a GitHub warning annotation
     return 0
 
 
-def warning_message(changed_count: int, threshold: float) -> str:
-    """A GitHub warning annotation: counts moved beyond the threshold but within the failing bounds."""
+def warning_message(changed_count: int) -> str:
+    """A GitHub warning annotation: counts moved beyond their threshold but within the failing bounds."""
     return (
-        f"::warning title=Instruction counts::{changed_count} count(s) moved by more than {threshold:.1%}, "
+        f"::warning title=Instruction counts::{changed_count} count(s) moved beyond their bucket's threshold "
+        f"({thresholds_text()}), "
         f"none beyond +{FAILING_RISE:.1%} or -{FAILING_DROP:.0%}; see the tables in the job summary"
     )
 
