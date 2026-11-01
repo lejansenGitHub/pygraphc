@@ -49,8 +49,8 @@ OPERATIONS: dict[str, Operation] = {
     "bcc_edge_labels": lambda graph: graph.bcc_edge_labels,
     "masked_bcc_edge_labels": lambda graph: graph.without_terminals([(0, 0)]).bcc_edge_labels,
     "is_multigraph": lambda graph: lambda: graph.is_multigraph,
-    "with_edges": lambda graph: lambda: graph.without_terminals([(0, 0)]).with_edges(
-        [(0, graph.node_count)], [graph.edge_count]
+    "with_edges": lambda graph: (
+        lambda: graph.without_terminals([(0, 0)]).with_edges([(0, graph.node_count)], [graph.edge_count])
     ),
     "split_node": lambda graph: _split_node_zero(graph),
 }
