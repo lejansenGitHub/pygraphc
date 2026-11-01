@@ -502,9 +502,14 @@ PyObject *py_biconnected_components_by_node_id(PyObject *self, PyObject *args) {
  *   without multi-terminal edges they are the blocks, collected the same way. A simple path visits
  *   each node and each multi-terminal edge at most once, so the block-cut tree of
  *   these blocks gives the nodes on simple paths.
+ * - edge labels: the blocks, as a block id per edge in the order the blocks close
+ *   (D27). The link stack holds (link, edge) instead of (state, neighbor); a block
+ *   closed below an edge state without a child node holds one node and labels nothing,
+ *   so an edge whose active terminals all sit at one node keeps -1 like a self-loop.
  */
 
-enum { REPORT_BRIDGE_PAIRS, REPORT_CRITICAL_EDGES, REPORT_CRITICAL_NODES, REPORT_BLOCKS, REPORT_SIMPLE_PATH_BLOCKS };
+enum { REPORT_BRIDGE_PAIRS, REPORT_CRITICAL_EDGES, REPORT_CRITICAL_NODES, REPORT_BLOCKS, REPORT_SIMPLE_PATH_BLOCKS,
+       REPORT_EDGE_LABELS };
 
 static inline __attribute__((always_inline)) int report_bridge_pair(const GraphContext *graph, int edge_index,
                                                                      PyObject *result) {
@@ -567,6 +572,24 @@ failed:
     return -1;
 }
 
+/*
+ * Push a link: (state, neighbor), or for edge labels (link, its edge), a terminal link's edge being its
+ * edge state's; without multi-terminal edges a link is its edge, so only the link is kept.
+ */
+static inline __attribute__((always_inline)) void push_link(int *link_from, int *link_to, int *link_top, int state,
+                                                            int neighbor, int link, int node_count, int edge_count,
+                                                            const int mode, const int has_multi_terminal_edges) {
+    if (mode == REPORT_EDGE_LABELS) {
+        link_from[*link_top] = link;
+        if (has_multi_terminal_edges)
+            link_to[*link_top] = link >= edge_count ? (state >= node_count ? state : neighbor) - node_count : link;
+    } else {
+        link_from[*link_top] = state;
+        link_to[*link_top] = neighbor;
+    }
+    (*link_top)++;
+}
+
 static inline __attribute__((always_inline)) int tarjan_search(
     const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask, const uint8_t *terminal_mask,
     const uint8_t *node_mask, PyObject *result, const int mode, const int has_multi_terminal_edges) {
@@ -579,8 +602,9 @@ static inline __attribute__((always_inline)) int tarjan_search(
     size_t link_capacity = (size_t)edge_count + (has_multi_terminal_edges ? (size_t)terminals->terminal_count : 0);
 
     int *scratch = (int *)malloc(6 * state_count * sizeof(int));
-    const int collects_links = mode == REPORT_BLOCKS || mode == REPORT_SIMPLE_PATH_BLOCKS;
-    int *link_stack = collects_links ? (int *)malloc(2 * (link_capacity > 0 ? link_capacity : 1) * sizeof(int)) : NULL;
+    const int collects_links = mode == REPORT_BLOCKS || mode == REPORT_SIMPLE_PATH_BLOCKS || mode == REPORT_EDGE_LABELS;
+    const size_t link_columns = (mode == REPORT_EDGE_LABELS && !has_multi_terminal_edges) ? 1 : 2;
+    int *link_stack = collects_links ? (int *)malloc(link_columns * (link_capacity > 0 ? link_capacity : 1) * sizeof(int)) : NULL;
     uint8_t *critical_edges = (has_multi_terminal_edges && mode == REPORT_CRITICAL_EDGES) ? (uint8_t *)calloc((size_t)edge_count + 1, 1) : NULL;
     if (!scratch || (collects_links && !link_stack) || (has_multi_terminal_edges && mode == REPORT_CRITICAL_EDGES && !critical_edges)) {
         free(scratch); free(link_stack); free(critical_edges);
@@ -590,10 +614,11 @@ static inline __attribute__((always_inline)) int tarjan_search(
     int *discovery_time = scratch, *low_link = scratch + state_count, *stack = scratch + 2 * state_count;
     int *stack_next_slot = scratch + 3 * state_count, *parent_link = scratch + 4 * state_count;
     int *child_count = scratch + 5 * state_count;
-    int *link_from = link_stack, *link_to = link_stack ? link_stack + link_capacity : NULL;
+    int *link_from = link_stack, *link_to = (link_stack && link_columns == 2) ? link_stack + link_capacity : NULL;
     memset(discovery_time, -1, state_count * sizeof(int));
     const int counts_children = mode == REPORT_CRITICAL_NODES || has_multi_terminal_edges;
-    int timer = 0, link_top = 0;
+    int32_t *labels = mode == REPORT_EDGE_LABELS ? (int32_t *)PyBytes_AS_STRING(result) : NULL;
+    int timer = 0, link_top = 0, block_id = 0;
 
     for (int start = 0; start < node_count; start++) {
         if (discovery_time[start] != -1) continue;
@@ -630,14 +655,14 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 }
                 if (link == parent_link[state]) continue;
                 if (discovery_time[neighbor] == -1) {
-                    if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
+                    if (collects_links) push_link(link_from, link_to, &link_top, state, neighbor, link, node_count, edge_count, mode, has_multi_terminal_edges);
                     discovery_time[neighbor] = low_link[neighbor] = timer++; parent_link[neighbor] = link;
                     if (counts_children) { child_count[neighbor] = 0; if (!has_multi_terminal_edges) child_count[state]++; }
                     stack[++stack_top] = neighbor;
                     stack_next_slot[stack_top] = (has_multi_terminal_edges && neighbor >= node_count)
                         ? terminals->terminal_offsets[neighbor - node_count] : slot_offsets[neighbor];
                 } else if (!collects_links || discovery_time[neighbor] < discovery_time[state]) {
-                    if (collects_links) { link_from[link_top] = state; link_to[link_top] = neighbor; link_top++; }
+                    if (collects_links) push_link(link_from, link_to, &link_top, state, neighbor, link, node_count, edge_count, mode, has_multi_terminal_edges);
                     if (low_link[state] > discovery_time[neighbor]) low_link[state] = discovery_time[neighbor];
                 }
                 continue;
@@ -667,6 +692,16 @@ static inline __attribute__((always_inline)) int tarjan_search(
                 if (!parent_is_edge_state && parent_link[parent] != -1 && subtree_holds_node &&
                     low_link[state] >= discovery_time[parent] &&
                     PySet_Add(result, graph->node_ids.node_id_items[parent]) < 0) goto failed;
+            } else if (mode == REPORT_EDGE_LABELS) {
+                if (!parent_is_edge_state && low_link[state] >= discovery_time[parent]) {
+                    while (link_top > 0) {
+                        link_top--;
+                        if (subtree_holds_node)
+                            labels[has_multi_terminal_edges ? link_to[link_top] : link_from[link_top]] = (int32_t)block_id;
+                        if (link_from[link_top] == parent_link[state]) break;
+                    }
+                    block_id += subtree_holds_node;
+                }
             } else if (mode == REPORT_SIMPLE_PATH_BLOCKS && has_multi_terminal_edges) {
                 if (low_link[state] >= discovery_time[parent] &&
                     report_simple_path_block(graph, link_from, link_to, &link_top, parent, state, result) < 0) goto failed;
@@ -697,6 +732,18 @@ failed:
 }
 
 /*
+ * The edge-label instantiations, kept out of tarjan_entry: inlined there they changed the
+ * register allocation of the other modes, one or two instructions per node.
+ */
+static __attribute__((noinline)) int search_edge_labels(const GraphContext *graph, const uint8_t *two_terminal_edge_mask,
+                                                       const uint8_t *edge_mask, const uint8_t *terminal_mask,
+                                                       const uint8_t *node_mask, PyObject *result) {
+    return graph->terminals
+        ? tarjan_search(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, result, REPORT_EDGE_LABELS, 1)
+        : tarjan_search(graph, two_terminal_edge_mask, NULL, NULL, node_mask, result, REPORT_EDGE_LABELS, 0);
+}
+
+/*
  * Parse (capsule[, edge_mask, node_mask, terminal_mask]) and run tarjan_search in
  * the given mode, instantiated for the graph's kind of edges.
  */
@@ -715,9 +762,12 @@ static PyObject *tarjan_entry(PyObject *args, const int mode) {
         PyErr_SetString(PyExc_TypeError, "critical edges, critical nodes and blocks are not defined for directed graphs");
         return NULL;
     }
+    Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
     PyObject *result = mode == REPORT_CRITICAL_NODES ? PySet_New(NULL)
                      : mode == REPORT_SIMPLE_PATH_BLOCKS ? Py_BuildValue("(NN)", PyList_New(0), PyDict_New())
+                     : mode == REPORT_EDGE_LABELS ? PyBytes_FromStringAndSize(NULL, edge_count * (Py_ssize_t)sizeof(int32_t))
                      : PyList_New(0);
+    if (result && mode == REPORT_EDGE_LABELS) memset(PyBytes_AS_STRING(result), -1, (size_t)edge_count * sizeof(int32_t));
     if (!result || graph->node_ids.node_count == 0 || !graph->has_adjacency) return result;
 
     const uint8_t *edge_mask; Py_buffer edge_mask_buffer;
@@ -748,6 +798,9 @@ static PyObject *tarjan_entry(PyObject *args, const int mode) {
             ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_SIMPLE_PATH_BLOCKS, 1)
             : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_SIMPLE_PATH_BLOCKS, 0);
         break;
+    case REPORT_EDGE_LABELS:
+        status = search_edge_labels(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result);
+        break;
     default:
         status = graph->terminals
             ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_BLOCKS, 1)
@@ -763,3 +816,4 @@ PyObject *py_critical_edges_ctx(PyObject *self, PyObject *args) { return tarjan_
 PyObject *py_articulation_points_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, REPORT_CRITICAL_NODES); }
 PyObject *py_biconnected_components_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, REPORT_BLOCKS); }
 PyObject *py_simple_path_blocks_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, REPORT_SIMPLE_PATH_BLOCKS); }
+PyObject *py_biconnected_component_edge_labels_ctx(PyObject *self, PyObject *args) { return tarjan_entry(args, REPORT_EDGE_LABELS); }

@@ -265,9 +265,7 @@ def test_methods_of_later_stages_say_so() -> None:
     with pytest.raises(NotImplementedError, match="multi-terminal edges"):
         graph.all_edge_paths(1, 5)
     with pytest.raises(NotImplementedError, match="multi-terminal edges"):
-        graph.with_edges([(1, 3)])
-    with pytest.raises(NotImplementedError, match="multi-terminal edges"):
-        graph.without_edges([0]).bcc_edge_labels()
+        graph.without_edges([0]).quotient_edges(memoryview(bytes(20)).cast("i"))
 
 
 @pytest.mark.multi_terminal_edge_case
@@ -276,16 +274,13 @@ def test_methods_of_later_stages_refuse_a_terminal_mask_on_two_terminal_edges() 
     view = Graph([1, 2, 3], [(1, 2), (2, 3)]).without_terminals([(0, 1)])
 
     with pytest.raises(NotImplementedError, match="terminal masks"):
-        view.bcc_edge_labels()
+        view.all_edge_paths(1, 3)
 
 
 _METHODS_WITHOUT_TERMINAL_MASKS = {
-    "with_edges": lambda view: view.with_edges([(1, 3)]),
-    "split_node": lambda view: view.split_node(2, 9, [1]),
     "all_edge_paths": lambda view: view.all_edge_paths(1, 3),
     "quotient_edges": lambda view: view.quotient_edges(memoryview(bytes(12)).cast("i")),
     "series_parallel_reduce": lambda view: view.series_parallel_reduce(bytes(3), bytes(3)),
-    "bcc_edge_labels": lambda view: view.bcc_edge_labels(),
 }
 
 
@@ -297,18 +292,6 @@ def test_methods_of_later_stages_refuse_every_terminal_mask(method_name: str) ->
 
     with pytest.raises(NotImplementedError, match=f"{method_name} does not read terminal masks"):
         _METHODS_WITHOUT_TERMINAL_MASKS[method_name](view)
-
-
-@pytest.mark.multi_terminal_edge_case
-def test_pure_python_methods_refuse_multi_terminal_edges() -> None:
-    """D19: methods that never reach a C kernel check for multi-terminal edges themselves."""
-    graph = _three_terminal_edge_between_two_terminal_edges()
-
-    # --- Assert ---
-    with pytest.raises(NotImplementedError, match="is_multigraph"):
-        _ = graph.is_multigraph
-    with pytest.raises(NotImplementedError, match="split_node"):
-        graph.split_node(2, 9, [0])
 
 
 # ── Critical edges, critical nodes and blocks ──
@@ -891,3 +874,127 @@ def test_a_masked_terminal_opens_the_cycle_through_its_edge() -> None:
     assert ring.without_terminals([(0, 0)]).cycle_basis() == []
     assert [sorted(cycle) for cycle in ring.without_terminals([(0, 1)]).cycle_basis()] == [[1, 3, 4]]
     assert ring.without_nodes([2]).cycle_basis() == ring.cycle_basis()
+
+
+# ── Step D: parallel edges, rebuilt views and edge labels (D26, D27) ──
+
+
+def test_is_multigraph_finds_two_edges_at_the_same_terminal_nodes() -> None:
+    """D26: parallel edges have the same terminal nodes in any order, XGI's duplicate edges."""
+    # --- Assert ---
+    assert Graph([1, 2, 3], [(1, 2, 3), (3, 2, 1)]).is_multigraph
+    assert not Graph([1, 2, 3, 4], [(1, 2, 3), (1, 2, 4)]).is_multigraph
+    assert not _three_terminal_edge_between_two_terminal_edges().is_multigraph
+
+
+def test_is_multigraph_compares_a_directed_edge_per_side() -> None:
+    """D26: in-terminals with in-terminals, out-terminals with out-terminals."""
+    # --- Assert ---
+    assert Graph([1, 2, 3], [((1, 2), (3,)), ((2, 1), (3,))], directed=True).is_multigraph
+    assert not Graph([1, 2, 3], [((1, 2), (3,)), ((3,), (1, 2))], directed=True).is_multigraph
+    assert Graph([1, 2], [(1, 2), ((1,), (2,))], directed=True).is_multigraph
+
+
+def test_is_multigraph_reads_a_graph_built_from_source_and_target_lists() -> None:
+    """D26: the C terminal list holds every edge however it was given; before, src/dst graphs always said False."""
+    # --- Assert ---
+    assert Graph([1, 2], [1, 2], [2, 1]).is_multigraph
+    assert not Graph([1, 2, 3], [1, 2], [2, 3]).is_multigraph
+
+
+def test_with_edges_adds_a_multi_terminal_edge() -> None:
+    """D26: an added edge is written as for Graph() and its new terminal nodes join the view."""
+    view = _three_terminal_edge_between_two_terminal_edges().with_edges([(5, 6, 1)], [13])
+
+    # --- Assert ---
+    assert view.neighbors(6) == {1, 5}
+    assert view.cycle_basis() != []
+    assert _components(view.without_branches([13])) == [[1, 2, 3, 4, 5], [6]]
+
+
+def test_with_edges_keeps_the_terminal_mask_and_adds_active_terminals() -> None:
+    """D26: base terminals keep their indices, so the mask still names them; added terminals start active."""
+    view = _three_terminal_edge_between_two_terminal_edges().without_terminals([(1, 1)]).with_edges([(3, 5)], [13])
+
+    # --- Assert ---
+    assert view.neighbors(3) == {5}
+    assert view.neighbors(2) == {1, 4}
+
+
+def test_split_node_moves_every_terminal_of_an_edge_at_the_node() -> None:
+    """D26: an edge index moves all its terminals at the node, here both of (2, 2, 3)."""
+    graph = Graph([1, 2, 3], [(1, 2), (2, 2, 3)])
+    view = graph.split_node(2, 9, [1])
+
+    # --- Assert ---
+    assert view.neighbors(9) == {3}
+    assert view.degree(9) == 2
+    assert view.neighbors(2) == {1}
+
+
+def test_split_node_moves_one_terminal() -> None:
+    """D26: a terminal in terminals_to_new_node moves alone, e.g. to split a busbar at a coupler."""
+    graph = Graph([1, 2, 3], [(1, 2), (2, 2, 3)])
+    view = graph.split_node(2, 9, terminals_to_new_node=[(1, 1)])
+
+    # --- Assert ---
+    assert view.neighbors(9) == {2, 3}
+    assert view.neighbors(2) == {1, 3, 9}
+
+
+def test_split_node_reroutes_a_directed_edge_in_its_own_form() -> None:
+    """D26: (in_nodes, out_nodes) stays in that form; the moved terminal keeps its side."""
+    graph = Graph([1, 2, 3], [((1, 2), (3,))], directed=True)
+    view = graph.split_node(2, 9, [0])
+
+    # --- Assert ---
+    assert view.successors(9) == {3}
+    assert view.predecessors(3) == {1, 9}
+
+
+def test_split_node_carries_a_masked_terminal_with_its_edge() -> None:
+    """D26: the rerouted edge keeps the masks of the edge it replaces."""
+    view = _three_terminal_edge_between_two_terminal_edges().without_terminals([(1, 1)]).split_node(2, 9, [1])
+
+    # --- Assert ---
+    assert view.neighbors(9) == {4}
+    assert view.neighbors(3) == set()
+
+
+def test_split_node_refuses_a_terminal_elsewhere() -> None:
+    """D26: a terminal not at the node, or not of the edge, raises instead of moving something else."""
+    graph = _three_terminal_edge_between_two_terminal_edges()
+
+    # --- Assert ---
+    with pytest.raises(ValueError, match="terminal 1 of edge 1 is not incident to node 2"):
+        graph.split_node(2, 9, terminals_to_new_node=[(1, 1)])
+    with pytest.raises(IndexError, match="edge 1 has no terminal 3"):
+        graph.split_node(2, 9, terminals_to_new_node=[(1, 3)])
+
+
+def test_bcc_edge_labels_put_a_multi_terminal_edge_in_one_block() -> None:
+    """D27 on D14: a tree-shaped wide edge is one block; the two-terminal edges around it are bridges."""
+    labels = list(_three_terminal_edge_between_two_terminal_edges().bcc_edge_labels())
+
+    # --- Assert ---
+    assert len(set(labels)) == 3
+    assert min(labels) == 0
+
+
+def test_bcc_edge_labels_merge_the_edges_of_a_cycle_through_a_wide_edge() -> None:
+    """D27: the ring through (1, 2, 3) is one block, the edge (3, 5) another."""
+    labels = list(Graph([1, 2, 3, 4, 5], [(1, 2, 3), (3, 4), (4, 1), (3, 5)]).bcc_edge_labels())
+
+    # --- Assert ---
+    assert labels[0] == labels[1] == labels[2]
+    assert labels[3] not in {labels[0], -1}
+
+
+def test_bcc_edge_labels_under_a_terminal_mask() -> None:
+    """D27 with case 2: masking the ring's terminal at 1 opens it; an edge left at one node gets -1."""
+    ring = Graph([1, 2, 3, 4], [(1, 2, 3), (3, 4), (4, 1)])
+    labels = list(ring.without_terminals([(0, 0)]).bcc_edge_labels())
+
+    # --- Assert ---
+    assert len(set(labels)) == 3
+    assert list(ring.without_terminals([(0, 0), (0, 1)]).bcc_edge_labels())[0] == -1

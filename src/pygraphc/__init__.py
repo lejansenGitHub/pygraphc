@@ -6,6 +6,7 @@ import types
 from collections import deque
 from collections.abc import Collection, Generator, Hashable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import TYPE_CHECKING, Generic, NewType, TypeVar, cast, overload
 
 from pygraphc._core import all_edge_paths_ctx as _all_edge_paths_ctx
@@ -42,6 +43,7 @@ from pygraphc._core import incoming_edges_ctx as _incoming_edges_ctx
 from pygraphc._core import multi_source_dijkstra_by_node_id as _multi_source_dijkstra_by_node_id
 from pygraphc._core import multi_source_dijkstra_ctx as _multi_source_dijkstra_ctx
 from pygraphc._core import neighbors_ctx as _neighbors_ctx
+from pygraphc._core import out_terminal_offsets as _out_terminal_offsets
 from pygraphc._core import parse_graph as _parse_graph
 from pygraphc._core import predecessors_ctx as _predecessors_ctx
 from pygraphc._core import quotient_edges_ctx as _quotient_edges_ctx
@@ -555,6 +557,32 @@ def _rerouted_branch_ids(
     return [base_branch_ids[edge_idx] for edge_idx in edge_indices]
 
 
+def _is_in_and_out_form(edge: tuple[NodeIdT, NodeIdT], *, directed: bool) -> bool:
+    """Whether a directed edge is written ``(in_nodes, out_nodes)`` rather than ``(u, v)``."""
+    return directed and not isinstance(edge[0], int)
+
+
+def _terminal_node_ids_of(edge: tuple[NodeIdT, NodeIdT], *, directed: bool) -> list[NodeIdT]:
+    """The node id of every terminal of an edge as written for ``Graph()``, in terminal order."""
+    if _is_in_and_out_form(edge, directed=directed):
+        in_node_ids, out_node_ids = cast("tuple[Sequence[NodeIdT], Sequence[NodeIdT]]", edge)
+        return [*in_node_ids, *out_node_ids]
+    return list(edge)
+
+
+def _with_terminal_node_ids(
+    edge: tuple[NodeIdT, NodeIdT], terminal_node_ids: Sequence[NodeIdT], *, directed: bool
+) -> tuple[NodeIdT, NodeIdT]:
+    """The edge written as before, its terminals at the given node ids."""
+    if _is_in_and_out_form(edge, directed=directed):
+        in_terminal_count = len(cast("Sequence[NodeIdT]", edge[0]))
+        return cast(
+            "tuple[NodeIdT, NodeIdT]",
+            (tuple(terminal_node_ids[:in_terminal_count]), tuple(terminal_node_ids[in_terminal_count:])),
+        )
+    return cast("tuple[NodeIdT, NodeIdT]", tuple(terminal_node_ids))
+
+
 @dataclass(frozen=True)
 class ReductionLog:
     """Flat operation log of a node-preserving series-parallel reduction, as int32 views.
@@ -946,19 +974,26 @@ class Graph(Generic[NodeIdT, BranchIdT]):
 
     @property
     def is_multigraph(self) -> bool:
-        """True if any node pair has more than one edge (parallel edges)."""
-        if self._has_multi_terminal_edges:
-            raise NotImplementedError("is_multigraph is not available on graphs with multi-terminal edges")
-        edges = self._edges
-        if edges is None:
+        """True if two edges are parallel: their terminals sit at the same nodes.
+
+        The terminal nodes compare as multisets, on a directed graph per side
+        (in-terminals, out-terminals), so undirected (u, v) and (v, u) are parallel (D26).
+        """
+        terminal_nodes = memoryview(_terminal_nodes(self._graph_capsule)).cast("i")
+        terminal_offsets = memoryview(_terminal_offsets(self._graph_capsule)).cast("i")
+        seen: set[tuple[int, ...]] = set()
+        if self._directed:
+            out_terminal_offsets = memoryview(_out_terminal_offsets(self._graph_capsule)).cast("i")
+            for start, split, stop in zip(
+                terminal_offsets[:-1], out_terminal_offsets, terminal_offsets[1:], strict=True
+            ):
+                key = (*sorted(terminal_nodes[start:split]), -1, *sorted(terminal_nodes[split:stop]))
+                if key in seen:
+                    return True
+                seen.add(key)
             return False
-        seen: set[tuple[NodeIdT, NodeIdT]] = set()
-        for first_node_id, second_node_id in edges:
-            key = (
-                (first_node_id, second_node_id)
-                if self._directed
-                else (min(first_node_id, second_node_id), max(first_node_id, second_node_id))
-            )
+        for start, stop in pairwise(terminal_offsets):
+            key = tuple(sorted(terminal_nodes[start:stop]))
             if key in seen:
                 return True
             seen.add(key)
@@ -1071,7 +1106,9 @@ class Graph(Generic[NodeIdT, BranchIdT]):
 
         The base graph is not modified. The rebuilt graph keeps every base
         edge at its original index and appends ``added_edges`` after them, so
-        edge indices held by the caller stay valid. New nodes referenced in
+        edge indices held by the caller stay valid. An added edge is written as
+        for ``Graph()``, with any number of terminals, and its terminals follow
+        the base terminals. New nodes referenced in
         ``added_edges`` are appended after the base nodes. When the base graph
         carries ``branch_ids``, ``added_branch_ids`` must supply one id per
         added edge. Requires edge-pair construction.
@@ -1080,6 +1117,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
             self,
             excluded_edges=None,
             excluded_nodes=None,
+            excluded_terminals=None,
             added_edges=added_edges,
             added_branch_ids=added_branch_ids,
         )
@@ -1109,44 +1147,14 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         self,
         node_id: NodeIdT,
         new_node_id: NodeIdT,
-        edge_indices_to_new_node: Collection[int],
+        edge_indices_to_new_node: Collection[int] = (),
+        *,
+        terminals_to_new_node: Collection[tuple[int, int]] = (),
     ) -> GraphView[NodeIdT, BranchIdT]:
-        """Split a node by rerouting specified edges to a new node.
-
-        Creates a view where the edges identified by ``edge_indices_to_new_node``
-        are detached from ``node_id`` and reattached to ``new_node_id``.
-        The remaining edges of ``node_id`` stay in place.
-
-        Equivalent to::
-
-            graph.without_edges(edge_indices_to_new_node).with_edges(rerouted)
-
-        where *rerouted* replaces ``node_id`` with ``new_node_id`` in each edge.
-        """
-        if self._has_multi_terminal_edges:
-            raise NotImplementedError("split_node is not available on graphs with multi-terminal edges")
-        edges = self._edges
-        base_branch_ids = self._branch_ids
-        if edges is None:
-            raise ValueError("split_node requires edge-pair construction")  # noqa: TRY003
-        node_index_by_node_id = self._get_node_index_by_node_id()
-        if node_id not in node_index_by_node_id:
-            raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003
-        if new_node_id in node_index_by_node_id:
-            raise ValueError(f"node {new_node_id} already exists in the graph")  # noqa: TRY003
-        rerouted_edges: list[tuple[NodeIdT, NodeIdT]] = []
-        for edge_idx in edge_indices_to_new_node:
-            first_node_id, second_node_id = edges[edge_idx]
-            if first_node_id == node_id:
-                rerouted_edges.append((new_node_id, second_node_id))
-            elif second_node_id == node_id:
-                rerouted_edges.append((first_node_id, new_node_id))
-            else:
-                raise ValueError(  # noqa: TRY003
-                    f"edge {edge_idx} ({first_node_id}, {second_node_id}) is not incident to node {node_id}"
-                )
-        rerouted_branch_ids = _rerouted_branch_ids(base_branch_ids, edge_indices_to_new_node)
-        return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges, rerouted_branch_ids)
+        """Split a node by moving terminals at it to a new node, see ``GraphView.split_node``."""
+        return GraphView(self, ()).split_node(
+            node_id, new_node_id, edge_indices_to_new_node, terminals_to_new_node=terminals_to_new_node
+        )
 
     def all_edge_paths(
         self,
@@ -1368,8 +1376,10 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     def bcc_edge_labels(self) -> memoryview:
         """Biconnected component id per edge index as an int32 view.
 
-        Bridges are singleton components and self-loops, which belong to no
-        component, get -1.
+        The components are the blocks of ``biconnected_components``: an edge
+        with three or more terminals lies in exactly one (D14, D27). Bridges are
+        singleton components; self-loops and edges whose active terminals sit
+        at fewer than two nodes belong to no component and get -1.
         """
         self._require_undirected("bcc_edge_labels")
         result = _biconnected_component_edge_labels_ctx(self._graph_capsule)
@@ -1617,17 +1627,18 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         *,
         excluded_edges: bytearray | None,
         excluded_nodes: bytearray | None,
+        excluded_terminals: bytearray | None,
         added_edges: Sequence[tuple[NodeIdT, NodeIdT]],
         added_branch_ids: Sequence[BranchIdT] | None,
+        added_excluded_terminals: bytearray | None = None,
     ) -> GraphView[NodeIdT, BranchIdT]:
         """Rebuild with every base edge kept at its index and added edges appended.
 
-        Excluded edges and nodes stay masked in the new view instead of being
-        compacted away, which keeps edge indices, node indices and branch ids
-        of the base graph valid on the rebuilt view.
+        Excluded edges, nodes and terminals stay masked in the new view instead
+        of being compacted away, which keeps edge, node and terminal indices and
+        branch ids of the base graph valid on the rebuilt view. The terminals of
+        the added edges follow, masked as ``added_excluded_terminals`` says.
         """
-        if base._has_multi_terminal_edges:
-            raise NotImplementedError("with_edges is not available on graphs with multi-terminal edges")
         base_edges = base._edges
         if base_edges is None:
             raise ValueError("with_edges requires edge-pair construction")  # noqa: TRY003 — one clear sentence
@@ -1635,8 +1646,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         merged_nodes: list[NodeIdT] = list(base._node_ids)
         known: set[NodeIdT] = set(base._node_ids)
-        for first_node_id, second_node_id in added_edges:
-            for node_id in (first_node_id, second_node_id):
+        for added_edge in added_edges:
+            for node_id in _terminal_node_ids_of(added_edge, directed=base._directed):
                 if node_id not in known:
                     known.add(node_id)
                     merged_nodes.append(node_id)
@@ -1654,7 +1665,13 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             if excluded_nodes is not None
             else None
         )
-        view._excluded_terminals = None
+        added_terminal_count = rebuilt.terminal_count - base.terminal_count
+        view._excluded_terminals = (
+            (excluded_terminals if excluded_terminals is not None else bytearray(base.terminal_count))
+            + (added_excluded_terminals if added_excluded_terminals is not None else bytearray(added_terminal_count))
+            if excluded_terminals is not None or added_excluded_terminals is not None
+            else None
+        )
         return view
 
     def with_edges(
@@ -1664,15 +1681,15 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
     ) -> GraphView[NodeIdT, BranchIdT]:
         """Create a new view adding extra edges to this view.
 
-        The exclusions of this view are kept. Base edges keep their indices
-        and the added edges are appended, see ``Graph.with_edges``.
+        The exclusions of this view are kept, masked terminals included. Base
+        edges keep their indices and the added edges are appended, see
+        ``Graph.with_edges``.
         """
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("with_edges")
         return GraphView._with_additions(
             self._graph,
             excluded_edges=self._excluded_edges,
             excluded_nodes=self._excluded_nodes,
+            excluded_terminals=self._excluded_terminals,
             added_edges=added_edges,
             added_branch_ids=added_branch_ids,
         )
@@ -1845,18 +1862,19 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         self,
         node_id: NodeIdT,
         new_node_id: NodeIdT,
-        edge_indices_to_new_node: Collection[int],
+        edge_indices_to_new_node: Collection[int] = (),
+        *,
+        terminals_to_new_node: Collection[tuple[int, int]] = (),
     ) -> GraphView[NodeIdT, BranchIdT]:
-        """Split a node by rerouting specified edges to a new node.
+        """Split a node by moving terminals at it to a new node.
 
-        Creates a view where the edges identified by ``edge_indices_to_new_node``
-        are detached from ``node_id`` and reattached to ``new_node_id``.
-        The remaining edges of ``node_id`` stay in place.
+        An edge in ``edge_indices_to_new_node`` moves every terminal it has at
+        the node, so a self-loop moves whole; an ``(edge_index, terminal_index)``
+        in ``terminals_to_new_node`` moves that one terminal (D26). Each moved
+        edge is masked and appended rerouted, keeping its branch id and masked
+        terminals; the other edges of the node stay.
         """
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("split_node")
         edges = self._graph._edges
-        base_branch_ids = self._graph._branch_ids
         if edges is None:
             raise ValueError("split_node requires edge-pair construction")  # noqa: TRY003
         node_index_by_node_id = self._graph._get_node_index_by_node_id()
@@ -1864,19 +1882,73 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             raise ValueError(f"node {node_id} is not in the graph")  # noqa: TRY003
         if new_node_id in node_index_by_node_id:
             raise ValueError(f"node {new_node_id} already exists in the graph")  # noqa: TRY003
-        rerouted_edges: list[tuple[NodeIdT, NodeIdT]] = []
-        for edge_idx in edge_indices_to_new_node:
-            first_node_id, second_node_id = edges[edge_idx]
-            if first_node_id == node_id:
-                rerouted_edges.append((new_node_id, second_node_id))
-            elif second_node_id == node_id:
-                rerouted_edges.append((first_node_id, new_node_id))
-            else:
-                raise ValueError(  # noqa: TRY003
-                    f"edge {edge_idx} ({first_node_id}, {second_node_id}) is not incident to node {node_id}"
+        directed = self._graph._directed
+        moved_terminal_indices_by_edge_index = self._moved_terminal_indices(
+            node_id, edge_indices_to_new_node, terminals_to_new_node
+        )
+        rerouted_edges = [
+            _with_terminal_node_ids(
+                edges[edge_index],
+                [
+                    new_node_id if terminal_index in moved_terminal_indices else terminal_node_id
+                    for terminal_index, terminal_node_id in enumerate(
+                        _terminal_node_ids_of(edges[edge_index], directed=directed)
+                    )
+                ],
+                directed=directed,
+            )
+            for edge_index, moved_terminal_indices in moved_terminal_indices_by_edge_index.items()
+        ]
+        moved_edge_indices = list(moved_terminal_indices_by_edge_index)
+        excluded_terminals = self._excluded_terminals
+        moved_terminal_ranges = [self._graph._terminals_of(edge_index) for edge_index in moved_edge_indices]
+        return GraphView._with_additions(
+            self._graph,
+            excluded_edges=self.without_edges(moved_edge_indices)._excluded_edges,
+            excluded_nodes=self._excluded_nodes,
+            excluded_terminals=excluded_terminals,
+            added_edges=rerouted_edges,
+            added_branch_ids=_rerouted_branch_ids(self._graph._branch_ids, moved_edge_indices),
+            added_excluded_terminals=(
+                bytearray().join(
+                    excluded_terminals[terminals.start : terminals.stop] for terminals in moved_terminal_ranges
                 )
-        rerouted_branch_ids = _rerouted_branch_ids(base_branch_ids, edge_indices_to_new_node)
-        return self.without_edges(edge_indices_to_new_node).with_edges(rerouted_edges, rerouted_branch_ids)
+                if excluded_terminals is not None
+                else None
+            ),
+        )
+
+    def _moved_terminal_indices(
+        self,
+        node_id: NodeIdT,
+        edge_indices_to_new_node: Collection[int],
+        terminals_to_new_node: Collection[tuple[int, int]],
+    ) -> dict[int, set[int]]:
+        """The terminal indices ``split_node`` moves, by edge index in request order.
+
+        Raises on an edge or terminal not at the node.
+        """
+        edges = cast("Sequence[tuple[NodeIdT, NodeIdT]]", self._graph._edges)
+        directed = self._graph._directed
+        moved_terminal_indices_by_edge_index: dict[int, set[int]] = {}
+        for edge_index in edge_indices_to_new_node:
+            terminal_node_ids = _terminal_node_ids_of(edges[edge_index], directed=directed)
+            terminal_indices_at_node = {
+                terminal_index
+                for terminal_index, terminal_node_id in enumerate(terminal_node_ids)
+                if terminal_node_id == node_id
+            }
+            if not terminal_indices_at_node:
+                raise ValueError(f"edge {edge_index} {edges[edge_index]} is not incident to node {node_id}")  # noqa: TRY003
+            moved_terminal_indices_by_edge_index.setdefault(edge_index, set()).update(terminal_indices_at_node)
+        for edge_index, terminal_index in terminals_to_new_node:
+            terminal_node_ids = _terminal_node_ids_of(edges[edge_index], directed=directed)
+            if not 0 <= terminal_index < len(terminal_node_ids):
+                raise IndexError(f"edge {edge_index} has no terminal {terminal_index}")  # noqa: TRY003 — the indices are the message
+            if terminal_node_ids[terminal_index] != node_id:
+                raise ValueError(f"terminal {terminal_index} of edge {edge_index} is not incident to node {node_id}")  # noqa: TRY003
+            moved_terminal_indices_by_edge_index.setdefault(edge_index, set()).add(terminal_index)
+        return moved_terminal_indices_by_edge_index
 
     def all_edge_paths(
         self,
@@ -2027,12 +2099,8 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         Excluded edges and edges at an excluded node get -1.
         """
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("bcc_edge_labels")
         self._require_undirected("bcc_edge_labels")
-        result = _biconnected_component_edge_labels_ctx(
-            self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes
-        )
+        result = _biconnected_component_edge_labels_ctx(self._graph._graph_capsule, *self._masks())
         return memoryview(result).cast("i")
 
     def cycle_basis(self) -> list[list[NodeIdT]]:

@@ -190,9 +190,9 @@ def test_edge_case_18_methods_not_yet_on_terminals_refuse_the_whole_graph() -> N
     two_terminal_view = Graph([1, 2, 3], [(1, 2), (2, 3)]).without_terminals([(0, 1)])
 
     with pytest.raises(NotImplementedError, match="multi-terminal edges"):
-        graph.bcc_edge_labels()
+        graph.quotient_edges(memoryview(bytes(16)).cast("i"))
     with pytest.raises(NotImplementedError, match="terminal masks"):
-        two_terminal_view.bcc_edge_labels()
+        two_terminal_view.quotient_edges(memoryview(bytes(12)).cast("i"))
 
 
 def test_edge_case_19_negative_terminal_weights_need_every_pass_to_cost_at_least_zero() -> None:
@@ -286,3 +286,25 @@ def test_edge_case_30_cycles_are_those_of_the_incidence_graph() -> None:
     graph = Graph([1, 2, 3, 4], [(1, 2, 3), (2, 3, 4), (1, 4)])
 
     assert len(graph.cycle_basis()) == (3 + 3 + 2) - 4 - 3 + 1
+
+
+def test_edge_case_31_parallel_edges_compare_their_terminal_nodes_as_multisets() -> None:
+    """EC31: (1, 1, 2) and (1, 2) are not parallel; XGI's edges are node sets and cannot tell them apart."""
+    assert not Graph([1, 2], [(1, 1, 2), (1, 2)]).is_multigraph
+    assert Graph([1, 2], [(1, 1, 2), (2, 1, 1)]).is_multigraph
+    assert Graph([1], [(1,), (1,)]).is_multigraph
+
+
+def test_edge_case_32_split_node_moves_every_terminal_of_an_edge_at_the_node() -> None:
+    """EC32: a self-loop moves whole to the new node; before, only its first end moved, joining the two halves."""
+    graph = Graph([1, 2], [(1, 1), (1, 2)])
+
+    assert graph.split_node(1, 9, [0]).neighbors(9) == set()
+    assert graph.split_node(1, 9, terminals_to_new_node=[(0, 0)]).neighbors(9) == {1}
+
+
+def test_edge_case_33_an_edge_joining_no_two_nodes_has_no_biconnected_component() -> None:
+    """EC33: like a self-loop, an edge whose active terminals sit at one node gets -1, not a block of its own."""
+    labels = list(Graph([1, 2], [(1, 1, 1), (1, 2), (2,)]).bcc_edge_labels())
+
+    assert labels == [-1, 0, -1]
