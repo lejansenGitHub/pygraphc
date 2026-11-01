@@ -190,9 +190,9 @@ def _shortest_path_lengths() -> Measured:
     return lambda: graph.shortest_path_lengths(weights, 0)
 
 
-@register("multi_source_shortest_path_lengths/meshed_feeders_20k")
+@register("multi_source_shortest_path_lengths/tree_with_chords_20k")
 def _multi_source_shortest_path_lengths() -> Measured:
-    graph = _graph(shapes.meshed_feeders)
+    graph = _graph(shapes.tree_with_chords)
     weights = _unit_weights(graph)
     sources = list(range(0, SIZE, 1_000))
     return lambda: graph.multi_source_shortest_path_lengths(weights, sources)
@@ -277,48 +277,48 @@ def _weakly_connected_components() -> Measured:
 # ── Reduction ──
 
 
-def _feeder_multigraph(size: int) -> tuple[MultiGraph[int], set[int]]:
-    node_ids, edges = shapes.meshed_feeders(size)
+def _tree_with_chords_multigraph(size: int) -> tuple[MultiGraph[int], set[int]]:
+    node_ids, edges = shapes.tree_with_chords(size)
     preserved_nodes = set(random.Random(1).sample(node_ids, size // 100))
     return MultiGraph(node_ids, dict(enumerate(edges))), preserved_nodes
 
 
-@register("reduce_python/meshed_feeders_5k")
+@register("reduce_python/tree_with_chords_5k")
 def _reduce_python() -> Measured:
-    graph, preserved_nodes = _feeder_multigraph(5_000)
+    graph, preserved_nodes = _tree_with_chords_multigraph(5_000)
     return lambda: reduce(graph, preserved_nodes, engine="python")
 
 
-@register("reduce_moves/meshed_feeders_5k")
+@register("reduce_moves/tree_with_chords_5k")
 def _reduce_moves() -> Measured:
-    graph, preserved_nodes = _feeder_multigraph(5_000)
+    graph, preserved_nodes = _tree_with_chords_multigraph(5_000)
     return lambda: reduce(graph, preserved_nodes, engine="moves")
 
 
-@register("reduce_rounds/meshed_feeders_5k")
+@register("reduce_rounds/tree_with_chords_5k")
 def _reduce_rounds() -> Measured:
-    graph, preserved_nodes = _feeder_multigraph(5_000)
+    graph, preserved_nodes = _tree_with_chords_multigraph(5_000)
     return lambda: reduce(graph, preserved_nodes, engine="rounds")
 
 
-@register("scenario/meshed_feeders_20k")
+@register("scenario/tree_with_chords_20k")
 def _scenario() -> Measured:
-    graph, _preserved_nodes = _feeder_multigraph(SIZE)
+    graph, _preserved_nodes = _tree_with_chords_multigraph(SIZE)
     active = set(graph.endpoints)
     removed = set(range(0, len(active), 50))
     return lambda: scenario(graph, active, removed)
 
 
-@register("partition_from_components/meshed_feeders_20k")
+@register("partition_from_components/tree_with_chords_20k")
 def _partition_from_components() -> Measured:
-    graph, _preserved_nodes = _feeder_multigraph(SIZE)
+    graph, _preserved_nodes = _tree_with_chords_multigraph(SIZE)
     active = set(graph.endpoints)
     return lambda: Partition.from_components(graph, active)
 
 
-@register("tree_folds/meshed_feeders_5k")
+@register("tree_folds/tree_with_chords_5k")
 def _tree_folds() -> Measured:
-    graph, preserved_nodes = _feeder_multigraph(5_000)
+    graph, preserved_nodes = _tree_with_chords_multigraph(5_000)
     reduced = reduce(graph, preserved_nodes)
     trees = list(reduced.provenance.values())
     all_closed = dict.fromkeys(graph.endpoints, True)
@@ -406,9 +406,9 @@ def _parse_directed() -> Measured:
     return lambda: Graph(node_ids, edges, directed=True)
 
 
-@register("reduce_c/meshed_feeders_5k")
+@register("reduce_c/tree_with_chords_5k")
 def _reduce_c_small() -> Measured:
-    graph, preserved_nodes = _feeder_multigraph(5_000)
+    graph, preserved_nodes = _tree_with_chords_multigraph(5_000)
     return lambda: reduce(graph, preserved_nodes, engine="c")
 
 

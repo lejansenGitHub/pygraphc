@@ -82,7 +82,7 @@ def test_undirected_workflow_within_budget(
     operation: Callable[[list[int], Edges], object],
     budget_seconds: float,
 ) -> None:
-    """Parsing a million-node grid and answering one question must feel immediate."""
+    """Parsing a million-node graph and answering one question must feel immediate."""
     node_ids, edges = sparse_graph
     _assert_within_budget(lambda: operation(node_ids, edges), budget_seconds)
 
@@ -106,14 +106,14 @@ def test_weighted_workflow_within_budget(
     operation: Callable[[list[int], Edges, array.array[float]], object],
     budget_seconds: float,
 ) -> None:
-    """Weighted queries on a million-node grid, weights handed over as a float buffer."""
+    """Weighted queries on a million-node graph, weights handed over as a float buffer."""
     node_ids, edges = sparse_graph
     weights = _weights(len(edges))
     _assert_within_budget(lambda: operation(node_ids, edges, weights), budget_seconds)
 
 
-def test_excluding_one_edge_from_a_parsed_grid_is_instant(sparse_graph: tuple[list[int], Edges]) -> None:
-    """An N-1 loop creates one view per outage; creating it must not cost a parse."""
+def test_excluding_one_edge_from_a_parsed_graph_is_instant(sparse_graph: tuple[list[int], Edges]) -> None:
+    """A loop that removes one edge at a time creates one view per edge; creating it must not cost a parse."""
     graph = Graph(*sparse_graph)
     _assert_within_budget(lambda: graph.without_edges([0]), 0.01)
 
@@ -145,9 +145,9 @@ def test_directed_workflow_within_budget(
 # ── Reduction ──
 
 
-def test_reducing_a_million_node_grid_within_budget() -> None:
-    """The node-preserving reduction of a distribution-grid-shaped graph, one preserved node per hundred nodes."""
-    node_ids, edges = shapes.meshed_feeders(NODE_COUNT)
+def test_reducing_a_million_node_graph_within_budget() -> None:
+    """The node-preserving reduction of a tree with chords, one preserved node per hundred nodes."""
+    node_ids, edges = shapes.tree_with_chords(NODE_COUNT)
     graph = MultiGraph(node_ids, dict(enumerate(edges)))
     preserved_nodes = set(random.Random(1).sample(node_ids, NODE_COUNT // 100))
 

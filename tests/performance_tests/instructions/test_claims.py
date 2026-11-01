@@ -39,7 +39,7 @@ CLAIMS: list[tuple[str, str, float]] = [
     ),
     ("connected_components_with_branch_ids/sparse_random_20k", "connected_components/sparse_random_20k", 3.5),
     ("parse_directed/sparse_random_20k", "parse/sparse_random_20k", 1.5),
-    ("reduce_c/meshed_feeders_5k", "reduce_python/meshed_feeders_5k", 0.5),
+    ("reduce_c/tree_with_chords_5k", "reduce_python/tree_with_chords_5k", 0.5),
     ("shortest_path_float_buffer/sparse_random_20k", "shortest_path/sparse_random_20k", 1.0),
     ("workflow_components_with_branch_ids/branches_20k", "workflow_components/branches_20k", 1.5),
 ]

@@ -25,7 +25,7 @@ def _two_hubs(node_count: int) -> tuple[list[int], list[tuple[int, int]]]:
 
 
 SHAPES: dict[str, Callable[[int], tuple[list[int], list[tuple[int, int]]]]] = {
-    "meshed_feeders": shapes.meshed_feeders,
+    "tree_with_chords": shapes.tree_with_chords,
     "path": shapes.path,
     "star": shapes.star,
     "two_hubs": _two_hubs,
@@ -89,7 +89,7 @@ def test_tree_folds_scale_linearly(shape_name: str) -> None:
     assert_scales_linearly(f"tree_folds/{shape_name}", measure_scaling(prepare))
 
 
-@pytest.mark.parametrize("shape_name", ["meshed_feeders", "lattice"])
+@pytest.mark.parametrize("shape_name", ["tree_with_chords", "lattice"])
 def test_scenario_and_partition_scale_linearly(shape_name: str) -> None:
     """Masking removed edges and labelling components is one pass over the graph."""
 

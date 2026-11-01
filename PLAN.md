@@ -4,7 +4,7 @@
 
 pygraphc is a general-purpose, domain-free graph algorithm library optimized for **performance and low memory consumption**. Zero runtime dependencies. Public on PyPI.
 
-No domain knowledge — pygraphc knows about nodes, edges, and weights. What those represent (electrical grids, social networks, road maps) is the caller's business.
+No domain knowledge — pygraphc knows about nodes, edges, and weights. What those represent (transport networks, social networks, dependency graphs) is the caller's business.
 
 - **C tier**: Primitive graph algorithms implemented in C for speed. These are the hot inner loops — union-find, BFS, biconnected components, etc. Exposed as private `_core` functions. Memory is allocated once per call, freed on return — no long-lived allocations.
 - **Python tier**: Meta/composite algorithms that orchestrate multiple C primitives. Written in Python, calling into C kernels. Part of the public API but not performance-critical themselves.
@@ -728,8 +728,8 @@ multiple edges connect the same pair).
 - **Network reliability**: How many independent routes exist between A and B?
 - **Routing with redundancy**: Find all ways to route through a network without
   reusing any physical link.
-- **Switch configuration**: Find all switch-opening sequences that connect a source
-  to a target (the N-1 use case, but the algorithm is domain-free).
+- **Failover planning**: Find all ways to reconnect a source to a target after a
+  link fails.
 
 **Algorithm**: Stack-based DFS with per-edge visit tracking.
 
@@ -768,11 +768,10 @@ while stack not empty:
 Some callers need **node-simple, edge-disjoint** paths: each edge used at most once
 AND each node entered at most once. This is stricter than default (edge-only) mode.
 
-Discovered during N-1 migration: the existing `all_edge_paths_multigraph` in igp-mono
-uses `max_number_of_visits = 1` per node, meaning each node (including source) can be
-entered via an edge at most once. Without this constraint, pygraphc finds extra paths
-that revisit intermediate nodes via parallel edges, producing incorrect results for
-the N-1 switch configuration algorithm.
+Discovered while porting a first caller: its previous implementation let each node
+(including the source) be entered via an edge at most once. Without this constraint,
+pygraphc finds extra paths that revisit intermediate nodes via parallel edges, which
+that caller counts as wrong.
 
 The node-simple constraint is domain-free: "find all paths where no physical link
 and no junction point is reused" is a standard routing problem.
@@ -910,15 +909,15 @@ Phase 6c (all-edge-paths) ── C changes, benefits from 6a (parallel edges)
 
 ### What Remains Outside pygraphc After Phase 6
 
-Two N-1 operations are too domain-specific for a generic graph library:
+Two operations of that first caller are too application-specific for a generic graph library:
 
-1. **Edge contraction with nesting** (`concentrate_parallel_and_series_edges`):
+1. **Edge contraction with nesting**:
    Iteratively collapses parallel and series edges while building a recursive
-   NestedEdgeIds structure for path reconstruction. This is a domain-specific
+   nested structure of edge ids for path reconstruction. This is a domain-specific
    graph simplification — the "nesting" semantics (parallel = OR, series = AND)
    have no general graph-theory equivalent.
 
-2. **Node splitting with edge redistribution** (`_update_graph` / `_revert_graph`):
+2. **Node splitting with edge redistribution**:
    Replaces one node with two nodes and redistributes edges based on partition
    membership. This is a graph mutation that conflicts with pygraphc's immutable-view
    philosophy.

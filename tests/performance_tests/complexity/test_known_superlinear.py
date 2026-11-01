@@ -35,7 +35,7 @@ def _all_cases() -> set[str]:
         for shape in test_reduction_scaling.SHAPES
     }
     folds = {f"tree_folds/{shape}" for shape in ("path", "two_hubs")}
-    partitions = {f"scenario_and_partition/{shape}" for shape in ("meshed_feeders", "lattice")}
+    partitions = {f"scenario_and_partition/{shape}" for shape in ("tree_with_chords", "lattice")}
     multi_terminal = {
         f"terminals/{operation}/{shape}"
         for operation in [*test_multi_terminal_scaling.OPERATIONS, "parse"]
