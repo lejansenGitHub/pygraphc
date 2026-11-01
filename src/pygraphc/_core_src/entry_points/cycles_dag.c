@@ -40,20 +40,10 @@ PyObject *py_topological_sort_by_node_id(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
 
     GraphContext graph;
-    memset(&graph, 0, sizeof graph);
-    graph.directed = 1;
-    if (node_id_parse(node_ids_obj, edges_obj, &graph.node_ids) < 0) return NULL;
-    if (graph.node_ids.node_count > 0 && graph.node_ids.edges.edge_count > 0) {
-        if (build_adjacency(graph.node_ids.node_count, &graph.node_ids.edges, NULL, &graph.adjacency, 1) < 0) {
-            node_id_context_free(&graph.node_ids);
-            return NULL;
-        }
-        graph.has_adjacency = 1;
-    }
+    if (parse_graph_by_node_id(node_ids_obj, edges_obj, 1, &graph) < 0) return NULL;
     TerminalMask no_terminal_mask = {NULL, NULL, {0}};
     PyObject *result = topological_sort_of(&graph, NULL, &no_terminal_mask, NULL);
-    if (graph.has_adjacency) free_adjacency(&graph.adjacency);
-    node_id_context_free(&graph.node_ids);
+    release_graph_by_node_id(&graph);
     return result;
 }
 

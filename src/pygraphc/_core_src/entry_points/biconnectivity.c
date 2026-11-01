@@ -2,7 +2,6 @@
 #include "entry_points.h"
 #include "../conversion/parse.h"
 #include "../conversion/parse_terminals.h"
-#include "../algorithms/adjacency.h"
 #include "../algorithms/biconnectivity.h"
 
 /* The empty result of a mode: a set of critical nodes, (blocks, edge indices by block), or a list. */
@@ -126,18 +125,9 @@ static PyObject *tarjan_by_node_id(PyObject *args, TarjanMode mode, int names_no
     PyObject *node_ids_obj, *edges_obj;
     if (!PyArg_ParseTuple(args, "OO", &node_ids_obj, &edges_obj)) return NULL;
     GraphContext graph;
-    memset(&graph, 0, sizeof graph);
-    if (node_id_parse(node_ids_obj, edges_obj, &graph.node_ids) < 0) return NULL;
-    if (graph.node_ids.node_count > 0 && graph.node_ids.edges.edge_count > 0) {
-        if (build_adjacency(graph.node_ids.node_count, &graph.node_ids.edges, NULL, &graph.adjacency, 0) < 0) {
-            node_id_context_free(&graph.node_ids);
-            return NULL;
-        }
-        graph.has_adjacency = 1;
-    }
+    if (parse_graph_by_node_id(node_ids_obj, edges_obj, 0, &graph) < 0) return NULL;
     PyObject *result = tarjan_result(&graph, NULL, NULL, NULL, NULL, mode, names_node_pairs);
-    if (graph.has_adjacency) free_adjacency(&graph.adjacency);
-    node_id_context_free(&graph.node_ids);
+    release_graph_by_node_id(&graph);
     return result;
 }
 
