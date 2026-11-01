@@ -50,4 +50,13 @@ PYGRAPHC_INTERNAL int tarjan_report(const GraphContext *graph, const uint8_t *tw
                                     TarjanMode mode, TarjanReport *report);
 PYGRAPHC_INTERNAL void release_tarjan_report(TarjanReport *report);
 
+/*
+ * Biconnected component id of every edge into labels (edge_count entries), numbered
+ * in the order the components complete in the depth-first search; a bridge is a
+ * singleton component. Masked edges, edges at a masked node and self-loops get -1.
+ * Graphs of two-terminal edges only. Returns 0, or -1 with MemoryError set.
+ */
+PYGRAPHC_INTERNAL int biconnected_edge_labels(const GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask,
+                                              int32_t *labels);
+
 #endif

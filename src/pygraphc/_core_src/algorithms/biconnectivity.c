@@ -203,3 +203,60 @@ int tarjan_report(const GraphContext *graph, const uint8_t *two_terminal_edge_ma
             : tarjan_search(graph, two_terminal_edge_mask, NULL, NULL, node_mask, report, TARJAN_BLOCKS, 0);
     }
 }
+
+int biconnected_edge_labels(const GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask, int32_t *labels) {
+    int node_count = graph->node_ids.node_count;
+    Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
+    memset(labels, -1, (size_t)edge_count * sizeof(int32_t));
+    if (!graph->has_adjacency) return 0;
+    const AdjacencyList *adjacency = &graph->adjacency;
+    int *scratch = (int *)malloc(5 * (size_t)node_count * sizeof(int));
+    int *edge_stack = (int *)malloc((size_t)edge_count * sizeof(int));
+    if (!scratch || !edge_stack) { free(scratch); free(edge_stack); PyErr_NoMemory(); return -1; }
+    int *discovery_time = scratch, *low_link = scratch + node_count, *stack = scratch + 2*node_count;
+    int *stack_next_slot = scratch + 3*node_count, *parent_edge = scratch + 4*node_count;
+    memset(discovery_time, -1, (size_t)node_count * sizeof(int));
+    int timer = 0, edge_stack_top = 0, component_id = 0;
+
+    for (int start = 0; start < node_count; start++) {
+        if (discovery_time[start] != -1) continue;
+        if (node_mask && node_mask[start]) continue;
+        int stack_top = 0;
+        stack[0] = start; stack_next_slot[0] = adjacency->offset[start];
+        discovery_time[start] = low_link[start] = timer++; parent_edge[start] = -1;
+        while (stack_top >= 0) {
+            int node = stack[stack_top];
+            if (stack_next_slot[stack_top] < adjacency->offset[node + 1]) {
+                int slot = stack_next_slot[stack_top]++;
+                int neighbor = adjacency->neighbors[slot], edge_index = adjacency->edge_indices[slot];
+                if (edge_mask && edge_mask[edge_index]) continue;
+                if (node_mask && node_mask[neighbor]) continue;
+                if (edge_index == parent_edge[node]) continue;
+                if (discovery_time[neighbor] == -1) {
+                    edge_stack[edge_stack_top++] = edge_index;
+                    discovery_time[neighbor] = low_link[neighbor] = timer++; parent_edge[neighbor] = edge_index;
+                    stack[++stack_top] = neighbor; stack_next_slot[stack_top] = adjacency->offset[neighbor];
+                } else if (discovery_time[neighbor] < discovery_time[node]) {
+                    edge_stack[edge_stack_top++] = edge_index;
+                    if (low_link[node] > discovery_time[neighbor]) low_link[node] = discovery_time[neighbor];
+                }
+            } else {
+                if (stack_top > 0) {
+                    int parent = stack[stack_top-1];
+                    if (low_link[parent] > low_link[node]) low_link[parent] = low_link[node];
+                    if (low_link[node] >= discovery_time[parent]) {
+                        while (edge_stack_top > 0) {
+                            int popped_edge = edge_stack[--edge_stack_top];
+                            labels[popped_edge] = (int32_t)component_id;
+                            if (popped_edge == parent_edge[node]) break;
+                        }
+                        component_id++;
+                    }
+                }
+                stack_top--;
+            }
+        }
+    }
+    free(scratch); free(edge_stack);
+    return 0;
+}
