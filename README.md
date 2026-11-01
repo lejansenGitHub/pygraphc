@@ -482,7 +482,7 @@ as a tuple of node ids: a pair is a two-terminal edge, exactly as before, and a 
 is an edge with that many terminals. The position in the tuple is the terminal index,
 so terminals are addressed as `(edge_index, terminal_index)`, never by node, and two
 terminals of one edge at the same node stay distinguishable. pygraphc knows nothing
-about what a terminal is; which terminal is a transformer's primary is the caller's
+about what a terminal stands for; what each terminal index means is the caller's
 mapping.
 
 ```python
@@ -560,14 +560,13 @@ component of its active end.
 Weighted algorithms take one weight per terminal, in edge order and, within an
 edge, in terminal order. A **pass** through an edge goes from one terminal to another
 terminal (directed: from an in-terminal to an out-terminal) and costs the entry terminal's
-weight plus the exit terminal's weight, which is how the star equivalent of a
-three-winding transformer is written down. Two-terminal edges keep their single
+weight plus the exit terminal's weight. Two-terminal edges keep their single
 weight per edge: weights with one entry per edge are read as before, and the
 per-terminal form is only needed when a graph has an edge with more than two terminals.
 
-A terminal weight may be negative, as one arm of a star equivalent can be, as long
-as every pass costs at least 0: every two terminals of an edge (directed: every
-in-terminal and out-terminal) must sum to at least 0, otherwise the call raises
+A terminal weight may be negative as long as every pass costs at least 0: every
+two terminals of an edge (directed: every in-terminal and out-terminal) must sum
+to at least 0, otherwise the call raises
 `ValueError`. A path never leaves an edge through the terminal it entered by, and
 after leaving an edge through its negative terminal it does not pass that edge
 again right there, since either would count the negative weight twice:
@@ -716,7 +715,7 @@ before, with no added cost per call.
 #### Open points
 
 - **A "touching" relation** (an edge with a terminal, active or not, at a node of
-  a component it is not a member of, such as an open switch at the boundary)
+  a component it is not a member of)
   is not part of this pull request.
 - Every answer that could reasonably go another way is listed in
   [Multi-terminal edge case behavior](#multi-terminal-edge-case-behavior-up-for-discussion)
@@ -1678,23 +1677,22 @@ implementing; the D and O numbers refer to `docs/multi_terminal-decisions.md`.
 ### What the literature says about these cases
 
 A web search on 2026-10-31 checked each entry against hypergraph theory,
-hypergraph libraries and power system tools. Sources:
+graph and hypergraph libraries. Sources:
 - [DPP]: Dewar, Pike, Proos, *Connectivity in Hypergraphs*, arXiv:1611.07087.
 - [BS]: Bahmanian, Šajna, *Connection and separation in hypergraphs*, Theory and Applications of Graphs 2(2), 2015.
 - [GLNP]: Gallo, Longo, Nguyen, Pallottino, *Directed hypergraphs and applications*, Discrete Applied Mathematics 42, 1993.
-- Libraries and tools: HyperNetX, XGI, pandapower, PowerModels.jl, OpenDSS, and CIM (IEC 61970).
+- Libraries: HyperNetX, XGI, networkx and pgRouting.
 
 **Supported**
 - **1–3:** an edge without an active terminal belongs to no component, and one with a single active terminal stays with its node.
   - [BS]: empty edges do not affect connectivity.
   - [DPP]: weak vertex deletion keeps the shrunken edge.
-  - CIM `Terminal.connected` and OpenDSS `Open` open a single terminal.
 - **8:** OR semantics is the "path" connectivity of [GLNP]. AND semantics would be their B-connectivity.
 - **12:** a multi-terminal edge can be critical while lying on a cycle. These are the weak cut edges of [BS], Def. 3.15–3.18.
 - **13:** blocks never split at a multi-terminal edge. [BS], Thm. 3.37 and 3.41: the blocks of a hypergraph are not the blocks of its incidence graph.
 - **15:** using each edge at most once is a Berge path: distinct nodes and distinct edges.
 - **17–18:** raising instead of answering partially matches networkx's `not_implemented_for`.
-- **19:** negative star impedances of three-winding transformers are a known artefact; the pair sums are the measured short-circuit impedances, which are positive.
+- **19:** in a star expansion only the pass costs, the sums of two terminal weights, are observable. Pass costs 1, 1 and 4 need terminal weights −1, 2 and 2, so a negative terminal weight with non-negative passes is consistent.
 - **20:** no U-turn matches the walk definition of [DPP] and turn-restricted routing (pgRouting TRSP).
 
 **Mixed or without a convention**
@@ -1704,8 +1702,8 @@ hypergraph libraries and power system tools. Sources:
 - **5:** networkx leaves a self-loop node out of every block. [BS] (Lemma 3.31) makes a single-node edge its own block, so that blocks cover every edge.
 - **6:** [DPP] keeps edges as multisets, which matches distinct terminals at one node. [BS], XGI and HyperNetX merge repeated nodes.
 - **7:** networkx and XGI create unknown nodes. pygraphc rejects them because its node set is fixed.
-- **10:** per-terminal weights are common: HyperNetX incidence weights, CIM transformer ends. Switching the whole graph to per-terminal weights has no precedent.
-- **11:** pandapower uses the same entry + exit rule for three windings. A star is exact only up to three windings; CIM requires mesh impedances for more.
+- **10:** per-terminal weights exist as HyperNetX incidence weights. Switching the whole graph to per-terminal weights has no precedent.
+- **11:** entry + exit is the cost of a pass in the star expansion of an edge. With k terminals a star has k weights but there are k(k − 1)/2 passes, so it is exact for any pass costs only up to three terminals; more need a weight per pair.
 - **16:** matching by node set follows HyperNetX and XGI. Ignoring direction departs from networkx's `has_edge(u, v)`.
 - **21–22:** banning only the immediate second pass computes a shortest *non-backtracking walk* in the star equivalent, not a shortest simple path. A detour that costs less than −2·w_n still counts the negative weight twice, which the test of entry 22 shows (4 instead of 5). The exact simple-path version is polynomial but needs T-join or matching algorithms (Schrijver, *Combinatorial Optimization*, ch. 29), not Dijkstra.
 
@@ -1732,7 +1730,6 @@ hypergraph libraries and power system tools. Sources:
 - **14:** removing every critical edge whole gave wrong two-edge-connected components when critical edges share a cycle. Corrected in this pull request.
 
 **Naming (decided, D22):** pygraphc calls one attachment of an edge to a node a
-*terminal*, as CIM and OpenDSS do. Hypergraph papers say *incidence*, XGI
-*member*. The draft of this pull request said *port*, but in circuit theory a
-port is a pair of terminals, so a "two-port edge" would have been a circuit
-one-port.
+*terminal*. Hypergraph papers say *incidence*, XGI *member*. The draft of
+this pull request said *port*, but a port usually means a pair of terminals, so
+a "two-port edge" would have read as an edge with four terminals.

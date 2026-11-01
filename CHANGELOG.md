@@ -36,8 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   functions take `preserved_nodes`, and the masks are `preserved_mask`
   (`series_parallel_reduce`, `series_parallel_state`, the C entries). The
   reduction is the node-preserving reduction. "Terminal" stays free for the
-  attachment of an edge to a node, the word circuit and power system callers
-  use for it.
+  attachment of an edge to a node.
 - Performance tests are three tiers instead of walltime limits. `complexity/`
   asserts the scaling exponent over five sizes and several graph shapes;
   `instructions/` counts instructions with callgrind, compares every scenario
@@ -468,5 +467,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Renamed package from `connected-component` to `cgraph`
-- Public API uses clean names without `igp_` prefix
+- Public API uses clean names without a project prefix
 - Remapped API is the only public interface (pass `node_ids`, not `num_nodes`)

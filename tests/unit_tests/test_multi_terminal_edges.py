@@ -932,7 +932,7 @@ def test_split_node_moves_every_terminal_of_an_edge_at_the_node() -> None:
 
 
 def test_split_node_moves_one_terminal() -> None:
-    """D26: a terminal in terminals_to_new_node moves alone, e.g. to split a busbar at a coupler."""
+    """D26: a terminal in terminals_to_new_node moves alone."""
     graph = Graph([1, 2, 3], [(1, 2), (2, 2, 3)])
     view = graph.split_node(2, 9, terminals_to_new_node=[(1, 1)])
 
