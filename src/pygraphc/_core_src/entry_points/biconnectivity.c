@@ -732,16 +732,32 @@ failed:
 }
 
 /*
- * The edge-label instantiations, kept out of tarjan_entry: inlined there they changed the
- * register allocation of the other modes, one or two instructions per node.
+ * Both instantiations of one mode (bridge pairs name edges by node pair, so only the
+ * two-terminal one). Each mode gets its own non-inlined search below: inlined
+ * together into tarjan_entry, the instantiations share one register allocation, and
+ * adding a mode cost the others up to seven instructions per node (GCC 13, x86-64).
  */
-static __attribute__((noinline)) int search_edge_labels(const GraphContext *graph, const uint8_t *two_terminal_edge_mask,
-                                                       const uint8_t *edge_mask, const uint8_t *terminal_mask,
-                                                       const uint8_t *node_mask, PyObject *result) {
-    return graph->terminals
-        ? tarjan_search(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, result, REPORT_EDGE_LABELS, 1)
-        : tarjan_search(graph, two_terminal_edge_mask, NULL, NULL, node_mask, result, REPORT_EDGE_LABELS, 0);
+static inline __attribute__((always_inline)) int search_in_mode(const GraphContext *graph,
+                                                                 const uint8_t *two_terminal_edge_mask,
+                                                                 const uint8_t *edge_mask, const uint8_t *terminal_mask,
+                                                                 const uint8_t *node_mask, PyObject *result,
+                                                                 const int mode) {
+    if (mode == REPORT_BRIDGE_PAIRS || !graph->terminals)
+        return tarjan_search(graph, two_terminal_edge_mask, NULL, NULL, node_mask, result, mode, 0);
+    return tarjan_search(graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, result, mode, 1);
 }
+
+#define SEARCH_PARAMETERS const GraphContext *graph, const uint8_t *two_terminal_edge_mask, const uint8_t *edge_mask, \
+                          const uint8_t *terminal_mask, const uint8_t *node_mask, PyObject *result
+#define SEARCH_ARGUMENTS graph, two_terminal_edge_mask, edge_mask, terminal_mask, node_mask, result
+static __attribute__((noinline)) int search_bridge_pairs(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, REPORT_BRIDGE_PAIRS); }
+static __attribute__((noinline)) int search_critical_edges(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, REPORT_CRITICAL_EDGES); }
+static __attribute__((noinline)) int search_critical_nodes(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, REPORT_CRITICAL_NODES); }
+static __attribute__((noinline)) int search_blocks(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, REPORT_BLOCKS); }
+static __attribute__((noinline)) int search_simple_path_blocks(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, REPORT_SIMPLE_PATH_BLOCKS); }
+static __attribute__((noinline)) int search_edge_labels(SEARCH_PARAMETERS) { return search_in_mode(SEARCH_ARGUMENTS, REPORT_EDGE_LABELS); }
+#undef SEARCH_PARAMETERS
+#undef SEARCH_ARGUMENTS
 
 /*
  * Parse (capsule[, edge_mask, node_mask, terminal_mask]) and run tarjan_search in
@@ -778,34 +794,14 @@ static PyObject *tarjan_entry(PyObject *args, const int mode) {
     if (parse_terminal_mask(graph, terminal_mask_obj, edge_mask, &terminal_mask) < 0) { release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer); Py_DECREF(result); return NULL; }
     const uint8_t *traversal_edge_mask = two_terminal_edge_mask(&terminal_mask, edge_mask);
 
-    int status;
-    switch (mode) {
-    case REPORT_BRIDGE_PAIRS:
-        status = tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_BRIDGE_PAIRS, 0);
-        break;
-    case REPORT_CRITICAL_EDGES:
-        status = graph->terminals
-            ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_CRITICAL_EDGES, 1)
-            : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_CRITICAL_EDGES, 0);
-        break;
-    case REPORT_CRITICAL_NODES:
-        status = graph->terminals
-            ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_CRITICAL_NODES, 1)
-            : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_CRITICAL_NODES, 0);
-        break;
-    case REPORT_SIMPLE_PATH_BLOCKS:
-        status = graph->terminals
-            ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_SIMPLE_PATH_BLOCKS, 1)
-            : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_SIMPLE_PATH_BLOCKS, 0);
-        break;
-    case REPORT_EDGE_LABELS:
-        status = search_edge_labels(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result);
-        break;
-    default:
-        status = graph->terminals
-            ? tarjan_search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result, REPORT_BLOCKS, 1)
-            : tarjan_search(graph, traversal_edge_mask, NULL, NULL, node_mask, result, REPORT_BLOCKS, 0);
-    }
+    int (*search)(const GraphContext *, const uint8_t *, const uint8_t *, const uint8_t *, const uint8_t *, PyObject *) =
+        mode == REPORT_BRIDGE_PAIRS ? search_bridge_pairs
+        : mode == REPORT_CRITICAL_EDGES ? search_critical_edges
+        : mode == REPORT_CRITICAL_NODES ? search_critical_nodes
+        : mode == REPORT_SIMPLE_PATH_BLOCKS ? search_simple_path_blocks
+        : mode == REPORT_EDGE_LABELS ? search_edge_labels
+        : search_blocks;
+    int status = search(graph, traversal_edge_mask, edge_mask, terminal_mask.terminals, node_mask, result);
     release_terminal_mask(&terminal_mask); release_mask(&node_mask_buffer); release_mask(&edge_mask_buffer);
     if (status < 0) { Py_DECREF(result); return NULL; }
     return result;

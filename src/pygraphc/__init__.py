@@ -1646,8 +1646,14 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
         merged_nodes: list[NodeIdT] = list(base._node_ids)
         known: set[NodeIdT] = set(base._node_ids)
+        directed = base._directed
         for added_edge in added_edges:
-            for node_id in _terminal_node_ids_of(added_edge, directed=base._directed):
+            terminal_node_ids = (
+                _terminal_node_ids_of(added_edge, directed=True)
+                if directed and not isinstance(added_edge[0], int)
+                else added_edge
+            )
+            for node_id in terminal_node_ids:
                 if node_id not in known:
                     known.add(node_id)
                     merged_nodes.append(node_id)
