@@ -17,6 +17,7 @@ with ``CFLAGS=-g``, which changes no generated instruction.
 """
 
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -82,7 +83,9 @@ NAME_DEFINITION = re.compile(r"^\((\d+)\)(?: (.*))?$")
 
 
 def instruction_bucket(source_file: str) -> str:
-    """The bucket of an instruction by the path of its source file."""
+    """The bucket of an instruction by the path of its source file, normalized: a header included as
+    ``entry_points/../algorithms/x.h`` is an algorithm."""
+    source_file = posixpath.normpath(source_file)
     if "_core_src/algorithms/" in source_file:
         return "algorithm"
     if "src/pygraphc/" in source_file:
@@ -92,6 +95,7 @@ def instruction_bucket(source_file: str) -> str:
 
 def short_source_name(source_file: str) -> str:
     """A source file as reports name it: relative to ``_core_src`` inside it, otherwise its base name."""
+    source_file = posixpath.normpath(source_file)
     if "_core_src/" in source_file:
         return source_file.split("_core_src/", 1)[1]
     return source_file.rsplit("/", 1)[-1]

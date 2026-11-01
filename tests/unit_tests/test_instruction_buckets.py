@@ -79,6 +79,8 @@ def test_inlined_algorithm_lines_count_as_algorithm_inside_a_boundary_function()
     [
         pytest.param(f"{_CORE}/algorithms/components.c", "algorithm", id="algorithm-source"),
         pytest.param(f"{_CORE}/algorithms/union_find.h", "algorithm", id="algorithm-header"),
+        pytest.param(f"{_CORE}/entry_points/../algorithms/cycle_basis.h", "algorithm", id="header-included-relatively"),
+        pytest.param(f"{_CORE}/algorithms/../models.h", "boundary", id="models-included-from-algorithms"),
         pytest.param(f"{_CORE}/entry_points/connectivity.c", "boundary", id="entry-point"),
         pytest.param(f"{_CORE}/conversion/parse.c", "boundary", id="conversion"),
         pytest.param(f"{_CORE}/models.h", "boundary", id="models"),
@@ -96,6 +98,7 @@ def test_short_source_name_keeps_the_directory_inside_the_core() -> None:
     """Two traversal.c files exist, one in algorithms/, one in entry_points/; reports must tell them apart."""
     assert short_source_name(f"{_CORE}/algorithms/traversal.c") == "algorithms/traversal.c"
     assert short_source_name(f"{_CORE}/entry_points/traversal.c") == "entry_points/traversal.c"
+    assert short_source_name(f"{_CORE}/entry_points/../algorithms/cycle_basis.h") == "algorithms/cycle_basis.h"
     assert short_source_name("/usr/src/glibc/malloc/malloc.c") == "malloc.c"
 
 
