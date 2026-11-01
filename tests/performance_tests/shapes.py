@@ -50,7 +50,7 @@ def sparse_random(node_count: int, edges_per_node: float = 1.5, seed: int = 0) -
 
 
 def meshed_feeders(node_count: int, seed: int = 0) -> tuple[list[int], Edges]:
-    """Radial feeders from node 0 with one meshing line per 20 nodes: the shape of a distribution grid."""
+    """A random tree from node 0, each node joined to one of the 50 before it, plus one random edge per 20 nodes."""
     rng = random.Random(seed)
     edges = [(rng.randrange(max(0, node_id - 50), node_id), node_id) for node_id in range(1, node_count)]
     edges += [(rng.randrange(node_count), rng.randrange(node_count)) for _ in range(node_count // 20)]
