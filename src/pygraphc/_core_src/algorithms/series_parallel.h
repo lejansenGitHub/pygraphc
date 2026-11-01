@@ -111,6 +111,15 @@ PYGRAPHC_INTERNAL int sp_load_edges(SPState *state, GraphContext *graph, const u
 PYGRAPHC_INTERNAL int sp_drop_components_without_preserved_nodes(SPState *state, GraphContext *graph, int node_count, const uint8_t *edge_mask,
                                             const uint8_t *node_mask, const uint8_t *preserved_mask);
 PYGRAPHC_INTERNAL void sp_enqueue_all_candidates(SPState *state, int node_count, const uint8_t *preserved_mask);
+/*
+ * The whole reduction on a freshly allocated state: load the masked graph, drop
+ * the components without a preserved node, merge parallels, then apply moves to
+ * candidates in increasing node order until none applies. Returns 0, or -1 with
+ * an exception set.
+ */
+PYGRAPHC_INTERNAL int sp_reduce(SPState *state, GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask,
+                                const uint8_t *preserved_mask, const uint8_t *protected_mask,
+                                const uint8_t *pendant_keep_mask, const uint8_t *series_blocked_mask);
 PYGRAPHC_INTERNAL int sp_check_edge(SPHandle *handle, int edge, int node, int neighbor);
 PYGRAPHC_INTERNAL int sp_check_distinct_edges(int edge_a, int edge_b);
 PYGRAPHC_INTERNAL int sp_check_node_removable(SPHandle *handle, int node);

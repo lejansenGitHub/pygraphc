@@ -43,20 +43,8 @@ PyObject *py_series_parallel_reduce_ctx(PyObject *self, PyObject *args, PyObject
         sp_release_masks(&masks);
         return NULL;
     }
-    for (int node = 0; node < node_count; node++)
-        state.node_alive[node] = !(masks.node_mask && masks.node_mask[node]);
-
-    int status = sp_load_edges(&state, graph, masks.edge_mask, masks.node_mask);
-    if (status == 0) status = sp_drop_components_without_preserved_nodes(&state, graph, node_count, masks.edge_mask, masks.node_mask, masks.preserved);
-    if (status == 0) status = sp_merge_all_parallels(&state, node_count, masks.protect);
-    if (status == 0) {
-        sp_enqueue_all_candidates(&state, node_count, masks.preserved);
-        while (state.heap_size > 0 && status == 0) {
-            int node = sp_pop(&state);
-            if (!state.node_alive[node]) continue;
-            status = sp_move(&state, node, masks.preserved, masks.protect, masks.keep, masks.blocked);
-        }
-    }
+    int status = sp_reduce(&state, graph, masks.edge_mask, masks.node_mask, masks.preserved, masks.protect, masks.keep,
+                           masks.blocked);
     sp_release_masks(&masks);
     if (status < 0) { sp_free(&state); return NULL; }
 

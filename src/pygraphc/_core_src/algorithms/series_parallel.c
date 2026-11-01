@@ -529,3 +529,22 @@ int sp_collect_independent(SPHandle *handle, int kind, int *count_out) {
     *count_out = admitted_count;
     return 0;
 }
+
+int sp_reduce(SPState *state, GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask,
+              const uint8_t *preserved_mask, const uint8_t *protected_mask, const uint8_t *pendant_keep_mask,
+              const uint8_t *series_blocked_mask) {
+    int node_count = graph->node_ids.node_count;
+    for (int node = 0; node < node_count; node++)
+        state->node_alive[node] = !(node_mask && node_mask[node]);
+    int status = sp_load_edges(state, graph, edge_mask, node_mask);
+    if (status == 0) status = sp_drop_components_without_preserved_nodes(state, graph, node_count, edge_mask, node_mask, preserved_mask);
+    if (status == 0) status = sp_merge_all_parallels(state, node_count, protected_mask);
+    if (status < 0) return status;
+    sp_enqueue_all_candidates(state, node_count, preserved_mask);
+    while (state->heap_size > 0 && status == 0) {
+        int node = sp_pop(state);
+        if (!state->node_alive[node]) continue;
+        status = sp_move(state, node, preserved_mask, protected_mask, pendant_keep_mask, series_blocked_mask);
+    }
+    return status;
+}
