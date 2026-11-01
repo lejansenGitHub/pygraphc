@@ -11,14 +11,14 @@ most. The full per-line annotation of every dump stays next to the report.
     python dev_helpers/compare_profiles.py --only bridges,articulation_points [--base origin/main]
 
 Needs podman or docker; valgrind runs inside the container, so this works on
-macOS too. The container is arm64 on Apple silicon, CI also measures x86-64
-(``--platform linux/amd64`` emulates it, slowly). Uncommitted changes are
-included; untracked files are included unless git ignores them.
+macOS too. The container is x86-64 like CI, emulated on Apple silicon:
+callgrind on arm64 is about ten times slower than on emulated x86-64.
+Uncommitted changes are included; untracked files are included unless git
+ignores them.
 """
 
 import argparse
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -142,11 +142,6 @@ def _export_working_tree(repository: Path, target: Path) -> None:
         shutil.copy2(source, destination)
 
 
-def native_platform() -> str:
-    """The container platform matching this machine, so no image runs emulated by accident."""
-    return "linux/arm64" if platform.machine().lower() in {"arm64", "aarch64"} else "linux/amd64"
-
-
 def _container_engine() -> str:
     for engine in ("podman", "docker"):
         if shutil.which(engine):
@@ -164,8 +159,7 @@ def run_on_host(arguments: argparse.Namespace) -> int:
     _export_base(repository, arguments.base, output / "base")
     _export_working_tree(repository, output / "head")
     shutil.copy2(Path(__file__), output / "compare_profiles.py")
-    container_platform = arguments.platform or native_platform()
-    command = [_container_engine(), "run", "--rm", "--platform", container_platform]
+    command = [_container_engine(), "run", "--rm", "--platform", arguments.platform]
     command += ["-v", f"{output}:{CONTAINER_DIRECTORY}", IMAGE]
     command += [
         "python",
@@ -174,7 +168,7 @@ def run_on_host(arguments: argparse.Namespace) -> int:
         "--only",
         arguments.only,
         "--platform",
-        container_platform,
+        arguments.platform,
     ]
     completed = subprocess.run(command, check=False)
     print(f"\nreport and per-line annotations: {output}")  # noqa: T201 — where to look next
@@ -307,9 +301,7 @@ def main() -> int:
     parser.add_argument("--only", required=True, help="comma-separated substrings of scenario names, as compare.py")
     parser.add_argument("--base", default="origin/main", help="revision to compare against (default origin/main)")
     parser.add_argument("--output", default="profiles/comparison", help="directory for trees, dumps and report")
-    parser.add_argument(
-        "--platform", default="", help="container platform; default this machine's, linux/amd64 emulates x86-64"
-    )
+    parser.add_argument("--platform", default="linux/amd64", help="container platform (default linux/amd64, as CI)")
     parser.add_argument("--inside-container", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     return run_in_container(arguments) if arguments.inside_container else run_on_host(arguments)

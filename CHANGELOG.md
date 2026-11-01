@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- CI counts instructions on x86-64 only. Callgrind runs about ten times slower
+  per instruction on arm64 (29 minutes against 2.5 for the same counts).
+  `dev_helpers/compare_profiles.py` runs its container as `linux/amd64` by
+  default, like CI; emulated on Apple silicon it is still about ten times
+  faster than a native arm64 container.
 - Instruction counts are split into three buckets by the source file of each
   instruction: `algorithm` (`_core_src/algorithms/`, warns beyond 0.1%),
   `boundary` (the rest of pygraphc's C sources, 0.5%) and `cpython` (CPython
@@ -39,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   against the merge base in CI and checks the design claims as instruction
   ratios; `experience/` runs one million-node input per workflow against a
   generous budget. An instruction count that moves by more than 0.5% fails
-  CI on x86-64 or arm64 until the pull request is labelled
+  CI until the pull request is labelled
   `accept-instruction-change`; layout noise after a C change reaches about
   1.1%, so such a change is reviewed even when only the layout moved.
 - The workflow phase guard counts instructions per phase instead of comparing
