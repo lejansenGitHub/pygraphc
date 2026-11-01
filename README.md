@@ -75,7 +75,7 @@ guarded by the three performance tiers described under [Tests](#tests).
 | Shortest path, single pair, `Graph` + float64 weights | 100K | 0.0002s | 0.0015s | **7.5x** |
 | Shortest path, single pair, `Graph` + list weights | 100K | 0.00062s | 0.0012s | **1.9x** |
 | Edge paths (cutoff=5) | 80 | 0.000001s | 0.0001s | **91x** |
-| SCC (directed) | 1M | 0.26s | 2.15s | **8.2x** |
+| SCC (directed) | 1M | 0.28s | 2.64s | **9.3x** |
 | WCC (directed) | 1M | 0.027s | 2.01s | **74x** |
 | Topological sort | 1M | 0.084s | 2.08s | **25x** |
 | DAG longest path | 1M | 0.10s | 4.73s | **47x** |
