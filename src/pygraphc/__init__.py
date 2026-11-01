@@ -997,10 +997,12 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         return self._edge_indices_by_terminal_node_indices
 
     def incident_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
-        """Return indices of all edges incident to the given node.
+        """Return indices of all edges incident to the given node, each once.
 
-        For directed graphs, returns only outgoing edges (src=node_id).
-        Use ``incoming_edge_indices`` for incoming edges.
+        An edge is incident when one of its terminals sits at the node and it
+        joins that terminal to another (D24). For directed graphs, returns only
+        outgoing edges (an in-terminal at node_id). Use
+        ``incoming_edge_indices`` for incoming edges.
         """
         return _incident_edges_ctx(self._graph_capsule, node_id)
 
@@ -1015,9 +1017,10 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         return _incoming_edges_ctx(self._graph_capsule, node_id)
 
     def neighbors(self, node_id: NodeIdT) -> set[NodeIdT]:
-        """Return the set of neighbor node IDs.
+        """Return the nodes sharing an edge with the node, the node itself left out.
 
-        For directed graphs, returns successors (outgoing neighbors).
+        Through an edge with three or more terminals every other terminal's node
+        is a neighbor. For directed graphs, returns successors (outgoing neighbors).
         """
         return _neighbors_ctx(self._graph_capsule, node_id)
 
@@ -1031,10 +1034,10 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         return _predecessors_ctx(self._graph_capsule, node_id)
 
     def degree(self, node_id: NodeIdT) -> int:
-        """Return the number of edges incident to the node.
+        """Return the number of terminals at the node of edges that join them to another terminal.
 
-        For undirected graphs, self-loops are counted twice (via CSR: each direction counted).
-        For directed graphs, returns out-degree.
+        A self-loop, and an edge with two terminals at the node, count twice (D24).
+        For directed graphs, returns out-degree: the in-terminals at the node.
         """
         return _degree_ctx(self._graph_capsule, node_id)
 
@@ -1305,7 +1308,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         return _quotient_edge_views(_quotient_edges_ctx(self._graph_capsule, labels))
 
     def degrees(self) -> memoryview:
-        """Degree per node index as an int32 view: incidences with a self-loop counted twice, out-degree if directed."""
+        """Degree per node index as an int32 view, as ``degree`` counts it; out-degree if directed."""
         result = _degrees_ctx(self._graph_capsule)
         return memoryview(result).cast("i")
 
@@ -1375,9 +1378,11 @@ class Graph(Generic[NodeIdT, BranchIdT]):
     def cycle_basis(self) -> list[list[NodeIdT]]:
         """Return a fundamental cycle basis as a list of cycles.
 
-        Each cycle is a list of node IDs. The number of fundamental cycles
-        equals m - n + c (circuit rank), where c is the number of connected
-        components.
+        Each cycle is the node IDs of a Berge cycle: it passes through an edge
+        from one terminal to another and uses every edge and node at most once
+        (D25). The number of fundamental cycles is the cycle rank of the
+        incidence graph, terminals - nodes - edges + components; on two-terminal
+        edges that is m - n + c.
         """
         self._require_undirected("cycle_basis")
         return _cycle_basis_ctx(self._graph_capsule)
@@ -1743,7 +1748,11 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         )
 
     def _masks(self) -> tuple[bytearray, bytearray | None, bytearray | None]:
-        """Edge, node and terminal masks, in the order the _core kernels take them."""
+        """Edge, node and terminal masks, in the order the _core kernels take them.
+
+        The per-node queries pass the three attributes directly: building this tuple
+        costs about 40 ns, half of a query.
+        """
         return self._excluded_edges, self._excluded_nodes, self._excluded_terminals
 
     def _require_undirected(self, method_name: str) -> None:
@@ -1755,71 +1764,64 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
             raise TypeError(f"{method_name} requires a directed graph")  # noqa: TRY003
 
     def incident_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
-        """Return indices of all non-excluded edges incident to the given node.
+        """Return indices of all non-excluded edges incident to the given node, see ``Graph.incident_edge_indices``.
 
         For directed graphs, returns only outgoing edges (src=node_id).
         """
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("incident_edge_indices")
-        return _incident_edges_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
+        return _incident_edges_ctx(
+            self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes, self._excluded_terminals
+        )
 
     def outgoing_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all non-excluded outgoing edges. Directed graphs only."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("outgoing_edge_indices")
         self._require_directed("outgoing_edge_indices")
         return self.incident_edge_indices(node_id)
 
     def incoming_edge_indices(self, node_id: NodeIdT) -> list[EdgeIndex]:
         """Return indices of all non-excluded incoming edges. Directed graphs only."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("incoming_edge_indices")
-        return _incoming_edges_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
+        return _incoming_edges_ctx(
+            self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes, self._excluded_terminals
+        )
 
     def neighbors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of neighbor node IDs, respecting edge and node exclusions.
 
         For directed graphs, returns successors (outgoing neighbors).
         """
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("neighbors")
-        return _neighbors_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
+        return _neighbors_ctx(
+            self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes, self._excluded_terminals
+        )
 
     def successors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of successor node IDs. Directed graphs only."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("successors")
         self._require_directed("successors")
         return self.neighbors(node_id)
 
     def predecessors(self, node_id: NodeIdT) -> set[NodeIdT]:
         """Return the set of predecessor node IDs. Directed graphs only."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("predecessors")
-        return _predecessors_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
+        return _predecessors_ctx(
+            self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes, self._excluded_terminals
+        )
 
     def degree(self, node_id: NodeIdT) -> int:
-        """Return the number of non-excluded edges incident to the node.
+        """Return the degree of the node under the masks, see ``Graph.degree``.
 
-        For undirected graphs, self-loops are counted twice (via CSR).
         For directed graphs, returns out-degree.
         """
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("degree")
-        return _degree_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
+        return _degree_ctx(
+            self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes, self._excluded_terminals
+        )
 
     def out_degree(self, node_id: NodeIdT) -> int:
         """Return the out-degree of the node. Directed graphs only."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("out_degree")
         self._require_directed("out_degree")
         return self.degree(node_id)
 
     def in_degree(self, node_id: NodeIdT) -> int:
         """Return the in-degree of the node. Directed graphs only."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("in_degree")
-        return _in_degree_ctx(self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes)
+        return _in_degree_ctx(
+            self._graph._graph_capsule, node_id, self._excluded_edges, self._excluded_nodes, self._excluded_terminals
+        )
 
     def bridges_with_branch_ids(self) -> list[tuple[NodeIdT, NodeIdT, BranchIdT]]:
         """Return bridge edges as (node_id, node_id, branch_id) triples.
@@ -2017,9 +2019,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
 
     def degrees(self) -> memoryview:
         """Degree per node index as an int32 view under the masks, see ``Graph.degrees``; excluded nodes get 0."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("degrees")
-        result = _degrees_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        result = _degrees_ctx(self._graph._graph_capsule, *self._masks())
         return memoryview(result).cast("i")
 
     def bcc_edge_labels(self) -> memoryview:
@@ -2036,11 +2036,9 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         return memoryview(result).cast("i")
 
     def cycle_basis(self) -> list[list[NodeIdT]]:
-        """Return a fundamental cycle basis as a list of cycles."""
-        if self._excluded_terminals is not None:
-            raise _terminal_mask_unsupported("cycle_basis")
+        """Return a fundamental cycle basis under the masks, see ``Graph.cycle_basis``."""
         self._require_undirected("cycle_basis")
-        return _cycle_basis_ctx(self._graph._graph_capsule, self._excluded_edges, self._excluded_nodes)
+        return _cycle_basis_ctx(self._graph._graph_capsule, *self._masks())
 
     def dag_longest_path(self, weights: list[float] | None = None) -> list[NodeIdT]:
         """Return the longest path in the DAG as a list of node IDs."""

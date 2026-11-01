@@ -238,7 +238,11 @@ def topological_sort_ctx(
     /,
 ) -> list[_NodeIdT]: ...
 def cycle_basis_ctx(
-    capsule: GraphCapsule[_NodeIdT], edge_mask: _Mask | None = None, node_mask: _Mask | None = None, /
+    capsule: GraphCapsule[_NodeIdT],
+    edge_mask: _Mask | None = None,
+    node_mask: _Mask | None = None,
+    terminal_mask: _Mask | None = None,
+    /,
 ) -> list[list[_NodeIdT]]: ...
 def dag_longest_path_ctx(
     capsule: GraphCapsule[_NodeIdT],
@@ -256,6 +260,7 @@ def neighbors_ctx(
     node_id: _NodeIdT,
     edge_mask: _Mask | None = None,
     node_mask: _Mask | None = None,
+    terminal_mask: _Mask | None = None,
     /,
 ) -> set[_NodeIdT]: ...
 def predecessors_ctx(
@@ -263,6 +268,7 @@ def predecessors_ctx(
     node_id: _NodeIdT,
     edge_mask: _Mask | None = None,
     node_mask: _Mask | None = None,
+    terminal_mask: _Mask | None = None,
     /,
 ) -> set[_NodeIdT]: ...
 def degree_ctx(
@@ -270,6 +276,7 @@ def degree_ctx(
     node_id: _NodeIdT,
     edge_mask: _Mask | None = None,
     node_mask: _Mask | None = None,
+    terminal_mask: _Mask | None = None,
     /,
 ) -> int: ...
 def in_degree_ctx(
@@ -277,6 +284,7 @@ def in_degree_ctx(
     node_id: _NodeIdT,
     edge_mask: _Mask | None = None,
     node_mask: _Mask | None = None,
+    terminal_mask: _Mask | None = None,
     /,
 ) -> int: ...
 def incident_edges_ctx(
@@ -284,6 +292,7 @@ def incident_edges_ctx(
     node_id: _NodeIdT,
     edge_mask: _Mask | None = None,
     node_mask: _Mask | None = None,
+    terminal_mask: _Mask | None = None,
     /,
 ) -> list[EdgeIndex]: ...
 def incoming_edges_ctx(
@@ -291,6 +300,7 @@ def incoming_edges_ctx(
     node_id: _NodeIdT,
     edge_mask: _Mask | None = None,
     node_mask: _Mask | None = None,
+    terminal_mask: _Mask | None = None,
     /,
 ) -> list[EdgeIndex]: ...
 def edge_indices_ctx(
@@ -310,7 +320,11 @@ def quotient_edges_ctx(
     capsule: GraphCapsule[int], labels: _Mask, edge_mask: _Mask | None = None, /
 ) -> tuple[bytes, bytes, bytes, bytes]: ...
 def degrees_ctx(
-    capsule: GraphCapsule[int], edge_mask: _Mask | None = None, node_mask: _Mask | None = None, /
+    capsule: GraphCapsule[int],
+    edge_mask: _Mask | None = None,
+    node_mask: _Mask | None = None,
+    terminal_mask: _Mask | None = None,
+    /,
 ) -> bytes: ...
 def biconnected_component_edge_labels_ctx(
     capsule: GraphCapsule[int], edge_mask: _Mask | None = None, node_mask: _Mask | None = None, /

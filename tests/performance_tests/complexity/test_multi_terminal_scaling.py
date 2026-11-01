@@ -41,7 +41,18 @@ OPERATIONS: dict[str, Operation] = {
     "two_edge_connected_components": lambda graph: lambda: list(graph.two_edge_connected_components()),
     "nodes_on_simple_paths": lambda graph: lambda: graph.nodes_on_simple_paths(0, [graph.node_count - 1]),
     "edge_indices_at": lambda graph: _edge_indices_at_first_edge(graph),
+    "neighbors": lambda graph: lambda: graph.neighbors(0),
+    "degrees": lambda graph: graph.degrees,
+    "masked_degrees": lambda graph: graph.without_terminals([(0, 0)]).degrees,
+    "cycle_basis": lambda graph: graph.cycle_basis,
+    "masked_view_degree": lambda graph: _degree_of_the_last_node_in_a_masked_view(graph),
 }
+
+
+def _degree_of_the_last_node_in_a_masked_view(graph: Graph[int, int]) -> Callable[[], object]:
+    """One query on a view with a terminal mask, built outside the timed call: O(degree), never O(m)."""
+    view = graph.without_terminals([(0, 0)])
+    return lambda: view.degree(graph.node_count - 1)
 
 
 def _shortest_path_lengths_with_unit_weights(graph: Graph[int, int]) -> Callable[[], object]:
