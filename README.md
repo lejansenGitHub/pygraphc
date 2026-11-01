@@ -1436,9 +1436,10 @@ up to the total.
 **The guard.** The instruction tier (see [Performance tests](#performance-tests))
 runs every workflow at its guard size under callgrind and counts the
 instructions of each phase, named `workflow/<workflow>/<phase>`. CI compares
-every phase against the merge base and fails on a phase that moves by more than
-0.5%, while every smaller change is listed too; nothing is compared
-against a stored baseline, so no baseline needs regenerating.
+every phase against the merge base, split into the same three buckets as every
+scenario, warns on a bucket that moves beyond its threshold and fails on one
+beyond the failing bounds, while every smaller change is listed too; nothing is
+compared against a stored baseline, so no baseline needs regenerating.
 
 ### Comparing the reduction engines
 
@@ -1512,7 +1513,6 @@ the change what moved and why. `profiles/engine_comparison.md` and the
 pip install -e ".[benchmark]"
 pip install networkx pgmpy
 python benchmarks/networkx_baselines.py  # networkx baseline per operation, the README tables
-python benchmarks/bench_all.py       # structured cost breakdown + topology scenarios
 python benchmarks/bench_dag_learn.py  # hill-climb K2: pygraphc vs pgmpy
 ```
 
@@ -1542,13 +1542,30 @@ and is skipped otherwise.
 - **instructions/**: deterministic callgrind instruction counts of small and
   medium scenarios and of every phase of the workflows in
   `benchmarks/profile_workflows.py`. CI builds the merge base and the branch
-  with the same packages, on x86-64 and arm64. A count that moves by more than
-  0.5% in either direction is marked and raises a warning; the run fails on a
-  rise beyond 1.5%, a drop beyond 10% or a scenario no longer measured. Within
-  one binary the counts are exact; a changed C extension moves unchanged work by
-  up to about 1.1% through the allocator, so the warning threshold stays below
-  that noise on purpose, because real code generation changes of 0.5 to 1%
-  matter, while the failing bounds stay above it. Every count that moved is in
+  with the same packages and with debug info (`CFLAGS=-g`, which leaves the
+  generated code unchanged), on x86-64, and splits every count by the
+  source file of each instruction, inlined lines included:
+
+  | Bucket | Source files | Warns beyond |
+  |--------|--------------|-------------:|
+  | `algorithm` | `src/pygraphc/_core_src/algorithms/` | 0.1% |
+  | `boundary` | the rest of pygraphc's C sources: entry points, `conversion/`, models | 0.5% |
+  | `cpython` | CPython, the C library, anything without debug info | 0.5% |
+
+  A bucket that moves beyond its threshold in either direction is marked and
+  raises a warning; the run fails on a bucket rising beyond 1.5%, dropping
+  beyond 10% or no longer measured. Within one binary the counts are exact; a
+  changed C extension moves unchanged work by up to about 1.1% through the
+  allocator, and that noise lands in `cpython`. pygraphc's own code does not
+  depend on addresses, which is why the algorithm bucket can warn at 0.1%. A
+  total alone hides kernels: in `strongly_connected_components/directed_acyclic_20k`
+  the algorithm is a ninth of the count, so a 10% slower kernel would move the
+  total by about 1.1%, inside the noise, while its algorithm row fails. The other
+  warning thresholds stay below the noise on purpose, because real code
+  generation changes of 0.5 to 1% matter, while the failing bounds stay above it.
+  `algorithms/` only holds code that never reads or creates a Python object
+  (raising an exception is allowed); parsing and result building live in
+  `conversion/` and the entry points. Every count that moved is in
   one of two aligned tables, more instructions and fewer instructions, each
   largest change first; counts that round to 0.00% are only counted below
   them, the warned rows marked **changed** and the failing ones **fails**. A pull
@@ -1567,7 +1584,7 @@ and is skipped otherwise.
   ```bash
   podman run --rm -v "$PWD":/source:ro python:3.13-slim bash -c '
     apt-get -qq update && apt-get -qq install -y gcc valgrind
-    cp -r /source /work && pip install -q "/work[dev]" && cd /work/tests
+    cp -r /source /work && CFLAGS=-g pip install -q "/work[dev]" && cd /work/tests
     pytest performance_tests/instructions -v'
   ```
 - **experience/**: one realistic million-node input per workflow, end to end,
@@ -1583,21 +1600,23 @@ cd tests && pytest performance_tests/complexity -v   # or instructions, experien
 The instruction tier in CI says *that* a count moved; `dev_helpers/compare_profiles.py`
 says *where*. It builds a base revision and your working tree (uncommitted
 changes included) in a Linux container, measures the chosen scenarios with the
-same harness as CI, and reports, for every count beyond 0.5%, the source files
-and functions whose own instructions changed most:
+same harness as CI, in the same three buckets, and reports, for every scenario
+with a bucket beyond its threshold, the source files (named relative to
+`_core_src/`) and functions whose own instructions changed most:
 
 ```bash
 python dev_helpers/compare_profiles.py --only bridges,articulation_points            # against origin/main
 python dev_helpers/compare_profiles.py --only bridges --base HEAD~1                   # against any revision
-python dev_helpers/compare_profiles.py --only bridges --platform linux/amd64          # emulated x86-64, slow
+python dev_helpers/compare_profiles.py --only bridges --platform linux/arm64          # arm64, about ten times slower
 ```
 
 `--only` takes the same comma-separated substrings as `compare.py`. The report
 and a per-line annotation of every measurement land in `profiles/comparison/`
 (git ignores `profiles/`). It needs podman or docker, nothing else; it runs on
-macOS too, natively on the machine's architecture unless `--platform` says
-otherwise. Use it as soon as a count or a timing rises, before calling a
-change noise. The counts come from the container's compiler, so they can
+macOS too. The container is x86-64 like CI, emulated on Apple silicon:
+callgrind on arm64 is about ten times slower than on emulated x86-64. Use it
+as soon as a count or a timing rises, before calling a change noise. The
+counts come from the container's compiler, so they can
 differ from CI's by layout effects of up to a few percent: CI decides whether
 a count moved, this shows why.
 

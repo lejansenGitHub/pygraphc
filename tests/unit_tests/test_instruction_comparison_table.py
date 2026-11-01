@@ -15,10 +15,14 @@ instruction_compare = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(instruction_compare)
 
 
+def _flat_threshold(_row_name: str) -> float:
+    return 0.005
+
+
 def test_unchanged_counts_are_left_out_and_counted() -> None:
     """A count that rounds to 0.00% is not a row; the line below the table says how many there were."""
     table, changed = instruction_compare.comparison_table(
-        {"steady": 1_000_000, "moved": 1_000_000}, {"steady": 1_000_003, "moved": 1_010_000}, 0.005
+        {"steady": 1_000_000, "moved": 1_000_000}, {"steady": 1_000_003, "moved": 1_010_000}, _flat_threshold
     )
 
     assert "steady" not in table
@@ -36,7 +40,7 @@ def test_slower_and_faster_counts_are_separate_tables_largest_change_first() -> 
     base = {"small_rise": 1000, "large_rise": 1000, "small_drop": 1000, "large_drop": 1000}
     head = {"small_rise": 1003, "large_rise": 1050, "small_drop": 998, "large_drop": 900}
 
-    table, _changed = instruction_compare.comparison_table(base, head, 0.005)
+    table, _changed = instruction_compare.comparison_table(base, head, _flat_threshold)
     slower, faster = table.split("**Fewer instructions (faster): 2**")
 
     assert slower.startswith("**More instructions (slower): 2**")
@@ -50,7 +54,7 @@ def test_every_table_row_starts_its_columns_at_the_same_character() -> None:
     base = {"rise": 1000, "long_scenario_name/size": 1000, "gone": 7}
     head = {"rise": 1010, "long_scenario_name/size": 900, "brand_new": 3}
 
-    table, changed = instruction_compare.comparison_table(base, head, 0.005)
+    table, changed = instruction_compare.comparison_table(base, head, _flat_threshold)
     rows = [line for line in table.splitlines() if line.startswith("|")]
 
     assert len({len(line) for line in rows}) == 1
@@ -80,7 +84,7 @@ def test_only_a_rise_beyond_one_and_a_half_percent_or_a_drop_beyond_ten_fails() 
 def test_the_table_marks_failing_rows_apart_from_changed_ones() -> None:
     """A row beyond the threshold but within the bounds is **changed**, one beyond the bounds **fails**."""
     table, changed = instruction_compare.comparison_table(
-        {"drift": 1000, "rise": 1000}, {"drift": 1011, "rise": 1020}, 0.005
+        {"drift": 1000, "rise": 1000}, {"drift": 1011, "rise": 1020}, _flat_threshold
     )
     rows = {line.split("|")[1].strip(): line for line in table.splitlines() if line.startswith("| ")}
 
@@ -91,9 +95,27 @@ def test_the_table_marks_failing_rows_apart_from_changed_ones() -> None:
 
 def test_a_warning_inside_the_bounds_is_a_github_annotation() -> None:
     """CI shows it on the run without failing it."""
-    message = instruction_compare.warning_message(2, 0.005)
+    message = instruction_compare.warning_message(2)
 
     assert message == (
-        "::warning title=Instruction counts::2 count(s) moved by more than 0.5%, none beyond +1.5% or -10%; "
-        "see the tables in the job summary"
+        "::warning title=Instruction counts::2 count(s) moved beyond their bucket's threshold "
+        "(algorithm 0.1%, boundary 0.5%, cpython 0.5%), none beyond +1.5% or -10%; see the tables in the job summary"
     )
+
+
+def test_each_bucket_row_warns_at_its_own_threshold() -> None:
+    """A 0.2% move is marked in the algorithm bucket but not in the boundary bucket of the same scenario."""
+    base = {"bfs [algorithm]": 100_000, "bfs [boundary]": 100_000}
+    head = {"bfs [algorithm]": 100_200, "bfs [boundary]": 100_200}
+
+    _table, changed = instruction_compare.comparison_table(base, head, instruction_compare.bucket_threshold)
+
+    assert changed == ["bfs [algorithm]"]
+
+
+def test_a_bucket_fails_even_when_the_total_would_not() -> None:
+    """A kernel 2% slower inside a scenario whose total moves by 0.2% fails on its algorithm row."""
+    base = {"scc [algorithm]": 10_000, "scc [cpython]": 90_000}
+    head = {"scc [algorithm]": 10_200, "scc [cpython]": 90_000}
+
+    assert instruction_compare.failing_names(base, head) == ["scc [algorithm]"]

@@ -220,15 +220,3 @@ int bidirectional_dijkstra(int node_count, int edge_count, const AdjacencyList *
         : bidirectional_search(node_count, 0, adjacency, weights, NULL, two_terminal_edge_mask, NULL, NULL, node_mask,
                                NULL, directed, source, target, out, 0);
 }
-
-/* Turn the node indices of a bidirectional result into a list of node IDs. */
-PyObject *bidirectional_path_to_list(const BidirectionalPath *bidirectional_path, const NodeIdContext *context) {
-    PyObject *path = PyList_New(bidirectional_path->path_length);
-    if (!path) return NULL;
-    for (int position = 0; position < bidirectional_path->path_length; position++) {
-        PyObject *item = context->node_id_items[bidirectional_path->path[position]];
-        Py_INCREF(item);
-        PyList_SET_ITEM(path, position, item);
-    }
-    return path;
-}

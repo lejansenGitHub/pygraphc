@@ -3,46 +3,9 @@
 /* ── Module definition ── */
 
 static PyMethodDef methods[] = {
-    {"connected_components", py_connected_components, METH_VARARGS,
-     "connected_components(n, edges) -> list[set[int]]\n\n"
-     "Find connected components using union-find with path compression.\n"
-     "edges can be a list of 2-tuples or a numpy int32 array of shape (m, 2)."},
-    {"connected_components_with_branches", py_connected_components_with_branches, METH_VARARGS,
-     "connected_components_with_branches(n, edges, branch_ids) -> list[tuple[set[int], set[int]]]\n\n"
-     "Find connected components with associated branch IDs.\n"
-     "edges can be a list of 2-tuples or a numpy int32 array of shape (m, 2)."},
-    {"connected_components_remapped", py_connected_components_remapped, METH_VARARGS,
-     "connected_components_remapped(node_ids, edges) -> list[set[NodeId]]\n\n"
-     "Like connected_components but remaps indices to original node IDs.\n"
-     "node_ids[i] is the original ID for internal index i."},
     {"connected_components_with_branches_remapped", py_connected_components_with_branches_remapped, METH_VARARGS,
      "connected_components_with_branches_remapped(node_ids, edges, branch_ids) -> list[tuple[set[NodeId], set[BranchId]]]\n\n"
      "Like connected_components_with_branches but remaps indices to original node IDs."},
-    {"bridges", py_bridges, METH_VARARGS,
-     "bridges(n, edges) -> list[tuple[int, int]]\n\n"
-     "Find bridge edges using iterative Tarjan's algorithm."},
-    {"articulation_points", py_articulation_points, METH_VARARGS,
-     "articulation_points(n, edges) -> set[int]\n\n"
-     "Find articulation points using iterative Tarjan's algorithm."},
-    {"biconnected_components", py_biconnected_components, METH_VARARGS,
-     "biconnected_components(n, edges) -> list[set[int]]\n\n"
-     "Find biconnected components as node sets."},
-    {"bfs", py_bfs, METH_VARARGS,
-     "bfs(n, edges, source) -> list[int]\n\n"
-     "BFS traversal from source, returns visited nodes in BFS order."},
-    {"dijkstra", py_dijkstra, METH_VARARGS,
-     "dijkstra(n, edges, weights, source, target) -> (float, list[int])\n\n"
-     "Shortest path from source to target via Dijkstra with binary heap.\n"
-     "Returns (distance, path). If unreachable, returns (inf, [])."},
-    {"shortest_path_lengths", py_shortest_path_lengths, METH_VARARGS,
-     "shortest_path_lengths(n, edges, weights, source, cutoff) -> dict[int, float]\n\n"
-     "Single-source shortest path lengths. cutoff < 0 means no cutoff."},
-    {"multi_source_dijkstra", py_multi_source_dijkstra, METH_VARARGS,
-     "multi_source_dijkstra(n, edges, weights, sources, cutoff) -> dict[int, float]\n\n"
-     "Multi-source shortest path lengths. cutoff < 0 means no cutoff."},
-    {"translate_edges", py_translate_edges, METH_VARARGS,
-     "translate_edges(node_ids, node_id_edges) -> list[tuple[int, int]]\n\n"
-     "Translate edges from node-ID-based to index-based using a C hash map."},
     {"connected_components_by_node_id", py_connected_components_by_node_id, METH_VARARGS,
      "connected_components_by_node_id(node_ids, node_id_edges) -> list[set[NodeId]]\n\n"
      "Connected components with node-ID-based edges."},
@@ -121,9 +84,6 @@ static PyMethodDef methods[] = {
     {"topological_sort_ctx", py_topological_sort_ctx, METH_VARARGS,
      "topological_sort_ctx(capsule[, edge_mask, node_mask]) -> list[NodeId]\n\n"
      "Topological sort from a cached directed graph (Kahn's algorithm)."},
-    {"graph_is_directed", py_graph_is_directed, METH_VARARGS,
-     "graph_is_directed(capsule) -> bool\n\n"
-     "Return True if the parsed graph is directed."},
     {"neighbors_ctx", py_neighbors_ctx, METH_VARARGS,
      "neighbors_ctx(capsule, node_id[, edge_mask, node_mask]) -> set[NodeId]\n\n"
      "Neighbor node IDs via CSR. For directed graphs, returns successors."},
@@ -177,8 +137,6 @@ static PyMethodDef methods[] = {
      "Reduction state of the masked graph with the components without a preserved node already gone."},
     {"sp_state_free", py_sp_state_free, METH_VARARGS,
      "sp_state_free(state) -> None. Release the state and make the handle inert."},
-    {"sp_state_graph", py_sp_state_graph, METH_VARARGS,
-     "sp_state_graph(state) -> the graph capsule the state was built from."},
     {"sp_next_move", py_sp_next_move, METH_VARARGS,
      "sp_next_move(state) -> (kind, node, edge_a, edge_b, neighbor_a, neighbor_b) or None."},
     {"sp_apply_move", py_sp_apply_move, METH_VARARGS,
