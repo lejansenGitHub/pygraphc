@@ -62,7 +62,7 @@ where = ["src"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-pygraphc = ["py.typed"]
+pygraphc = ["py.typed", "*.pyi"]
 
 [tool.ruff]
 target-version = "py311"
@@ -137,7 +137,7 @@ module = ["pytest.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["pygraphc._core", "pygraphc._dag_learn", "scipy.*", "numpy.*"]
+module = ["scipy.*", "numpy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

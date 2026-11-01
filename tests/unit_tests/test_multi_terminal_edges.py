@@ -8,9 +8,9 @@ case of the README table it checks. Throughout, a three-terminal edge joins node
 import array
 
 import pytest
-from pygraphc._core import graph_shape, has_multi_terminal_edges  # noqa: PLC2701 — D1 checks what the C core stores
 
 from pygraphc import Graph
+from pygraphc._core import graph_shape, has_multi_terminal_edges  # noqa: PLC2701 — D1 checks what the C core stores
 
 
 def _three_terminal_edge_between_two_terminal_edges() -> Graph[int, int]:
