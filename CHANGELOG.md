@@ -313,11 +313,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - `bridges_with_branch_ids` reads each bridge off its edge index instead of
     looking it up with `edge_indices(u, v)`, which scanned the adjacency of a
     hub once per bridge: 16 s to 26 ms on a star of 200,000 nodes.
-  - The `"c"` and `"moves"` reduction engines find the edges parallel to a new
-    series edge through an index of the live edges per endpoint pair, as the
-    `"python"` engine does, instead of scanning an incidence list; two hubs
-    joined by 80,000 two-paths reduce in 0.3 s instead of 3.9 s (`"c"`) and
-    7.3 s (`"moves"`).
+  - The `"c"` and `"moves"` reduction engines scanned the incidence list of
+    the smaller endpoint for the edges parallel to a new series edge, which
+    between two hubs holds every remaining two-path. A node with more than 16
+    incidences after loading is now a hub, the edges between two hubs are
+    indexed per endpoint pair, and every other pair is still found by scanning
+    its non-hub endpoint, whose degree never grows past 16. Two hubs joined by
+    80,000 two-paths reduce in 0.3 s instead of 3.9 s (`"c"`) and 7.3 s
+    (`"moves"`); graphs without hubs allocate no index.
   - `minimal_toggles` and `paths` build the union of a parallel node into the
     largest set they own instead of copying it, and `minimal_toggles` drops a
     child's set once its parents have it. On the parallel chain two hubs
