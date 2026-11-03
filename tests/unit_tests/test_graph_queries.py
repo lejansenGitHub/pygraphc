@@ -283,6 +283,51 @@ def test_bridges_with_branch_ids_view_raises_without_branch_ids():
         view.bridges_with_branch_ids()
 
 
+def test_bridges_with_branch_ids_name_the_pairs_of_bridges():
+    """Each triple carries the node pair that ``bridges`` names, in the same order, written as given."""
+    graph = Graph([7, 8, 9, 6], [(8, 7), (8, 9), (9, 8), (6, 9)], branch_ids=[10, 20, 30, 40])
+
+    triples = graph.bridges_with_branch_ids()
+
+    assert [triple[:2] for triple in triples] == graph.bridges()
+    assert sorted(triples) == [(6, 9, 40), (8, 7, 10)]
+
+
+def test_bridges_with_branch_ids_from_src_and_dst():
+    """A graph built from src and dst sequences names its bridges like one built from pairs."""
+    graph = Graph([1, 2, 3], [2, 2], [1, 3], branch_ids=["a", "b"])
+
+    triples = graph.bridges_with_branch_ids()
+
+    assert [triple[:2] for triple in triples] == graph.bridges()
+    assert sorted(triples) == [(2, 1, "a"), (2, 3, "b")]
+
+
+def test_bridges_with_branch_ids_view_masked_parallel_edge():
+    """Masking one of two parallel edges makes the other a bridge, and only the unmasked one is reported."""
+    graph = Graph([0, 1], [(0, 1), (0, 1)], branch_ids=[10, 20])
+
+    assert graph.bridges_with_branch_ids() == []
+    assert graph.without_edges([0]).bridges_with_branch_ids() == [(0, 1, 20)]
+
+
+def test_bridges_with_branch_ids_view_masked_terminal_of_parallel_edge():
+    """A parallel edge with a masked terminal joins nothing, so the other edge is a bridge on its own."""
+    graph = Graph([0, 1], [(0, 1), (0, 1)], branch_ids=[10, 20])
+
+    assert graph.without_terminals([(1, 0)]).bridges_with_branch_ids() == [(0, 1, 10)]
+
+
+def test_bridges_with_branch_ids_refuses_multi_terminal_edges():
+    """EC17: a pair method raises on a graph with a multi-terminal edge and names ``critical_edges()``."""
+    graph = Graph([1, 2, 3, 4], [(1, 2), (2, 3, 4)], branch_ids=[10, 20])
+
+    with pytest.raises(NotImplementedError, match=r"critical_edges\(\)"):
+        graph.bridges_with_branch_ids()
+    with pytest.raises(NotImplementedError, match=r"critical_edges\(\)"):
+        graph.without_edges([]).bridges_with_branch_ids()
+
+
 # ── Large node IDs ──
 
 

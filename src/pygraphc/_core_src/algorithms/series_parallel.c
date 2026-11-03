@@ -9,6 +9,7 @@ void sp_free(SPState *state) {
     free(state->node_head); free(state->degree); free(state->loop_head);
     free(state->node_alive); free(state->heap); free(state->queued);
     free(state->pair_scratch); free(state->operations);
+    free(state->pair_next); free(state->pair_prev); free(state->pair_head); free(state->hub);
 }
 
 int sp_alloc(SPState *state, int node_count, Py_ssize_t edge_capacity) {
@@ -63,7 +64,72 @@ static int sp_emit(SPState *state, int kind, int left, int right,
 
 #define SP_OTHER_END(state, half) (((half) & 1) ? (state)->edge_first_node[(half) >> 1] : (state)->edge_second_node[(half) >> 1])
 
+/* The table position a pair's chain starts its probe from. */
+static uint64_t sp_pair_home(const SPState *state, int from_node, int to_node) {
+    uint64_t smaller = (uint64_t)(uint32_t)(from_node < to_node ? from_node : to_node);
+    uint64_t larger = (uint64_t)(uint32_t)(from_node < to_node ? to_node : from_node);
+    return (((smaller << 32) | larger) * 0x9E3779B97F4A7C15ULL >> 32) & state->pair_mask;
+}
+
+/* The table position holding the pair's chain, or the empty position where it would go. */
+static uint64_t sp_pair_position(const SPState *state, int from_node, int to_node) {
+    uint64_t position = sp_pair_home(state, from_node, to_node);
+    for (;;) {
+        int head = state->pair_head[position];
+        if (head < 0) return position;
+        int head_first = state->edge_first_node[head], head_second = state->edge_second_node[head];
+        if ((head_first == from_node && head_second == to_node) || (head_first == to_node && head_second == from_node))
+            return position;
+        position = (position + 1) & state->pair_mask;
+    }
+}
+
+/* Empty one table position by backward-shift deletion, so probes never meet a tombstone. */
+static void sp_pair_vacate(SPState *state, uint64_t position) {
+    uint64_t mask = state->pair_mask, next = position;
+    state->pair_head[position] = -1;
+    for (;;) {
+        next = (next + 1) & mask;
+        int head = state->pair_head[next];
+        if (head < 0) return;
+        uint64_t home = sp_pair_home(state, state->edge_first_node[head], state->edge_second_node[head]);
+        if (((next - home) & mask) >= ((next - position) & mask)) {
+            state->pair_head[position] = head;
+            state->pair_head[next] = -1;
+            position = next;
+        }
+    }
+}
+
+/* Put a new edge at the front of its pair's chain; slots only grow, so the chain stays in descending slot order. */
+static void sp_pair_link(SPState *state, int edge) {
+    uint64_t position = sp_pair_position(state, state->edge_first_node[edge], state->edge_second_node[edge]);
+    int head = state->pair_head[position];
+    state->pair_prev[edge] = -1;
+    state->pair_next[edge] = head;
+    if (head >= 0) state->pair_prev[head] = edge;
+    state->pair_head[position] = edge;
+}
+
+static void sp_pair_unlink(SPState *state, int edge) {
+    int previous = state->pair_prev[edge], following = state->pair_next[edge];
+    if (following >= 0) state->pair_prev[following] = previous;
+    if (previous >= 0) {
+        state->pair_next[previous] = following;
+        return;
+    }
+    uint64_t position = sp_pair_position(state, state->edge_first_node[edge], state->edge_second_node[edge]);
+    if (following >= 0) state->pair_head[position] = following;
+    else sp_pair_vacate(state, position);
+}
+
+/* True when both endpoints are hubs, which is when the pair index holds the edge; never before it is built. */
+static int sp_between_hubs(const SPState *state, int edge) {
+    return state->hub && state->hub[state->edge_first_node[edge]] && state->hub[state->edge_second_node[edge]];
+}
+
 static void sp_link(SPState *state, int edge) {
+    if (sp_between_hubs(state, edge)) sp_pair_link(state, edge);
     for (int side = 0; side < 2; side++) {
         int half = 2 * edge + side;
         int node = side ? state->edge_second_node[edge] : state->edge_first_node[edge];
@@ -77,6 +143,7 @@ static void sp_link(SPState *state, int edge) {
 }
 
 static void sp_unlink(SPState *state, int edge) {
+    if (sp_between_hubs(state, edge)) sp_pair_unlink(state, edge);
     for (int side = 0; side < 2; side++) {
         int half = 2 * edge + side;
         int node = side ? state->edge_second_node[edge] : state->edge_first_node[edge];
@@ -316,17 +383,28 @@ int sp_apply_series(SPState *state, int node, int first, int second,
 
 /* The live edges between one unprotected node pair in slot order, into ``members``.
  *
- * The smaller incidence set is scanned, so a hub pair costs the degree of the
- * other endpoint, and the slots are insertion sorted because a pair holds few
- * edges. Returns the count, or 0 when the pair carries fewer than two edges
- * or either endpoint is protected.
+ * Between two hubs the pair's chain holds them newest first, so it is read
+ * and reversed. Otherwise one endpoint is not a hub, its degree is at most
+ * SP_HUB_DEGREE for good, and its incidence list is scanned and the slots
+ * insertion sorted. Either way the cost is bounded by the pair's own edge
+ * count or the hub threshold, never by a hub's degree. Returns the count, or
+ * 0 when the pair carries fewer than two edges or either endpoint is protected.
  */
 int sp_gather_pair(SPState *state, int from_node, int to_node,
                    const uint8_t *protected_mask, int *members) {
-    if (protected_mask[from_node] || protected_mask[to_node]) return 0;
+    if (protected_mask[from_node] || protected_mask[to_node] || from_node == to_node) return 0;
+    int count = 0;
+    if (state->hub && state->hub[from_node] && state->hub[to_node]) {
+        for (int edge = state->pair_head[sp_pair_position(state, from_node, to_node)]; edge >= 0; edge = state->pair_next[edge])
+            members[count++] = edge;
+        if (count < 2) return 0;
+        for (int low = 0, high = count - 1; low < high; low++, high--) {
+            int swap = members[low]; members[low] = members[high]; members[high] = swap;
+        }
+        return count;
+    }
     int scanned = state->degree[from_node] <= state->degree[to_node] ? from_node : to_node;
     int target = scanned == from_node ? to_node : from_node;
-    int count = 0;
     for (int half = state->node_head[scanned]; half >= 0; half = state->half_next[half])
         if (SP_OTHER_END(state, half) == target) members[count++] = half >> 1;
     if (count < 2) return 0;
@@ -367,6 +445,40 @@ int sp_move(SPState *state, int node, const uint8_t *preserved_mask, const uint8
     return 0;
 }
 
+/* Mark the nodes above SP_HUB_DEGREE as hubs and chain the edges between two hubs per endpoint pair.
+ *
+ * No move raises a degree, so a node that is no hub after loading never
+ * becomes one, and the edges between hubs are the only ones a gather cannot
+ * find by scanning a short incidence list. Without a hub nothing is allocated.
+ * The table is a power of two of at least twice the loaded edges, which bounds
+ * the live edges, so a probe always ends at an empty position.
+ */
+static int sp_index_hub_pairs(SPState *state, int node_count) {
+    int hub_count = 0;
+    for (int node = 0; node < node_count; node++) hub_count += state->degree[node] > SP_HUB_DEGREE;
+    if (hub_count == 0) return 0;
+    size_t slots = (size_t)state->edge_capacity;
+    size_t pair_table_size = 2;
+    while (pair_table_size < 2 * (size_t)state->edge_slots) pair_table_size *= 2;
+    uint8_t *hub = (uint8_t *)malloc((size_t)node_count);
+    int *pair_next = (int *)malloc(slots * sizeof(int));
+    int *pair_prev = (int *)malloc(slots * sizeof(int));
+    int *pair_head = (int *)malloc(pair_table_size * sizeof(int));
+    if (!hub || !pair_next || !pair_prev || !pair_head) {
+        free(hub); free(pair_next); free(pair_prev); free(pair_head);
+        PyErr_NoMemory();
+        return -1;
+    }
+    memset(pair_head, 0xff, pair_table_size * sizeof(int));
+    state->hub = hub; state->pair_next = pair_next; state->pair_prev = pair_prev; state->pair_head = pair_head;
+    state->pair_mask = pair_table_size - 1;
+    for (int node = 0; node < node_count; node++) state->hub[node] = state->degree[node] > SP_HUB_DEGREE;
+    for (int edge = 0; edge < state->edge_slots; edge++)
+        if (state->edge_alive[edge] && state->edge_first_node[edge] != state->edge_second_node[edge] && sp_between_hubs(state, edge))
+            sp_pair_link(state, edge);
+    return 0;
+}
+
 /* One leaf operation and one edge slot per included input edge, in edge index order. */
 int sp_load_edges(SPState *state, GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask) {
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
@@ -389,7 +501,7 @@ int sp_load_edges(SPState *state, GraphContext *graph, const uint8_t *edge_mask,
             sp_link(state, edge);
         }
     }
-    return 0;
+    return sp_index_hub_pairs(state, graph->node_ids.node_count);
 }
 
 /* A component without a preserved node carries no question and goes whole, before

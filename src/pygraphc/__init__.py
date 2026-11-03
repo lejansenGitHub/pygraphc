@@ -727,6 +727,31 @@ def _quotient_edge_views(
     )
 
 
+def _bridge_triples(
+    graph: Graph[NodeIdT, BranchIdT],
+    critical_edge_indices: list[EdgeIndex],
+) -> list[tuple[NodeIdT, NodeIdT, BranchIdT]]:
+    """``(node_id, node_id, branch_id)`` per bridge, read off its edge index in the order ``bridges`` names them."""
+    if graph._branch_ids is None:
+        raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
+    if graph._has_multi_terminal_edges:
+        raise NotImplementedError(
+            "bridges_with_branch_ids names edges by node pair, which cannot name an edge with more than two "
+            "terminals; use critical_edges()"
+        )
+    node_ids = graph._node_ids
+    branch_ids = graph._branch_ids
+    terminal_node_indices = memoryview(_terminal_nodes(graph._graph_capsule)).cast("i")
+    return [
+        (
+            node_ids[terminal_node_indices[2 * edge_index]],
+            node_ids[terminal_node_indices[2 * edge_index + 1]],
+            branch_ids[edge_index],
+        )
+        for edge_index in critical_edge_indices
+    ]
+
+
 _EXCLUDED_LABEL = -1
 """Component label of a node excluded from a view."""
 
@@ -1276,16 +1301,7 @@ class Graph(Generic[NodeIdT, BranchIdT]):
         Requires the Graph to have been constructed with branch_ids.
         """
         self._require_undirected("bridges_with_branch_ids")
-        if self._branch_ids is None:
-            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-        bridge_list = self.bridges()
-        result: list[tuple[NodeIdT, NodeIdT, BranchIdT]] = []
-        for first_node_id, second_node_id in bridge_list:
-            result.extend(
-                (first_node_id, second_node_id, self._branch_ids[edge_idx])
-                for edge_idx in self.edge_indices(first_node_id, second_node_id)
-            )
-        return result
+        return _bridge_triples(self, self.critical_edges())
 
     def articulation_points(self) -> set[NodeIdT]:
         """Return the set of articulation points."""
@@ -1855,17 +1871,7 @@ class GraphView(Generic[NodeIdT, BranchIdT]):
         Requires the base Graph to have been constructed with branch_ids.
         """
         self._require_undirected("bridges_with_branch_ids")
-        if self._graph._branch_ids is None:
-            raise ValueError("no branch_ids")  # noqa: TRY003 — short, no custom class needed
-        bridge_list = self.bridges()
-        result: list[tuple[NodeIdT, NodeIdT, BranchIdT]] = []
-        for first_node_id, second_node_id in bridge_list:
-            result.extend(
-                (first_node_id, second_node_id, self._graph._branch_ids[edge_idx])
-                for edge_idx in self._graph.edge_indices(first_node_id, second_node_id)
-                if not self._excluded_edges[edge_idx] and not self._has_masked_terminal(edge_idx)
-            )
-        return result
+        return _bridge_triples(self._graph, self.critical_edges())
 
     def split_node(
         self,
