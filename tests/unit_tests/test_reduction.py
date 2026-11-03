@@ -360,6 +360,33 @@ def test_minimal_toggles_takes_the_cheapest_child_and_breaks_ties_by_id():
     assert minimal_toggles(by_id, all_open, target_closed=True) == {"a"}
 
 
+def test_minimal_toggles_of_a_shared_subtree_stay_with_each_parent():
+    """A subtree under two parents hands the same toggle set to both; growing it
+    for the second parent must not grow the first parent's answer with it."""
+    # --- Input ---
+    shared = Parallel(frozenset({Leaf("a"), Leaf("b")}))
+    cheapest_of_two = Series((shared, Parallel(frozenset({Leaf("c"), Leaf("e")}))), (2,))
+    both_needed = Parallel(frozenset({shared, Leaf("d")}))
+    tree = Series((cheapest_of_two, both_needed), (3,))
+
+    # --- Assert ---
+    assert minimal_toggles(cheapest_of_two, dict.fromkeys("abcde", True), target_closed=False) == {"a", "b"}
+    assert minimal_toggles(tree, dict.fromkeys("abcde", True), target_closed=False) == {"a", "b"}
+
+
+def test_paths_of_a_shared_subtree_stay_with_each_parent():
+    """The union a parallel parent builds in place never reaches the other parent of a shared subtree."""
+    # --- Input ---
+    shared = Parallel(frozenset({Leaf("a"), Leaf("b")}))
+    in_series = Series((shared, Leaf("c")), (2,))
+    in_parallel = Parallel(frozenset({shared, Leaf("d")}))
+    tree = Parallel(frozenset({in_series, in_parallel}))
+
+    # --- Assert ---
+    assert paths(in_series) == {frozenset({"a", "c"}), frozenset({"b", "c"})}
+    assert paths(tree) == {frozenset(path) for path in ("ac", "bc", "a", "b", "d")}
+
+
 def test_minimal_toggles_is_empty_when_already_in_the_target_state():
     """Nothing needs toggling when the tree already has the requested state."""
     # --- Input ---

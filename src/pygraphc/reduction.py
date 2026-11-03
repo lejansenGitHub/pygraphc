@@ -450,35 +450,62 @@ def paths(tree: SPTree[EdgeId], cutoff: int | None = None) -> set[frozenset[Edge
     prunes inside every product, never afterwards.
     """
     order = _post_order(tree)
-    pending_parents = Counter(id(child) for node in order if not isinstance(node, Leaf) for child in node.children)
-    paths_by_tree_node: dict[int, set[frozenset[EdgeId]]] = {}
+    pending_parents = _pending_parents(order)
+    paths_by_tree_node: dict[int, tuple[set[frozenset[EdgeId]], bool]] = {}
     for node in order:
         if isinstance(node, Leaf):
-            paths_by_tree_node[id(node)] = {frozenset({node.edge_id})}
+            paths_by_tree_node[id(node)] = ({frozenset({node.edge_id})}, True)
             continue
         child_paths = [_release(paths_by_tree_node, pending_parents, id(child)) for child in node.children]
         if isinstance(node, Parallel):
-            paths_by_tree_node[id(node)] = set().union(*child_paths)
+            paths_by_tree_node[id(node)] = (_union_in_place(child_paths), True)
             continue
         result: set[frozenset[EdgeId]] = set()
-        for combination in product(*child_paths):
+        for combination in product(*(path_set for path_set, _owned in child_paths)):
             joined: frozenset[EdgeId] = frozenset().union(*combination)
             if cutoff is None or len(joined) <= cutoff:
                 result.add(joined)
-        paths_by_tree_node[id(node)] = result
-    return paths_by_tree_node[id(tree)]
+        paths_by_tree_node[id(node)] = (result, True)
+    return paths_by_tree_node[id(tree)][0]
+
+
+FoldValue = TypeVar("FoldValue")
+FoldItem = TypeVar("FoldItem")
+
+
+def _pending_parents(order: list[SPTree[EdgeId]]) -> Counter[int]:
+    """How many parents still have to take each tree node's fold value; a shared subtree counts once per parent."""
+    return Counter(id(child) for node in order if not isinstance(node, Leaf) for child in node.children)
 
 
 def _release(
-    paths_by_tree_node: dict[int, set[frozenset[EdgeId]]],
+    values_by_tree_node: dict[int, tuple[FoldValue, bool]],
     pending_parents: Counter[int],
     child_key: int,
-) -> set[frozenset[EdgeId]]:
-    """Path set of a child, dropped from the table once its last parent has consumed it."""
+) -> tuple[FoldValue, bool]:
+    """A child's fold value and whether the caller may change it in place.
+
+    The table holds each value with whether its entry owns the object. The last
+    parent takes the entry out of the table, and its ownership with it; an
+    earlier parent of a shared subtree only reads it, and since it may keep the
+    object, the entry no longer owns it alone either.
+    """
     pending_parents[child_key] -= 1
     if pending_parents[child_key] == 0:
-        return paths_by_tree_node.pop(child_key)
-    return paths_by_tree_node[child_key]
+        return values_by_tree_node.pop(child_key)
+    value, _owned = values_by_tree_node[child_key]
+    values_by_tree_node[child_key] = (value, False)
+    return value, False
+
+
+def _union_in_place(parts: list[tuple[set[FoldItem], bool]]) -> set[FoldItem]:
+    """Union of the parts, built into the largest part the caller owns, so a chain of unions copies no item twice."""
+    owned_parts = [part for part, owned in parts if owned]
+    union: set[FoldItem] = max(owned_parts, key=len) if owned_parts else set()
+    for part, _owned in parts:
+        if part is not union:
+            union |= part
+    return union
 
 
 def _closed_states(tree: SPTree[EdgeId], edge_closed: Mapping[EdgeId, bool]) -> dict[int, bool]:
@@ -499,7 +526,7 @@ def closed(tree: SPTree[EdgeId], edge_closed: Mapping[EdgeId, bool]) -> bool:
     return _closed_states(tree, edge_closed)[id(tree)]
 
 
-def _toggle_order(toggle_set: frozenset[EdgeId]) -> tuple[int, list[tuple[int, str, int | str]]]:
+def _toggle_order(toggle_set: AbstractSet[EdgeId]) -> tuple[int, list[tuple[int, str, int | str]]]:
     """Tie-break key of a candidate toggle set: fewer leaves first, then leaf id order."""
     return (len(toggle_set), sorted(map(_order_key, toggle_set)))
 
@@ -530,24 +557,28 @@ def minimal_toggles(
     state.
     """
     closed_by_tree_node = _closed_states(tree, edge_closed)
-    toggles_by_tree_node: dict[int, frozenset[EdgeId] | None] = {}
-    for node in _post_order(tree):
+    order = _post_order(tree)
+    pending_parents = _pending_parents(order)
+    toggles_by_tree_node: dict[int, tuple[set[EdgeId] | None, bool]] = {}
+    for node in order:
         if closed_by_tree_node[id(node)] == target_closed:
-            toggles_by_tree_node[id(node)] = frozenset()
+            toggles_by_tree_node[id(node)] = (set(), True)
         elif isinstance(node, Leaf):
             togglable = togglable_leaves is None or node.edge_id in togglable_leaves
-            toggles_by_tree_node[id(node)] = frozenset({node.edge_id}) if togglable else None
-        elif isinstance(node, Series) == target_closed:
-            options = [toggles_by_tree_node[id(child)] for child in node.children]
-            reachable = [option for option in options if option is not None]
-            toggles_by_tree_node[id(node)] = (
-                frozenset[EdgeId]().union(*reachable) if len(reachable) == len(options) else None
-            )
+            toggles_by_tree_node[id(node)] = ({node.edge_id} if togglable else None, True)
         else:
-            candidates = [toggles_by_tree_node[id(child)] for child in node.children]
-            reachable = [candidate for candidate in candidates if candidate is not None]
-            toggles_by_tree_node[id(node)] = min(reachable, key=_toggle_order) if reachable else None
-    return toggles_by_tree_node[id(tree)]
+            options = [_release(toggles_by_tree_node, pending_parents, id(child)) for child in node.children]
+            reachable = [(toggles, owned) for toggles, owned in options if toggles is not None]
+            if isinstance(node, Series) == target_closed:
+                toggles_by_tree_node[id(node)] = (
+                    (_union_in_place(reachable), True) if len(reachable) == len(options) else (None, True)
+                )
+            else:
+                toggles_by_tree_node[id(node)] = (
+                    min(reachable, key=lambda option: _toggle_order(option[0])) if reachable else (None, True)
+                )
+    toggles, _owned = toggles_by_tree_node[id(tree)]
+    return None if toggles is None else frozenset(toggles)
 
 
 @dataclass(frozen=True)

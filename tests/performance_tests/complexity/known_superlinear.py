@@ -18,7 +18,6 @@ GC_LIMIT = 1.9
 GC_BOUND = "linear algorithm; one GC-tracked container per result item makes CPython's collector superlinear"
 
 KNOWN_SUPERLINEAR: dict[str, tuple[float, str]] = {
-    "tree_folds/two_hubs": (2.2, "quadratic in time and memory in the width of the parallel tree two hubs produce"),
     "cycle_basis/lattice": (1.9, "inherent: a fundamental cycle basis of a lattice has total length ~n^1.5"),
     "connected_components/singletons": (GC_LIMIT, GC_BOUND),
     "connected_components_with_branch_ids/singletons": (GC_LIMIT, GC_BOUND),
