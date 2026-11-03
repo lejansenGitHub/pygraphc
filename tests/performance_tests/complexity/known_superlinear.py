@@ -18,10 +18,6 @@ GC_LIMIT = 1.9
 GC_BOUND = "linear algorithm; one GC-tracked container per result item makes CPython's collector superlinear"
 
 KNOWN_SUPERLINEAR: dict[str, tuple[float, str]] = {
-    "bridges_with_branch_ids/star": (
-        2.2,
-        "quadratic: edge_indices(hub, leaf) per bridge scans the hub's whole adjacency",
-    ),
     "reduce_c/two_hubs": (1.9, "quadratic in hub degree; the python and rounds engines stay linear"),
     "reduce_moves/two_hubs": (2.0, "quadratic in hub degree; the python and rounds engines stay linear"),
     "tree_folds/two_hubs": (2.2, "quadratic in time and memory in the width of the parallel tree two hubs produce"),
