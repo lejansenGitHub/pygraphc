@@ -9,12 +9,19 @@ void sp_free(SPState *state) {
     free(state->node_head); free(state->degree); free(state->loop_head);
     free(state->node_alive); free(state->heap); free(state->queued);
     free(state->pair_scratch); free(state->operations);
+    free(state->pair_next); free(state->pair_prev); free(state->pair_head);
 }
 
 int sp_alloc(SPState *state, int node_count, Py_ssize_t edge_capacity) {
     size_t nodes = (size_t)(node_count > 0 ? node_count : 1);
     size_t slots = (size_t)edge_capacity;
+    size_t pair_table_size = 2;
+    while (pair_table_size < slots) pair_table_size *= 2;
     memset(state, 0, sizeof(*state));
+    state->pair_next = (int *)malloc(slots * sizeof(int));
+    state->pair_prev = (int *)malloc(slots * sizeof(int));
+    state->pair_head = (int *)malloc(pair_table_size * sizeof(int));
+    state->pair_mask = pair_table_size - 1;
     state->edge_first_node = (int *)malloc(slots * sizeof(int));
     state->edge_second_node = (int *)malloc(slots * sizeof(int));
     state->edge_operation = (int *)malloc(slots * sizeof(int));
@@ -35,11 +42,13 @@ int sp_alloc(SPState *state, int node_count, Py_ssize_t edge_capacity) {
         || !state->edge_alive || !state->half_next || !state->half_prev
         || !state->node_head || !state->degree || !state->loop_head
         || !state->node_alive || !state->heap || !state->queued
-        || !state->pair_scratch || !state->operations) {
+        || !state->pair_scratch || !state->operations
+        || !state->pair_next || !state->pair_prev || !state->pair_head) {
         sp_free(state);
         PyErr_NoMemory();
         return -1;
     }
+    memset(state->pair_head, 0xff, pair_table_size * sizeof(int));
     state->edge_capacity = edge_capacity;
     for (size_t node = 0; node < nodes; node++) { state->node_head[node] = -1; state->loop_head[node] = -1; }
     return 0;
@@ -63,7 +72,67 @@ static int sp_emit(SPState *state, int kind, int left, int right,
 
 #define SP_OTHER_END(state, half) (((half) & 1) ? (state)->edge_first_node[(half) >> 1] : (state)->edge_second_node[(half) >> 1])
 
+/* The table position a pair's chain starts its probe from. */
+static uint64_t sp_pair_home(const SPState *state, int from_node, int to_node) {
+    uint64_t smaller = (uint64_t)(uint32_t)(from_node < to_node ? from_node : to_node);
+    uint64_t larger = (uint64_t)(uint32_t)(from_node < to_node ? to_node : from_node);
+    return (((smaller << 32) | larger) * 0x9E3779B97F4A7C15ULL >> 32) & state->pair_mask;
+}
+
+/* The table position holding the pair's chain, or the empty position where it would go. */
+static uint64_t sp_pair_position(const SPState *state, int from_node, int to_node) {
+    uint64_t position = sp_pair_home(state, from_node, to_node);
+    for (;;) {
+        int head = state->pair_head[position];
+        if (head < 0) return position;
+        int head_first = state->edge_first_node[head], head_second = state->edge_second_node[head];
+        if ((head_first == from_node && head_second == to_node) || (head_first == to_node && head_second == from_node))
+            return position;
+        position = (position + 1) & state->pair_mask;
+    }
+}
+
+/* Empty one table position by backward-shift deletion, so probes never meet a tombstone. */
+static void sp_pair_vacate(SPState *state, uint64_t position) {
+    uint64_t mask = state->pair_mask, next = position;
+    state->pair_head[position] = -1;
+    for (;;) {
+        next = (next + 1) & mask;
+        int head = state->pair_head[next];
+        if (head < 0) return;
+        uint64_t home = sp_pair_home(state, state->edge_first_node[head], state->edge_second_node[head]);
+        if (((next - home) & mask) >= ((next - position) & mask)) {
+            state->pair_head[position] = head;
+            state->pair_head[next] = -1;
+            position = next;
+        }
+    }
+}
+
+/* Put a new edge at the front of its pair's chain; slots only grow, so the chain stays in descending slot order. */
+static void sp_pair_link(SPState *state, int edge) {
+    uint64_t position = sp_pair_position(state, state->edge_first_node[edge], state->edge_second_node[edge]);
+    int head = state->pair_head[position];
+    state->pair_prev[edge] = -1;
+    state->pair_next[edge] = head;
+    if (head >= 0) state->pair_prev[head] = edge;
+    state->pair_head[position] = edge;
+}
+
+static void sp_pair_unlink(SPState *state, int edge) {
+    int previous = state->pair_prev[edge], following = state->pair_next[edge];
+    if (following >= 0) state->pair_prev[following] = previous;
+    if (previous >= 0) {
+        state->pair_next[previous] = following;
+        return;
+    }
+    uint64_t position = sp_pair_position(state, state->edge_first_node[edge], state->edge_second_node[edge]);
+    if (following >= 0) state->pair_head[position] = following;
+    else sp_pair_vacate(state, position);
+}
+
 static void sp_link(SPState *state, int edge) {
+    sp_pair_link(state, edge);
     for (int side = 0; side < 2; side++) {
         int half = 2 * edge + side;
         int node = side ? state->edge_second_node[edge] : state->edge_first_node[edge];
@@ -77,6 +146,7 @@ static void sp_link(SPState *state, int edge) {
 }
 
 static void sp_unlink(SPState *state, int edge) {
+    sp_pair_unlink(state, edge);
     for (int side = 0; side < 2; side++) {
         int half = 2 * edge + side;
         int node = side ? state->edge_second_node[edge] : state->edge_first_node[edge];
@@ -316,27 +386,19 @@ int sp_apply_series(SPState *state, int node, int first, int second,
 
 /* The live edges between one unprotected node pair in slot order, into ``members``.
  *
- * The smaller incidence set is scanned, so a hub pair costs the degree of the
- * other endpoint, and the slots are insertion sorted because a pair holds few
- * edges. Returns the count, or 0 when the pair carries fewer than two edges
- * or either endpoint is protected.
+ * The pair's chain holds them newest first, so it is read and reversed, in
+ * time of the pair's own edge count. Returns the count, or 0 when the pair
+ * carries fewer than two edges or either endpoint is protected.
  */
 int sp_gather_pair(SPState *state, int from_node, int to_node,
                    const uint8_t *protected_mask, int *members) {
-    if (protected_mask[from_node] || protected_mask[to_node]) return 0;
-    int scanned = state->degree[from_node] <= state->degree[to_node] ? from_node : to_node;
-    int target = scanned == from_node ? to_node : from_node;
+    if (protected_mask[from_node] || protected_mask[to_node] || from_node == to_node) return 0;
     int count = 0;
-    for (int half = state->node_head[scanned]; half >= 0; half = state->half_next[half])
-        if (SP_OTHER_END(state, half) == target) members[count++] = half >> 1;
+    for (int edge = state->pair_head[sp_pair_position(state, from_node, to_node)]; edge >= 0; edge = state->pair_next[edge])
+        members[count++] = edge;
     if (count < 2) return 0;
-    for (int index = 1; index < count; index++) {
-        int slot = members[index], position = index;
-        while (position > 0 && members[position - 1] > slot) {
-            members[position] = members[position - 1];
-            position--;
-        }
-        members[position] = slot;
+    for (int low = 0, high = count - 1; low < high; low++, high--) {
+        int swap = members[low]; members[low] = members[high]; members[high] = swap;
     }
     return count;
 }

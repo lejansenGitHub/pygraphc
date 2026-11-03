@@ -18,6 +18,10 @@
  * unlinks in constant time and degrees are read, never recomputed. Self-loops
  * live on a separate singly linked list per node, take part in no move and
  * die with their node.
+ *
+ * The non-loop edges are also chained per endpoint pair, behind a hash table
+ * keyed by the pair, so the edges between two hubs are found in time of their
+ * own count rather than of either hub's degree.
  */
 
 #define SP_OP_LEAF     0
@@ -51,6 +55,10 @@ typedef struct {
     int *heap;          /* min-heap of candidate node indices, deduplicated by queued */
     uint8_t *queued;
     int *pair_scratch;  /* edges between one endpoint pair, gathered per series move */
+    int *pair_next;     /* next live edge of the same endpoint pair, in descending slot order, -1 at the end */
+    int *pair_prev;
+    int *pair_head;     /* open-addressing table: the newest live edge of one endpoint pair, -1 when empty */
+    uint64_t pair_mask; /* table size minus one; a power of two of at least the slot count, twice the most live edges */
     SPOperation *operations;
     Py_ssize_t operation_count;
     Py_ssize_t operation_capacity;
