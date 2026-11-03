@@ -308,6 +308,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `bench_remapped_overhead.py`).
 
 ### Fixed
+- Four cases that took quadratic time are linear, each found by the
+  complexity tier and dropped from `known_superlinear.py`:
+  - `bridges_with_branch_ids` reads each bridge off its edge index instead of
+    looking it up with `edge_indices(u, v)`, which scanned the adjacency of a
+    hub once per bridge: 16 s to 26 ms on a star of 200,000 nodes.
+  - The `"c"` and `"moves"` reduction engines find the edges parallel to a new
+    series edge through an index of the live edges per endpoint pair, as the
+    `"python"` engine does, instead of scanning an incidence list; two hubs
+    joined by 80,000 two-paths reduce in 0.3 s instead of 3.9 s (`"c"`) and
+    7.3 s (`"moves"`).
+  - `minimal_toggles` and `paths` build the union of a parallel node into the
+    largest set they own instead of copying it, and `minimal_toggles` drops a
+    child's set once its parents have it. On the parallel chain two hubs
+    produce, `minimal_toggles` went from 3.3 s and 5.3 GB to 0.6 s and 13 MB
+    at 16,000 nodes, `paths` from 1.6 s to 0.4 s.
 - Weighted algorithms (`shortest_path`, `shortest_path_lengths`,
   `multi_source_shortest_path_lengths`, `eccentricity`, `dag_longest_path`)
   now raise `ValueError` when the weights length differs from the edge count.
