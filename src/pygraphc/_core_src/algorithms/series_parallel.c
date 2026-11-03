@@ -9,19 +9,13 @@ void sp_free(SPState *state) {
     free(state->node_head); free(state->degree); free(state->loop_head);
     free(state->node_alive); free(state->heap); free(state->queued);
     free(state->pair_scratch); free(state->operations);
-    free(state->pair_next); free(state->pair_prev); free(state->pair_head);
+    free(state->pair_next); free(state->pair_prev); free(state->pair_head); free(state->hub);
 }
 
 int sp_alloc(SPState *state, int node_count, Py_ssize_t edge_capacity) {
     size_t nodes = (size_t)(node_count > 0 ? node_count : 1);
     size_t slots = (size_t)edge_capacity;
-    size_t pair_table_size = 2;
-    while (pair_table_size < slots) pair_table_size *= 2;
     memset(state, 0, sizeof(*state));
-    state->pair_next = (int *)malloc(slots * sizeof(int));
-    state->pair_prev = (int *)malloc(slots * sizeof(int));
-    state->pair_head = (int *)malloc(pair_table_size * sizeof(int));
-    state->pair_mask = pair_table_size - 1;
     state->edge_first_node = (int *)malloc(slots * sizeof(int));
     state->edge_second_node = (int *)malloc(slots * sizeof(int));
     state->edge_operation = (int *)malloc(slots * sizeof(int));
@@ -42,13 +36,11 @@ int sp_alloc(SPState *state, int node_count, Py_ssize_t edge_capacity) {
         || !state->edge_alive || !state->half_next || !state->half_prev
         || !state->node_head || !state->degree || !state->loop_head
         || !state->node_alive || !state->heap || !state->queued
-        || !state->pair_scratch || !state->operations
-        || !state->pair_next || !state->pair_prev || !state->pair_head) {
+        || !state->pair_scratch || !state->operations) {
         sp_free(state);
         PyErr_NoMemory();
         return -1;
     }
-    memset(state->pair_head, 0xff, pair_table_size * sizeof(int));
     state->edge_capacity = edge_capacity;
     for (size_t node = 0; node < nodes; node++) { state->node_head[node] = -1; state->loop_head[node] = -1; }
     return 0;
@@ -131,8 +123,13 @@ static void sp_pair_unlink(SPState *state, int edge) {
     else sp_pair_vacate(state, position);
 }
 
+/* True when both endpoints are hubs, which is when the pair index holds the edge; never before it is built. */
+static int sp_between_hubs(const SPState *state, int edge) {
+    return state->hub && state->hub[state->edge_first_node[edge]] && state->hub[state->edge_second_node[edge]];
+}
+
 static void sp_link(SPState *state, int edge) {
-    sp_pair_link(state, edge);
+    if (sp_between_hubs(state, edge)) sp_pair_link(state, edge);
     for (int side = 0; side < 2; side++) {
         int half = 2 * edge + side;
         int node = side ? state->edge_second_node[edge] : state->edge_first_node[edge];
@@ -146,7 +143,7 @@ static void sp_link(SPState *state, int edge) {
 }
 
 static void sp_unlink(SPState *state, int edge) {
-    sp_pair_unlink(state, edge);
+    if (sp_between_hubs(state, edge)) sp_pair_unlink(state, edge);
     for (int side = 0; side < 2; side++) {
         int half = 2 * edge + side;
         int node = side ? state->edge_second_node[edge] : state->edge_first_node[edge];
@@ -386,19 +383,38 @@ int sp_apply_series(SPState *state, int node, int first, int second,
 
 /* The live edges between one unprotected node pair in slot order, into ``members``.
  *
- * The pair's chain holds them newest first, so it is read and reversed, in
- * time of the pair's own edge count. Returns the count, or 0 when the pair
- * carries fewer than two edges or either endpoint is protected.
+ * Between two hubs the pair's chain holds them newest first, so it is read
+ * and reversed. Otherwise one endpoint is not a hub, its degree is at most
+ * SP_HUB_DEGREE for good, and its incidence list is scanned and the slots
+ * insertion sorted. Either way the cost is bounded by the pair's own edge
+ * count or the hub threshold, never by a hub's degree. Returns the count, or
+ * 0 when the pair carries fewer than two edges or either endpoint is protected.
  */
 int sp_gather_pair(SPState *state, int from_node, int to_node,
                    const uint8_t *protected_mask, int *members) {
     if (protected_mask[from_node] || protected_mask[to_node] || from_node == to_node) return 0;
     int count = 0;
-    for (int edge = state->pair_head[sp_pair_position(state, from_node, to_node)]; edge >= 0; edge = state->pair_next[edge])
-        members[count++] = edge;
+    if (state->hub && state->hub[from_node] && state->hub[to_node]) {
+        for (int edge = state->pair_head[sp_pair_position(state, from_node, to_node)]; edge >= 0; edge = state->pair_next[edge])
+            members[count++] = edge;
+        if (count < 2) return 0;
+        for (int low = 0, high = count - 1; low < high; low++, high--) {
+            int swap = members[low]; members[low] = members[high]; members[high] = swap;
+        }
+        return count;
+    }
+    int scanned = state->degree[from_node] <= state->degree[to_node] ? from_node : to_node;
+    int target = scanned == from_node ? to_node : from_node;
+    for (int half = state->node_head[scanned]; half >= 0; half = state->half_next[half])
+        if (SP_OTHER_END(state, half) == target) members[count++] = half >> 1;
     if (count < 2) return 0;
-    for (int low = 0, high = count - 1; low < high; low++, high--) {
-        int swap = members[low]; members[low] = members[high]; members[high] = swap;
+    for (int index = 1; index < count; index++) {
+        int slot = members[index], position = index;
+        while (position > 0 && members[position - 1] > slot) {
+            members[position] = members[position - 1];
+            position--;
+        }
+        members[position] = slot;
     }
     return count;
 }
@@ -429,6 +445,40 @@ int sp_move(SPState *state, int node, const uint8_t *preserved_mask, const uint8
     return 0;
 }
 
+/* Mark the nodes above SP_HUB_DEGREE as hubs and chain the edges between two hubs per endpoint pair.
+ *
+ * No move raises a degree, so a node that is no hub after loading never
+ * becomes one, and the edges between hubs are the only ones a gather cannot
+ * find by scanning a short incidence list. Without a hub nothing is allocated.
+ * The table is a power of two of at least twice the loaded edges, which bounds
+ * the live edges, so a probe always ends at an empty position.
+ */
+static int sp_index_hub_pairs(SPState *state, int node_count) {
+    int hub_count = 0;
+    for (int node = 0; node < node_count; node++) hub_count += state->degree[node] > SP_HUB_DEGREE;
+    if (hub_count == 0) return 0;
+    size_t slots = (size_t)state->edge_capacity;
+    size_t pair_table_size = 2;
+    while (pair_table_size < 2 * (size_t)state->edge_slots) pair_table_size *= 2;
+    uint8_t *hub = (uint8_t *)malloc((size_t)node_count);
+    int *pair_next = (int *)malloc(slots * sizeof(int));
+    int *pair_prev = (int *)malloc(slots * sizeof(int));
+    int *pair_head = (int *)malloc(pair_table_size * sizeof(int));
+    if (!hub || !pair_next || !pair_prev || !pair_head) {
+        free(hub); free(pair_next); free(pair_prev); free(pair_head);
+        PyErr_NoMemory();
+        return -1;
+    }
+    memset(pair_head, 0xff, pair_table_size * sizeof(int));
+    state->hub = hub; state->pair_next = pair_next; state->pair_prev = pair_prev; state->pair_head = pair_head;
+    state->pair_mask = pair_table_size - 1;
+    for (int node = 0; node < node_count; node++) state->hub[node] = state->degree[node] > SP_HUB_DEGREE;
+    for (int edge = 0; edge < state->edge_slots; edge++)
+        if (state->edge_alive[edge] && state->edge_first_node[edge] != state->edge_second_node[edge] && sp_between_hubs(state, edge))
+            sp_pair_link(state, edge);
+    return 0;
+}
+
 /* One leaf operation and one edge slot per included input edge, in edge index order. */
 int sp_load_edges(SPState *state, GraphContext *graph, const uint8_t *edge_mask, const uint8_t *node_mask) {
     Py_ssize_t edge_count = graph->node_ids.edges.edge_count;
@@ -451,7 +501,7 @@ int sp_load_edges(SPState *state, GraphContext *graph, const uint8_t *edge_mask,
             sp_link(state, edge);
         }
     }
-    return 0;
+    return sp_index_hub_pairs(state, graph->node_ids.node_count);
 }
 
 /* A component without a preserved node carries no question and goes whole, before
