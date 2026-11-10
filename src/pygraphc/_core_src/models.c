@@ -9,10 +9,11 @@ void free_edges(EdgeList *edges) {
 }
 
 int intmap_init(IntMap *map, int expected_count) {
-    int capacity = 16;
-    while (capacity < expected_count * 2) capacity <<= 1;
-    map->capacity = capacity;
+    int capacity = 16, bits = 4;
+    while (capacity < expected_count * 2) { capacity <<= 1; bits++; }
     map->capacity_mask = capacity - 1;
+    map->bits = bits;
+    map->shift = 64 - bits;
     map->keys = (long *)malloc((size_t)capacity * sizeof(long));
     map->values = (int *)malloc((size_t)capacity * sizeof(int));
     if (!map->keys || !map->values) {
@@ -20,7 +21,7 @@ int intmap_init(IntMap *map, int expected_count) {
         PyErr_NoMemory();
         return -1;
     }
-    memset(map->keys, 0xFF, (size_t)capacity * sizeof(long)); /* -1 = empty sentinel */
+    memset(map->values, 0xFF, (size_t)capacity * sizeof(int)); /* -1 = empty slot */
     return 0;
 }
 

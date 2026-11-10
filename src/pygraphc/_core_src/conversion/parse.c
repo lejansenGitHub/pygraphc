@@ -298,13 +298,12 @@ int node_id_parse_nodes(PyObject *node_ids_obj, NodeIdContext *context) {
             Py_DECREF(context->node_ids_fast);
             return -1;
         }
-        if (intmap_get(&context->node_index_by_node_id, node_id) != -1) {
+        if (intmap_insert(&context->node_index_by_node_id, node_id, node) != -1) {
             PyErr_Format(PyExc_ValueError, "duplicate node id %ld", node_id);
             intmap_free(&context->node_index_by_node_id);
             Py_DECREF(context->node_ids_fast);
             return -1;
         }
-        intmap_put(&context->node_index_by_node_id, node_id, node);
     }
     return 0;
 }
@@ -351,36 +350,8 @@ void release_graph_by_node_id(GraphContext *graph) {
 
 int node_id_parse_split(PyObject *node_ids_obj, PyObject *first_endpoints_obj, PyObject *second_endpoints_obj,
                     NodeIdContext *context) {
-    context->node_ids_fast = PySequence_Fast(node_ids_obj, "node_ids must be a sequence");
-    if (!context->node_ids_fast) return -1;
-    context->node_count = (int)PySequence_Fast_GET_SIZE(context->node_ids_fast);
-    context->node_id_items = PySequence_Fast_ITEMS(context->node_ids_fast);
-    context->node_index_by_node_id.keys = NULL;
-    context->node_index_by_node_id.values = NULL;
-    context->edges.first_endpoints = NULL; context->edges.second_endpoints = NULL;
-    context->edges.edge_count = 0; context->edges.owns_memory = 0;
-
+    if (node_id_parse_nodes(node_ids_obj, context) < 0) return -1;
     if (context->node_count == 0) return 0;
-
-    if (intmap_init(&context->node_index_by_node_id, context->node_count) < 0) {
-        Py_DECREF(context->node_ids_fast);
-        return -1;
-    }
-    for (int node = 0; node < context->node_count; node++) {
-        long node_id = PyLong_AsLong(context->node_id_items[node]);
-        if (node_id == -1 && PyErr_Occurred()) {
-            intmap_free(&context->node_index_by_node_id);
-            Py_DECREF(context->node_ids_fast);
-            return -1;
-        }
-        if (intmap_get(&context->node_index_by_node_id, node_id) != -1) {
-            PyErr_Format(PyExc_ValueError, "duplicate node id %ld", node_id);
-            intmap_free(&context->node_index_by_node_id);
-            Py_DECREF(context->node_ids_fast);
-            return -1;
-        }
-        intmap_put(&context->node_index_by_node_id, node_id, node);
-    }
 
     if (parse_edges_mapped_split(&context->node_index_by_node_id, first_endpoints_obj, second_endpoints_obj, &context->edges) < 0) {
         intmap_free(&context->node_index_by_node_id);

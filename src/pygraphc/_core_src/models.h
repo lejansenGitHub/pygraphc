@@ -31,31 +31,47 @@ typedef struct {
 
 PYGRAPHC_INTERNAL void free_edges(EdgeList *edges);
 
-/* ── Integer hash map (open addressing, power-of-2) ── */
+/* ── Integer hash map: node id -> node index (open addressing, power-of-2 capacity) ──
+ *
+ * Any long is a valid key. A slot is empty while its value is -1, since values
+ * are node indices >= 0. The slot is the key's low bits XOR a Fibonacci hash
+ * (multiply by 2^64/phi) of its high bits: a dense id range keeps its order in
+ * the table and stays cache-friendly, while ids that differ only in their high
+ * bits, such as multiples of 2^20, still spread over the whole table.
+ */
 
 typedef struct {
     long *keys;
     int *values;
-    int capacity;       /* always power of 2 */
-    int capacity_mask;  /* capacity - 1, a hash bit mask */
+    int capacity_mask;  /* capacity - 1; the capacity is a power of 2 */
+    int bits;           /* log2(capacity) */
+    int shift;          /* 64 - bits */
 } IntMap;
 
 PYGRAPHC_INTERNAL int intmap_init(IntMap *map, int expected_count);
 PYGRAPHC_INTERNAL void intmap_free(IntMap *map);
 
-static inline void intmap_put(IntMap *map, long key, int value) {
-    int slot = (int)((unsigned long)key & (unsigned long)map->capacity_mask);
-    while (map->keys[slot] != -1) {
-        if (map->keys[slot] == key) { map->values[slot] = value; return; }
+static inline int intmap_slot(const IntMap *map, long key) {
+    uint64_t high_bits = (uint64_t)key >> map->bits;
+    uint64_t hashed_high_bits = (high_bits * UINT64_C(0x9E3779B97F4A7C15)) >> map->shift;
+    return (int)(((uint64_t)key ^ hashed_high_bits) & (uint64_t)map->capacity_mask);
+}
+
+/* Store key -> value unless key is present; returns the present value, or -1 once stored. */
+static inline int intmap_insert(IntMap *map, long key, int value) {
+    int slot = intmap_slot(map, key);
+    while (map->values[slot] != -1) {
+        if (map->keys[slot] == key) return map->values[slot];
         slot = (slot + 1) & map->capacity_mask;
     }
     map->keys[slot] = key;
     map->values[slot] = value;
+    return -1;
 }
 
-static inline int intmap_get(IntMap *map, long key) {
-    int slot = (int)((unsigned long)key & (unsigned long)map->capacity_mask);
-    while (map->keys[slot] != -1) {
+static inline int intmap_get(const IntMap *map, long key) {
+    int slot = intmap_slot(map, key);
+    while (map->values[slot] != -1) {
         if (map->keys[slot] == key) return map->values[slot];
         slot = (slot + 1) & map->capacity_mask;
     }

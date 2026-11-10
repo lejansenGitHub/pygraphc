@@ -92,12 +92,19 @@ def test_operation_scales_linearly(operation_name: str, shape_name: str) -> None
     assert_scales_linearly(f"{operation_name}/{shape_name}", scaling)
 
 
-@pytest.mark.parametrize("shape_name", list(SHAPES))
+PARSING_SHAPES: dict[str, Shape] = {
+    **SHAPES,
+    "strided_path": shapes.strided_path,
+    "strided_path_3x2^20": lambda node_count: shapes.strided_path(node_count, 3 << 20),
+}
+
+
+@pytest.mark.parametrize("shape_name", list(PARSING_SHAPES))
 def test_parsing_scales_linearly(shape_name: str) -> None:
-    """Interning node ids and building the adjacency is one pass over nodes and edges."""
+    """Interning node ids and building the adjacency is one pass over nodes and edges, whatever the id bits."""
 
     def prepare(size: int) -> Callable[[], object]:
-        node_ids, edges = SHAPES[shape_name](size)
+        node_ids, edges = PARSING_SHAPES[shape_name](size)
         branch_ids = list(range(len(edges)))
         return lambda: Graph(node_ids, edges, branch_ids=branch_ids)
 
