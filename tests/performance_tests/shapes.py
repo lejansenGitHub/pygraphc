@@ -7,6 +7,7 @@ few low bits the node ids differ in. Every generator
 returns ``(node_ids, edges)`` and is seeded, so equal arguments give equal graphs.
 """
 
+import itertools
 import random
 
 Edges = list[tuple[int, int]]
@@ -20,7 +21,7 @@ def path(node_count: int) -> tuple[list[int], Edges]:
 def strided_path(node_count: int, stride: int = 1 << 20) -> tuple[list[int], Edges]:
     """A path whose node ids are multiples of ``stride``; the default 2^20 makes ids differ only in their high bits."""
     node_ids = [index * stride for index in range(node_count)]
-    return node_ids, list(zip(node_ids, node_ids[1:]))
+    return node_ids, list(itertools.pairwise(node_ids))
 
 
 def star(node_count: int) -> tuple[list[int], Edges]:

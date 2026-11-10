@@ -44,14 +44,15 @@ typedef struct {
     long *keys;
     int *values;
     int capacity_mask;  /* capacity - 1; the capacity is a power of 2 */
-    int shift;          /* 64 - log2(capacity) */
+    int bits;           /* log2(capacity) */
+    int shift;          /* 64 - bits */
 } IntMap;
 
 PYGRAPHC_INTERNAL int intmap_init(IntMap *map, int expected_count);
 PYGRAPHC_INTERNAL void intmap_free(IntMap *map);
 
 static inline int intmap_slot(const IntMap *map, long key) {
-    uint64_t high_bits = (uint64_t)key >> (64 - map->shift);
+    uint64_t high_bits = (uint64_t)key >> map->bits;
     uint64_t hashed_high_bits = (high_bits * UINT64_C(0x9E3779B97F4A7C15)) >> map->shift;
     return (int)(((uint64_t)key ^ hashed_high_bits) & (uint64_t)map->capacity_mask);
 }

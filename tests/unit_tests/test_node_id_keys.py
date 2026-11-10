@@ -4,6 +4,7 @@ The C core maps node ids to node indices through a hash table. These tests pin
 the ids its empty-slot marker or its slot function could get wrong.
 """
 
+import itertools
 import sys
 
 import pytest
@@ -58,7 +59,7 @@ def test_node_ids_differing_only_in_high_bits_are_all_found():
     # --- Input ---
     # 0 -- 2^20 -- 2 * 2^20 -- ... -- 999 * 2^20
     node_ids = [index << 20 for index in range(1000)]
-    graph = Graph(node_ids, list(zip(node_ids, node_ids[1:])))
+    graph = Graph(node_ids, list(itertools.pairwise(node_ids)))
 
     # --- Assert ---
     assert graph.bfs(node_ids[-1]) == node_ids[::-1]
