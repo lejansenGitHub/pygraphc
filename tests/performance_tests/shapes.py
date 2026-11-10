@@ -2,7 +2,8 @@
 
 Each shape stresses one axis along which a superlinear implementation shows
 up: a star the degree of one node, a path the depth of a traversal, singletons
-the number of components, a lattice the number of cycles. Every generator
+the number of components, a lattice the number of cycles, a strided path how
+few low bits the node ids differ in. Every generator
 returns ``(node_ids, edges)`` and is seeded, so equal arguments give equal graphs.
 """
 
@@ -14,6 +15,12 @@ Edges = list[tuple[int, int]]
 def path(node_count: int) -> tuple[list[int], Edges]:
     """One chain ``0 - 1 - ... - n-1``: maximal depth, every edge a bridge."""
     return list(range(node_count)), [(node_id, node_id + 1) for node_id in range(node_count - 1)]
+
+
+def strided_path(node_count: int, stride: int = 1 << 20) -> tuple[list[int], Edges]:
+    """A path whose node ids are multiples of ``stride``; the default 2^20 makes ids differ only in their high bits."""
+    node_ids = [index * stride for index in range(node_count)]
+    return node_ids, list(zip(node_ids, node_ids[1:]))
 
 
 def star(node_count: int) -> tuple[list[int], Edges]:

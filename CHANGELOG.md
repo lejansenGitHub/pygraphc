@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Interning node ids no longer turns quadratic when the ids differ only in
+  their high bits (multiples of 2^20 took 23.7 s for 128,000 nodes, now 7 ms).
+  The id table hashed with the identity of the low bits; its slot is now the
+  low bits XOR a Fibonacci hash of the high bits, so dense id ranges keep their
+  speed.
+- Node id -1 is a node like any other. It was the table's empty marker, so an
+  edge to it raised "edge references unknown node ID" and a duplicate -1 went
+  unnoticed.
+
 ### Changed
 - CI counts instructions on x86-64 only. Callgrind runs about ten times slower
   per instruction on arm64 (29 minutes against 2.5 for the same counts).

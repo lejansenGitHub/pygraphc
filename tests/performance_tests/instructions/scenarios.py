@@ -52,6 +52,18 @@ def _parse_sparse_random() -> Measured:
     return lambda: Graph(node_ids, edges)
 
 
+@register("parse/strided_path_20k")
+def _parse_strided_path() -> Measured:
+    node_ids, edges = shapes.strided_path(SIZE)
+    return lambda: Graph(node_ids, edges)
+
+
+@register("parse/strided_path_3x2^20_20k")
+def _parse_strided_path_three_times_two_to_the_twenty() -> Measured:
+    node_ids, edges = shapes.strided_path(SIZE, 3 << 20)
+    return lambda: Graph(node_ids, edges)
+
+
 @register("parse_with_branch_ids/sparse_random_20k")
 def _parse_with_branch_ids() -> Measured:
     node_ids, edges = shapes.sparse_random(SIZE)
